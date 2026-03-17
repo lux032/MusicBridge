@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -62,7 +63,9 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
@@ -127,6 +130,7 @@ private enum class AppSection {
     Home,
     AlbumDetail,
     PlaybackDetail,
+    FavoriteCollection,
     RecentAdded,
     Settings,
 }
@@ -187,6 +191,7 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val activity = context as? MainActivity
     val scope = rememberCoroutineScope()
+    val density = LocalDensity.current
     val appPreferences = remember(context) { AppPreferences(context) }
     val sonosController = remember { SonosController() }
     val initialPreferences = remember(appPreferences) { appPreferences.loadPlexConnectionPreferences() }
@@ -218,10 +223,18 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
     var volumeChangeJob by remember { mutableStateOf<Job?>(null) }
     var albumPlaybackJob by remember { mutableStateOf<Job?>(null) }
     var miniPlayerState by remember { mutableStateOf<MiniPlayerState?>(null) }
+    var miniPlayerHeightPx by remember { mutableIntStateOf(0) }
     var recentPlayedAlbumKeys by remember { mutableStateOf(appPreferences.loadRecentPlayedAlbumKeys()) }
     var hasAttemptedInitialAlbumSync by rememberSaveable { mutableStateOf(false) }
 
     val activeSection = navigationStack.lastOrNull() ?: AppSection.Home
+    val contentBottomPadding = with(density) {
+        if (miniPlayerState != null && activeSection != AppSection.PlaybackDetail) {
+            miniPlayerHeightPx.toDp() + 32.dp
+        } else {
+            16.dp
+        }
+    }
 
     fun navigateTo(section: AppSection) {
         if (navigationStack.lastOrNull() == section) return
@@ -526,6 +539,7 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
         when (activeSection) {
             AppSection.AlbumDetail -> replaceWith(AppSection.Home)
             AppSection.PlaybackDetail,
+            AppSection.FavoriteCollection,
             AppSection.RecentAdded,
             AppSection.Settings -> navigateBack()
             AppSection.Home -> Unit
@@ -546,7 +560,7 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                 modifier = Modifier
                     .fillMaxSize()
                     .verticalScroll(rememberScrollState())
-                    .padding(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 120.dp),
+                    .padding(start = 16.dp, top = 16.dp, end = 16.dp, bottom = contentBottomPadding),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
                 if (activeSection == AppSection.Home || activeSection == AppSection.Settings) {
@@ -579,6 +593,7 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                         onOpenSettings = { navigateTo(AppSection.Settings) },
                         onRefreshFavorites = { scope.launch { refreshAlbums() } },
                         onAlbumClick = ::openAlbumDetail,
+                        onOpenFavorites = { navigateTo(AppSection.FavoriteCollection) },
                         onOpenRecentAdded = { navigateTo(AppSection.RecentAdded) },
                     )
                     AppSection.AlbumDetail -> AlbumDetailSection(
@@ -651,6 +666,14 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                             }
                         },
                     )
+                    AppSection.FavoriteCollection -> AlbumCollectionSection(
+                        title = "收藏专辑",
+                        subtitle = "按最近播放顺序优先展示全部收藏专辑，点击封面可以继续进入专辑详情。",
+                        albums = favoriteAlbums,
+                        selectedAlbum = selectedAlbum,
+                        onBack = ::navigateBack,
+                        onAlbumClick = ::openAlbumDetail,
+                    )
                     AppSection.RecentAdded -> AlbumCollectionSection(
                         title = "最近添加的 100 张专辑",
                         subtitle = "按 Plex 最近添加时间倒序展示，点击封面可直接进入专辑详情。",
@@ -693,32 +716,12 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                 state = state,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .padding(16.dp),
+                    .padding(horizontal = 16.dp, vertical = 12.dp)
+                    .navigationBarsPadding()
+                    .onSizeChanged { miniPlayerHeightPx = it.height },
                 onArtworkClick = {
                     if (activeSection != AppSection.PlaybackDetail) {
                         navigateTo(AppSection.PlaybackDetail)
-                    }
-                },
-                onPrevious = {
-                    val newIndex = (state.currentIndex - 1).coerceAtLeast(0)
-                    if (newIndex != state.currentIndex) {
-                        val currentTrackResult = trackResult?.takeIf { it.album.ratingKey == state.album.ratingKey }
-                        if (currentTrackResult != null) {
-                            startAlbumPlayback(currentTrackResult, state.room, newIndex)
-                        } else {
-                            startSingleTrackPlayback(state.album, state.tracks, newIndex, state.room)
-                        }
-                    }
-                },
-                onNext = {
-                    val newIndex = (state.currentIndex + 1).coerceAtMost(state.tracks.lastIndex)
-                    if (newIndex != state.currentIndex) {
-                        val currentTrackResult = trackResult?.takeIf { it.album.ratingKey == state.album.ratingKey }
-                        if (currentTrackResult != null) {
-                            startAlbumPlayback(currentTrackResult, state.room, newIndex)
-                        } else {
-                            startSingleTrackPlayback(state.album, state.tracks, newIndex, state.room)
-                        }
                     }
                 },
                 onTogglePause = {
@@ -754,6 +757,7 @@ private fun HomeSection(
     onOpenSettings: () -> Unit,
     onRefreshFavorites: () -> Unit,
     onAlbumClick: (PlexAlbum) -> Unit,
+    onOpenFavorites: () -> Unit,
     onOpenRecentAdded: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -809,9 +813,11 @@ private fun HomeSection(
     if (favoriteAlbums.isNotEmpty()) {
         AlbumPreviewGridSection(
             title = "收藏专辑",
-            subtitle = "按最近播放顺序优先展示，首页预览前 9 张。",
+            subtitle = "按最近播放顺序优先展示，首页预览前 9 张，进入后可查看全部收藏。",
             albums = favoriteAlbums.take(9),
             selectedAlbum = selectedAlbum,
+            actionLabel = "查看全部",
+            onAction = onOpenFavorites,
             onAlbumClick = onAlbumClick,
         )
     }
@@ -838,38 +844,42 @@ private fun AlbumPreviewGridSection(
     actionLabel: String? = null,
     onAction: (() -> Unit)? = null,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        Text(
-            text = title,
-            style = MaterialTheme.typography.titleLarge,
-            color = Color(0xFF173F35),
-        )
-        if (subtitle.isNotBlank()) {
-            Text(text = subtitle, color = Color(0xFF537066))
-        }
-        Surface(
-            shape = RoundedCornerShape(28.dp),
-            color = Color(0xFF101010),
-            shadowElevation = 6.dp,
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.Top,
         ) {
             Column(
-                modifier = Modifier.padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                AlbumGrid(
-                    albums = albums,
-                    columns = 3,
-                    selectedAlbum = selectedAlbum,
-                    onAlbumClick = onAlbumClick,
-                    compact = true,
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleLarge,
+                    color = Color(0xFF173F35),
+                    fontWeight = FontWeight.SemiBold,
                 )
+                if (subtitle.isNotBlank()) {
+                    Text(text = subtitle, color = Color(0xFF537066))
+                }
+            }
+            if (actionLabel != null && onAction != null) {
+                OutlinedButton(onClick = onAction) {
+                    Text(actionLabel)
+                }
             }
         }
-        if (actionLabel != null && onAction != null) {
-            OutlinedButton(onClick = onAction) {
-                Text(actionLabel)
-            }
-        }
+        AlbumGrid(
+            albums = albums,
+            columns = 3,
+            selectedAlbum = selectedAlbum,
+            onAlbumClick = onAlbumClick,
+            compact = true,
+        )
     }
 }
 
@@ -882,30 +892,60 @@ private fun AlbumCollectionSection(
     onBack: () -> Unit,
     onAlbumClick: (PlexAlbum) -> Unit,
 ) {
-    Surface(
-        shape = RoundedCornerShape(28.dp),
-        color = Color.White.copy(alpha = 0.84f),
-        shadowElevation = 4.dp,
+    val heroAlbum = albums.firstOrNull()
+    if (heroAlbum == null) {
+        EmptyStateCard(
+            title = title,
+            body = "这里还没有可展示的专辑。",
+            actionLabel = "返回首页",
+            onAction = onBack,
+        )
+        return
+    }
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Column(
+        OutlinedButton(onClick = onBack) {
+            Text("返回首页")
+        }
+        AsyncAlbumArtwork(
+            imageUrl = heroAlbum.thumbUrl,
+            title = heroAlbum.title,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(18.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+                .aspectRatio(1.25f)
+                .clip(RoundedCornerShape(16.dp)),
+        )
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            OutlinedButton(onClick = onBack) {
-                Text("返回首页")
-            }
-            Text(title, style = MaterialTheme.typography.headlineSmall, color = Color(0xFF173F35))
-            Text(subtitle, color = Color(0xFF537066))
-            AlbumGrid(
-                albums = albums,
-                columns = 2,
-                selectedAlbum = selectedAlbum,
-                onAlbumClick = onAlbumClick,
-                compact = false,
+            Text(
+                text = title,
+                style = MaterialTheme.typography.headlineMedium,
+                color = Color(0xFF1A1A1A),
+                fontWeight = FontWeight.Bold,
             )
+            Text(
+                text = "$subtitle 共 ${albums.size} 张。",
+                color = Color(0xFF666666),
+            )
+            selectedAlbum?.let {
+                Text(
+                    text = "当前高亮：${it.title}",
+                    color = Color(0xFF999999),
+                )
+            }
         }
+        AlbumGrid(
+            albums = albums,
+            columns = 2,
+            selectedAlbum = selectedAlbum,
+            onAlbumClick = onAlbumClick,
+            compact = false,
+        )
     }
 }
 
@@ -1397,12 +1437,17 @@ private fun AlbumGrid(
     onAlbumClick: (PlexAlbum) -> Unit,
     compact: Boolean,
 ) {
-    val spacing = if (compact) 10.dp else 12.dp
+    val spacing = if (compact) 10.dp else 14.dp
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
         val rows = (albums.size + columns - 1) / columns
         val cellSize = (maxWidth - spacing * (columns - 1)) / columns
         val gridHeight = if (rows > 0) {
-            (cellSize * rows) + (spacing * (rows - 1))
+            val cardHeight = if (compact) {
+                cellSize
+            } else {
+                cellSize + 78.dp
+            }
+            (cardHeight * rows) + (spacing * (rows - 1))
         } else {
             0.dp
         }
@@ -1437,10 +1482,10 @@ private fun AlbumCoverCard(
 ) {
     Surface(
         modifier = Modifier.clickable(onClick = onClick),
-        shape = RoundedCornerShape(if (compact) 18.dp else 26.dp),
-        color = if (compact) Color.Transparent else if (selected) Color(0xFF173F35) else Color.White.copy(alpha = 0.88f),
-        border = if (compact) BorderStroke(0.dp, Color.Transparent) else BorderStroke(1.dp, Color(0xFF173F35).copy(alpha = if (selected) 0.18f else 0.08f)),
-        shadowElevation = if (compact) 0.dp else 4.dp,
+        shape = RoundedCornerShape(if (compact) 18.dp else 16.dp),
+        color = if (compact) Color.Transparent else Color.Transparent,
+        border = BorderStroke(0.dp, Color.Transparent),
+        shadowElevation = 0.dp,
     ) {
         if (compact) {
             AsyncAlbumArtwork(
@@ -1453,8 +1498,7 @@ private fun AlbumCoverCard(
             )
         } else {
             Column(
-                modifier = Modifier.padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 AsyncAlbumArtwork(
                     imageUrl = album.thumbUrl,
@@ -1462,31 +1506,31 @@ private fun AlbumCoverCard(
                     modifier = Modifier
                         .fillMaxWidth()
                         .aspectRatio(1f)
-                        .clip(RoundedCornerShape(20.dp)),
+                        .clip(RoundedCornerShape(16.dp)),
                 )
-                Text(
-                    text = album.title,
-                    color = if (selected) Color(0xFFF7F1E6) else Color(0xFF173F35),
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = album.artistName ?: "未知艺人",
-                    color = if (selected) Color(0xFFD0D9D5) else Color(0xFF537066),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = buildString {
-                        append(album.section.title)
-                        album.year?.let {
-                            append(" · ")
-                            append(it)
-                        }
-                    },
-                    color = if (selected) Color(0xFFD0D9D5) else Color(0xFF537066),
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                    Text(
+                        text = album.title,
+                        color = Color(0xFF173F35),
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = album.artistName ?: "未知艺人",
+                        color = Color(0xFF537066),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (selected) {
+                        Text(
+                            text = "当前浏览",
+                            color = Color(0xFF2F6A59),
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.Medium,
+                        )
+                    }
+                }
             }
         }
     }
@@ -1497,8 +1541,6 @@ private fun BottomMiniPlayer(
     state: MiniPlayerState,
     modifier: Modifier = Modifier,
     onArtworkClick: () -> Unit,
-    onPrevious: () -> Unit,
-    onNext: () -> Unit,
     onTogglePause: () -> Unit,
 ) {
     val currentTrack = state.tracks.getOrNull(state.currentIndex) ?: return
@@ -1508,75 +1550,40 @@ private fun BottomMiniPlayer(
         color = Color(0xFF173F35),
         shadowElevation = 10.dp,
     ) {
-        Column(
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 14.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically,
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(14.dp))
+                    .clickable(onClick = onArtworkClick),
             ) {
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(16.dp))
-                        .clickable(onClick = onArtworkClick),
-                ) {
-                    AsyncAlbumArtwork(
-                        imageUrl = state.album.thumbUrl,
-                        title = state.album.title,
-                        modifier = Modifier.size(64.dp),
-                    )
-                }
-                Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    Text(
-                        text = currentTrack.title,
-                        color = Color(0xFFF7F1E6),
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        text = state.album.title,
-                        color = Color(0xFFD2DDD8),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        text = "${state.room.roomName} · ${state.currentIndex + 1}/${state.tracks.size}",
-                        color = Color(0xFFAFC1BB),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-            }
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                PlayerControlButton(
-                    icon = PlayerIcon.Previous,
-                    onClick = onPrevious,
-                    enabled = state.currentIndex > 0,
-                )
-                PlayerControlButton(
-                    icon = if (state.isPaused) PlayerIcon.Play else PlayerIcon.Pause,
-                    onClick = onTogglePause,
-                    enabled = true,
-                    highlighted = true,
-                )
-                PlayerControlButton(
-                    icon = PlayerIcon.Next,
-                    onClick = onNext,
-                    enabled = state.currentIndex < state.tracks.lastIndex,
+                AsyncAlbumArtwork(
+                    imageUrl = state.album.thumbUrl,
+                    title = state.album.title,
+                    modifier = Modifier.size(52.dp),
                 )
             }
+            Text(
+                text = currentTrack.title,
+                modifier = Modifier.weight(1f),
+                color = Color(0xFFF7F1E6),
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            PlayerControlButton(
+                icon = if (state.isPaused) PlayerIcon.Play else PlayerIcon.Pause,
+                onClick = onTogglePause,
+                enabled = true,
+                highlighted = true,
+                sizeOverride = 54.dp,
+                iconSizeOverride = 24.dp,
+            )
         }
     }
 }
@@ -1587,11 +1594,14 @@ private fun PlayerControlButton(
     onClick: () -> Unit,
     enabled: Boolean,
     highlighted: Boolean = false,
+    sizeOverride: androidx.compose.ui.unit.Dp? = null,
+    iconSizeOverride: androidx.compose.ui.unit.Dp? = null,
 ) {
     val containerColor = if (highlighted) Color(0xFF2F6A59) else Color.White.copy(alpha = 0.9f)
     val contentColor = if (highlighted) Color.White else Color(0xFF2F6A59)
     val borderColor = if (highlighted) Color.Transparent else Color(0xFF2F6A59).copy(alpha = 0.2f)
-    val buttonSize = if (highlighted) 64.dp else 52.dp
+    val buttonSize = sizeOverride ?: if (highlighted) 64.dp else 52.dp
+    val iconSize = iconSizeOverride ?: if (highlighted) 26.dp else 22.dp
 
     Surface(
         modifier = Modifier
@@ -1606,7 +1616,7 @@ private fun PlayerControlButton(
             PlayerIconGraphic(
                 icon = icon,
                 tint = contentColor.copy(alpha = if (enabled) 1f else 0.35f),
-                modifier = Modifier.size(if (highlighted) 26.dp else 22.dp),
+                modifier = Modifier.size(iconSize),
             )
         }
     }
