@@ -156,6 +156,24 @@ private enum class PlayerIcon {
     Next,
 }
 
+private object AppColors {
+    val BackgroundTop = Color(0xFF050505)
+    val BackgroundBottom = Color(0xFF151515)
+    val Surface = Color(0xFF141414)
+    val SurfaceAlt = Color(0xFF1B1B1B)
+    val SurfaceMuted = Color(0xFF222222)
+    val SurfaceStrong = Color(0xFF0D0D0D)
+    val Border = Color.White.copy(alpha = 0.10f)
+    val BorderStrong = Color.White.copy(alpha = 0.18f)
+    val TextPrimary = Color(0xFFF5F5F5)
+    val TextSecondary = Color(0xFFB7B7B7)
+    val TextTertiary = Color(0xFF8E8E8E)
+    val Accent = Color(0xFFF1F1F1)
+    val AccentMuted = Color(0xFF2A2A2A)
+    val ErrorBg = Color(0xFF2A1616)
+    val ErrorText = Color(0xFFFFB4AB)
+}
+
 private object AlbumArtworkImageLoader {
     @Volatile
     private var instance: ImageLoader? = null
@@ -551,7 +569,7 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
             .fillMaxSize()
             .background(
                 brush = Brush.verticalGradient(
-                    colors = listOf(Color(0xFFF4F0E7), Color(0xFFE2E6DD), Color(0xFFD4DDD7)),
+                    colors = listOf(AppColors.BackgroundTop, AppColors.BackgroundBottom),
                 )
             )
     ) {
@@ -590,7 +608,6 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                         isLoading = isLoading,
                         errorMessage = errorMessage,
                         actionMessage = actionMessage,
-                        onOpenSettings = { navigateTo(AppSection.Settings) },
                         onRefreshFavorites = { scope.launch { refreshAlbums() } },
                         onAlbumClick = ::openAlbumDetail,
                         onOpenFavorites = { navigateTo(AppSection.FavoriteCollection) },
@@ -754,7 +771,6 @@ private fun HomeSection(
     isLoading: Boolean,
     errorMessage: String?,
     actionMessage: String?,
-    onOpenSettings: () -> Unit,
     onRefreshFavorites: () -> Unit,
     onAlbumClick: (PlexAlbum) -> Unit,
     onOpenFavorites: () -> Unit,
@@ -776,12 +792,10 @@ private fun HomeSection(
             }
     }
 
-    HomeHeroCard(
+    HomeStatusCard(
         selectedRoom = selectedSonosRoom,
         isLoading = isLoading,
         onRefresh = onRefreshFavorites,
-        onOpenSettings = onOpenSettings,
-        albumCount = favoriteAlbums.size,
     )
 
     errorMessage?.let { MessageCard(label = "错误", message = it, tone = MessageTone.Error) }
@@ -795,8 +809,8 @@ private fun HomeSection(
         EmptyStateCard(
             title = "先在设置里填写 Plex 服务器",
             body = "首页现在只保留封面展示和播放链路，连接信息已移到设置页并支持持久化。",
-            actionLabel = "打开设置",
-            onAction = onOpenSettings,
+            actionLabel = "刷新首页",
+            onAction = onRefreshFavorites,
         )
         return
     }
@@ -860,11 +874,11 @@ private fun AlbumPreviewGridSection(
                 Text(
                     text = title,
                     style = MaterialTheme.typography.titleLarge,
-                    color = Color(0xFF173F35),
+                    color = AppColors.TextPrimary,
                     fontWeight = FontWeight.SemiBold,
                 )
                 if (subtitle.isNotBlank()) {
-                    Text(text = subtitle, color = Color(0xFF537066))
+                    Text(text = subtitle, color = AppColors.TextSecondary)
                 }
             }
             if (actionLabel != null && onAction != null) {
@@ -925,17 +939,17 @@ private fun AlbumCollectionSection(
             Text(
                 text = title,
                 style = MaterialTheme.typography.headlineMedium,
-                color = Color(0xFF1A1A1A),
+                color = AppColors.TextPrimary,
                 fontWeight = FontWeight.Bold,
             )
             Text(
                 text = "$subtitle 共 ${albums.size} 张。",
-                color = Color(0xFF666666),
+                color = AppColors.TextSecondary,
             )
             selectedAlbum?.let {
                 Text(
                     text = "当前高亮：${it.title}",
-                    color = Color(0xFF999999),
+                    color = AppColors.TextTertiary,
                 )
             }
         }
@@ -996,16 +1010,16 @@ private fun PlaybackDetailSection(
             Text(
                 currentTrack.title,
                 style = MaterialTheme.typography.headlineMedium,
-                color = Color(0xFF1A1A1A),
+                color = AppColors.TextPrimary,
                 fontWeight = FontWeight.Bold,
             )
             Text(
                 text = "${currentState.album.title} · ${currentState.album.artistName ?: "未知艺人"}",
-                color = Color(0xFF666666),
+                color = AppColors.TextSecondary,
             )
             Text(
                 text = "${currentState.room.roomName} · ${currentState.currentIndex + 1}/${currentState.tracks.size}",
-                color = Color(0xFF999999),
+                color = AppColors.TextTertiary,
                 style = MaterialTheme.typography.bodyMedium,
             )
         }
@@ -1044,7 +1058,7 @@ private fun PlaybackDetailSection(
                     hasLoadedVolume -> "音量 ${volume.toInt()}"
                     else -> "音量未读取"
                 },
-                color = Color(0xFF666666),
+                color = AppColors.TextSecondary,
             )
             Slider(
                 value = volume,
@@ -1096,7 +1110,7 @@ private fun AlbumDetailSection(
             Text(
                 currentTrackResult.album.title,
                 style = MaterialTheme.typography.headlineMedium,
-                color = Color(0xFF1A1A1A),
+                color = AppColors.TextPrimary,
                 fontWeight = FontWeight.Bold,
             )
             Text(
@@ -1108,11 +1122,11 @@ private fun AlbumDetailSection(
                     }
                     append(" · ${currentTrackResult.tracks.size} 首")
                 },
-                color = Color(0xFF666666),
+                color = AppColors.TextSecondary,
             )
             Text(
                 text = selectedRoom?.let { "当前将推送到 ${it.roomName}" } ?: "尚未选择 Sonos 房间，请先到设置页选择房间。",
-                color = Color(0xFF999999),
+                color = AppColors.TextTertiary,
             )
         }
 
@@ -1121,6 +1135,10 @@ private fun AlbumDetailSection(
                 onClick = { onPlayAlbum(currentTrackResult, selectedRoom) },
                 enabled = !isLoading,
                 modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = AppColors.Accent,
+                    contentColor = AppColors.SurfaceStrong,
+                ),
             ) {
                 Text("连续播放整张专辑")
             }
@@ -1138,8 +1156,8 @@ private fun AlbumDetailSection(
                         onPlayTrack(currentTrackResult.album, track, selectedRoom!!)
                     },
                     shape = RoundedCornerShape(12.dp),
-                    color = Color.White.copy(alpha = 0.85f),
-                    border = BorderStroke(1.dp, Color(0xFF173F35).copy(alpha = 0.06f)),
+                    color = AppColors.Surface,
+                    border = BorderStroke(1.dp, AppColors.Border),
                 ) {
                     Row(
                         modifier = Modifier
@@ -1152,9 +1170,9 @@ private fun AlbumDetailSection(
                             modifier = Modifier.weight(1f),
                             verticalArrangement = Arrangement.spacedBy(3.dp),
                         ) {
-                            Text("${index + 1}. ${track.title}", color = Color(0xFF173F35), fontWeight = FontWeight.Medium)
+                            Text("${index + 1}. ${track.title}", color = AppColors.TextPrimary, fontWeight = FontWeight.Medium)
                             track.durationMillis?.let {
-                                Text(formatDuration(it), color = Color(0xFF6A7D77))
+                                Text(formatDuration(it), color = AppColors.TextTertiary)
                             }
                         }
                         Spacer(modifier = Modifier.width(10.dp))
@@ -1162,6 +1180,10 @@ private fun AlbumDetailSection(
                             Button(
                                 onClick = { onPlayTrack(currentTrackResult.album, track, selectedRoom) },
                                 enabled = !isLoading,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = AppColors.AccentMuted,
+                                    contentColor = AppColors.TextPrimary,
+                                ),
                             ) {
                                 Text("播放")
                             }
@@ -1180,7 +1202,8 @@ private fun TopNavigation(
 ) {
     Surface(
         shape = RoundedCornerShape(24.dp),
-        color = Color.White.copy(alpha = 0.72f),
+        color = AppColors.Surface,
+        border = BorderStroke(1.dp, AppColors.Border),
         tonalElevation = 0.dp,
     ) {
         Row(
@@ -1212,13 +1235,13 @@ private fun NavigationChip(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val background = if (selected) Color(0xFF173F35) else Color.Transparent
-    val contentColor = if (selected) Color(0xFFF6F1E6) else Color(0xFF173F35)
+    val background = if (selected) AppColors.Accent else Color.Transparent
+    val contentColor = if (selected) AppColors.SurfaceStrong else AppColors.TextSecondary
     Surface(
         modifier = modifier.clickable(onClick = onClick),
         color = background,
         shape = RoundedCornerShape(18.dp),
-        border = BorderStroke(1.dp, Color(0xFF173F35).copy(alpha = 0.18f)),
+        border = BorderStroke(1.dp, if (selected) Color.Transparent else AppColors.Border),
     ) {
         Box(
             modifier = Modifier
@@ -1232,67 +1255,47 @@ private fun NavigationChip(
 }
 
 @Composable
-private fun HomeHeroCard(
+private fun HomeStatusCard(
     selectedRoom: SonosRoom?,
     isLoading: Boolean,
     onRefresh: () -> Unit,
-    onOpenSettings: () -> Unit,
-    albumCount: Int,
 ) {
     Surface(
-        shape = RoundedCornerShape(28.dp),
-        color = Color.Transparent,
-        shadowElevation = 6.dp,
+        shape = RoundedCornerShape(20.dp),
+        color = AppColors.Surface,
+        border = BorderStroke(1.dp, AppColors.Border),
     ) {
-        Box(
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(
-                    brush = Brush.linearGradient(
-                        colors = listOf(Color(0xFF14382E), Color(0xFF2F6A59), Color(0xFFC68E39)),
-                    )
-                )
-                .padding(20.dp),
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
                 Text(
-                    text = "Plex 收藏专辑",
-                    color = Color(0xFFF8F4EC),
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.Bold,
+                    text = "当前输出房间",
+                    color = AppColors.TextTertiary,
+                    style = MaterialTheme.typography.bodySmall,
                 )
                 Text(
-                    text = "首页现在展示两个九宫格：收藏专辑和最近添加专辑，点开封面后可以直接进入专辑详情并推送到 Sonos。",
-                    color = Color(0xFFEAE3D5),
+                    text = selectedRoom?.roomName ?: "还没有选定 Sonos 房间",
+                    color = AppColors.TextPrimary,
+                    fontWeight = FontWeight.SemiBold,
                 )
-                Text(
-                    text = if (selectedRoom == null) "当前还没有选定 Sonos 房间" else "当前输出房间：${selectedRoom.roomName}",
-                    color = Color(0xFFF8F4EC),
-                    fontWeight = FontWeight.Medium,
-                )
-                Text(
-                    text = "已加载 $albumCount 张收藏专辑封面",
-                    color = Color(0xFFEAE3D5),
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Button(
-                        onClick = onRefresh,
-                        enabled = !isLoading,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFFF2E5CB),
-                            contentColor = Color(0xFF14382E),
-                        ),
-                    ) {
-                        Text("刷新首页")
-                    }
-                    OutlinedButton(
-                        onClick = onOpenSettings,
-                        border = BorderStroke(1.dp, Color(0xFFF2E5CB)),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFF2E5CB)),
-                    ) {
-                        Text("进入设置")
-                    }
-                }
+            }
+            Button(
+                onClick = onRefresh,
+                enabled = !isLoading,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = AppColors.Accent,
+                    contentColor = AppColors.SurfaceStrong,
+                ),
+            ) {
+                Text("刷新首页")
             }
         }
     }
@@ -1300,11 +1303,12 @@ private fun HomeHeroCard(
 
 @Composable
 private fun MessageCard(label: String, message: String, tone: MessageTone) {
-    val container = if (tone == MessageTone.Error) Color(0xFFFBE3E0) else Color.White.copy(alpha = 0.88f)
-    val content = if (tone == MessageTone.Error) Color(0xFF7A271A) else Color(0xFF173F35)
+    val container = if (tone == MessageTone.Error) AppColors.ErrorBg else AppColors.Surface
+    val content = if (tone == MessageTone.Error) AppColors.ErrorText else AppColors.TextPrimary
     Surface(
         shape = RoundedCornerShape(22.dp),
         color = container,
+        border = BorderStroke(1.dp, AppColors.Border),
     ) {
         Column(
             modifier = Modifier.padding(16.dp),
@@ -1320,7 +1324,8 @@ private fun MessageCard(label: String, message: String, tone: MessageTone) {
 private fun LoadingCard(message: String) {
     Surface(
         shape = RoundedCornerShape(22.dp),
-        color = Color.White.copy(alpha = 0.84f),
+        color = AppColors.Surface,
+        border = BorderStroke(1.dp, AppColors.Border),
     ) {
         Row(
             modifier = Modifier
@@ -1329,8 +1334,12 @@ private fun LoadingCard(message: String) {
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.4.dp)
-            Text(message, color = Color(0xFF173F35))
+            CircularProgressIndicator(
+                modifier = Modifier.size(22.dp),
+                strokeWidth = 2.4.dp,
+                color = AppColors.Accent,
+            )
+            Text(message, color = AppColors.TextPrimary)
         }
     }
 }
@@ -1344,7 +1353,8 @@ private fun EmptyStateCard(
 ) {
     Surface(
         shape = RoundedCornerShape(26.dp),
-        color = Color.White.copy(alpha = 0.78f),
+        color = AppColors.Surface,
+        border = BorderStroke(1.dp, AppColors.Border),
     ) {
         Column(
             modifier = Modifier
@@ -1352,9 +1362,15 @@ private fun EmptyStateCard(
                 .padding(18.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Text(title, style = MaterialTheme.typography.titleMedium, color = Color(0xFF173F35))
-            Text(body, color = Color(0xFF36584F))
-            Button(onClick = onAction) {
+            Text(title, style = MaterialTheme.typography.titleMedium, color = AppColors.TextPrimary)
+            Text(body, color = AppColors.TextSecondary)
+            Button(
+                onClick = onAction,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = AppColors.Accent,
+                    contentColor = AppColors.SurfaceStrong,
+                ),
+            ) {
                 Text(actionLabel)
             }
         }
@@ -1372,7 +1388,8 @@ private fun SonosSettingsCard(
 ) {
     Surface(
         shape = RoundedCornerShape(26.dp),
-        color = Color.White.copy(alpha = 0.82f),
+        color = AppColors.Surface,
+        border = BorderStroke(1.dp, AppColors.Border),
     ) {
         Column(
             modifier = Modifier
@@ -1380,24 +1397,31 @@ private fun SonosSettingsCard(
                 .padding(18.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            Text("Sonos 房间", style = MaterialTheme.typography.titleLarge, color = Color(0xFF173F35))
-            Text("先在这里选择默认输出房间，专辑详情和播放详情都会直接使用它。", color = Color(0xFF36584F))
+            Text("Sonos 房间", style = MaterialTheme.typography.titleLarge, color = AppColors.TextPrimary)
+            Text("先在这里选择默认输出房间，专辑详情和播放详情都会直接使用它。", color = AppColors.TextSecondary)
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Button(onClick = onDiscover, enabled = !isLoading) {
+                Button(
+                    onClick = onDiscover,
+                    enabled = !isLoading,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = AppColors.Accent,
+                        contentColor = AppColors.SurfaceStrong,
+                    ),
+                ) {
                     Text("发现设备")
                 }
             }
 
             if (discoveryAttempted && rooms.isEmpty() && !isLoading) {
-                Text("当前未发现 Sonos 房间，请确认手机和音箱在同一局域网。", color = Color(0xFF7A271A))
+                Text("当前未发现 Sonos 房间，请确认手机和音箱在同一局域网。", color = AppColors.ErrorText)
             }
 
             rooms.forEach { room ->
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(18.dp),
-                    color = if (room.coordinatorUuid == selectedRoom?.coordinatorUuid) Color(0xFFE4EFE8) else Color(0xFFF6F3ED),
-                    border = BorderStroke(1.dp, Color(0xFF173F35).copy(alpha = 0.08f)),
+                    color = if (room.coordinatorUuid == selectedRoom?.coordinatorUuid) AppColors.SurfaceMuted else AppColors.SurfaceAlt,
+                    border = BorderStroke(1.dp, if (room.coordinatorUuid == selectedRoom?.coordinatorUuid) AppColors.BorderStrong else AppColors.Border),
                 ) {
                     Row(
                         modifier = Modifier
@@ -1411,15 +1435,15 @@ private fun SonosSettingsCard(
                             modifier = Modifier.weight(1f),
                             verticalArrangement = Arrangement.spacedBy(4.dp),
                         ) {
-                            Text(room.roomName, fontWeight = FontWeight.SemiBold, color = Color(0xFF173F35))
+                            Text(room.roomName, fontWeight = FontWeight.SemiBold, color = AppColors.TextPrimary)
                             Text(
                                 if (room.memberCount > 1) "${room.memberCount} 个成员" else "单房间",
-                                color = Color(0xFF5B6E68),
+                                color = AppColors.TextSecondary,
                             )
                         }
                         Text(
                             if (room.coordinatorUuid == selectedRoom?.coordinatorUuid) "当前房间" else "选择",
-                            color = Color(0xFF2F6A59),
+                            color = AppColors.TextPrimary,
                             fontWeight = FontWeight.Medium,
                         )
                     }
@@ -1511,21 +1535,21 @@ private fun AlbumCoverCard(
                 Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
                     Text(
                         text = album.title,
-                        color = Color(0xFF173F35),
+                        color = AppColors.TextPrimary,
                         fontWeight = FontWeight.Bold,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
                     Text(
                         text = album.artistName ?: "未知艺人",
-                        color = Color(0xFF537066),
+                        color = AppColors.TextSecondary,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                     if (selected) {
                         Text(
                             text = "当前浏览",
-                            color = Color(0xFF2F6A59),
+                            color = AppColors.TextTertiary,
                             style = MaterialTheme.typography.bodySmall,
                             fontWeight = FontWeight.Medium,
                         )
@@ -1547,7 +1571,8 @@ private fun BottomMiniPlayer(
     Surface(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(24.dp),
-        color = Color(0xFF173F35),
+        color = AppColors.SurfaceStrong,
+        border = BorderStroke(1.dp, AppColors.BorderStrong),
         shadowElevation = 10.dp,
     ) {
         Row(
@@ -1571,7 +1596,7 @@ private fun BottomMiniPlayer(
             Text(
                 text = currentTrack.title,
                 modifier = Modifier.weight(1f),
-                color = Color(0xFFF7F1E6),
+                color = AppColors.TextPrimary,
                 fontWeight = FontWeight.Bold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -1597,9 +1622,9 @@ private fun PlayerControlButton(
     sizeOverride: androidx.compose.ui.unit.Dp? = null,
     iconSizeOverride: androidx.compose.ui.unit.Dp? = null,
 ) {
-    val containerColor = if (highlighted) Color(0xFF2F6A59) else Color.White.copy(alpha = 0.9f)
-    val contentColor = if (highlighted) Color.White else Color(0xFF2F6A59)
-    val borderColor = if (highlighted) Color.Transparent else Color(0xFF2F6A59).copy(alpha = 0.2f)
+    val containerColor = if (highlighted) AppColors.Accent else AppColors.SurfaceMuted
+    val contentColor = if (highlighted) AppColors.SurfaceStrong else AppColors.TextPrimary
+    val borderColor = if (highlighted) Color.Transparent else AppColors.Border
     val buttonSize = sizeOverride ?: if (highlighted) 64.dp else 52.dp
     val iconSize = iconSizeOverride ?: if (highlighted) 26.dp else 22.dp
 
@@ -1634,7 +1659,8 @@ private fun TrackSection(
 
     Surface(
         shape = RoundedCornerShape(26.dp),
-        color = Color(0xFFF9F7F2),
+        color = AppColors.Surface,
+        border = BorderStroke(1.dp, AppColors.Border),
         shadowElevation = 4.dp,
     ) {
         Column(
@@ -1643,20 +1669,24 @@ private fun TrackSection(
                 .padding(18.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text(currentTrackResult.album.title, style = MaterialTheme.typography.titleLarge, color = Color(0xFF173F35))
+            Text(currentTrackResult.album.title, style = MaterialTheme.typography.titleLarge, color = AppColors.TextPrimary)
             Text(
                 text = "${currentTrackResult.album.artistName ?: "未知艺人"} · ${currentTrackResult.tracks.size} 首",
-                color = Color(0xFF537066),
+                color = AppColors.TextSecondary,
             )
             Text(
                 text = selectedRoom?.let { "当前将推送到 ${it.roomName}" } ?: "尚未选择 Sonos 房间，先到上方控制台选择房间。",
-                color = Color(0xFF36584F),
+                color = AppColors.TextTertiary,
             )
             if (selectedRoom != null) {
                 Button(
                     onClick = { onPlayAlbum(currentTrackResult, selectedRoom) },
                     enabled = !isLoading,
                     modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = AppColors.Accent,
+                        contentColor = AppColors.SurfaceStrong,
+                    ),
                 ) {
                     Text("连续播放整张专辑")
                 }
@@ -1669,8 +1699,8 @@ private fun TrackSection(
                         onPlayTrack(currentTrackResult.album, track, selectedRoom!!)
                     },
                     shape = RoundedCornerShape(18.dp),
-                    color = Color.White,
-                    border = BorderStroke(1.dp, Color(0xFF173F35).copy(alpha = 0.06f)),
+                    color = AppColors.SurfaceAlt,
+                    border = BorderStroke(1.dp, AppColors.Border),
                 ) {
                     Row(
                         modifier = Modifier
@@ -1683,9 +1713,9 @@ private fun TrackSection(
                             modifier = Modifier.weight(1f),
                             verticalArrangement = Arrangement.spacedBy(3.dp),
                         ) {
-                            Text("${index + 1}. ${track.title}", color = Color(0xFF173F35), fontWeight = FontWeight.Medium)
+                            Text("${index + 1}. ${track.title}", color = AppColors.TextPrimary, fontWeight = FontWeight.Medium)
                             track.durationMillis?.let {
-                                Text(formatDuration(it), color = Color(0xFF6A7D77))
+                                Text(formatDuration(it), color = AppColors.TextTertiary)
                             }
                         }
                         Spacer(modifier = Modifier.width(10.dp))
@@ -1693,6 +1723,10 @@ private fun TrackSection(
                             Button(
                                 onClick = { onPlayTrack(currentTrackResult.album, track, selectedRoom) },
                                 enabled = !isLoading,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = AppColors.AccentMuted,
+                                    contentColor = AppColors.TextPrimary,
+                                ),
                             ) {
                                 Text("推送")
                             }
@@ -1737,11 +1771,11 @@ private fun SettingsSection(
             onDiscover = onDiscoverSonos,
             onSelectRoom = onSelectRoom,
         )
-        HorizontalDivider(color = Color.White.copy(alpha = 0.5f))
-        Text("Plex 设置", style = MaterialTheme.typography.headlineSmall, color = Color(0xFF1A1A1A))
+        HorizontalDivider(color = AppColors.Border)
+        Text("Plex 设置", style = MaterialTheme.typography.headlineSmall, color = AppColors.TextPrimary)
         Text(
             "Plex 连接信息放在 Sonos 设置下面。保存后会持久化到本地，下次启动会自动读取。",
-            color = Color(0xFF666666),
+            color = AppColors.TextSecondary,
         )
         OutlinedTextField(
             value = username,
@@ -1780,10 +1814,22 @@ private fun SettingsSection(
             singleLine = true,
         )
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Button(onClick = onSave, modifier = Modifier.weight(1f)) {
+            Button(
+                onClick = onSave,
+                modifier = Modifier.weight(1f),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = AppColors.Accent,
+                    contentColor = AppColors.SurfaceStrong,
+                ),
+            ) {
                 Text("保存")
             }
-            OutlinedButton(onClick = onSaveAndRefresh, modifier = Modifier.weight(1f)) {
+            OutlinedButton(
+                onClick = onSaveAndRefresh,
+                modifier = Modifier.weight(1f),
+                border = BorderStroke(1.dp, AppColors.BorderStrong),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = AppColors.TextPrimary),
+            ) {
                 Text("保存并刷新首页")
             }
         }
@@ -1881,7 +1927,7 @@ private fun AsyncAlbumArtwork(
         Box(
             modifier = modifier.background(
                 brush = Brush.linearGradient(
-                    colors = listOf(Color(0xFF355D52), Color(0xFF9C6A2F), Color(0xFFF0D59E)),
+                    colors = listOf(AppColors.SurfaceMuted, AppColors.Surface, AppColors.SurfaceStrong),
                 )
             ),
             contentAlignment = Alignment.Center,

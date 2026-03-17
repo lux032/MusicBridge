@@ -2,10 +2,9 @@ package com.lux032.plextosonosplayer.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-val Moss80 = Color(0xFFA8C3B2)
-val Stone80 = Color(0xFFD9D1C3)
-val Amber80 = Color(0xFFE2BE7D)
-
-val Moss40 = Color(0xFF2F6A59)
-val Stone40 = Color(0xFF5C6C65)
-val Amber40 = Color(0xFFB27427)
+val SlateBlack = Color(0xFF050505)
+val Charcoal = Color(0xFF151515)
+val Graphite = Color(0xFF222222)
+val SoftWhite = Color(0xFFF1F1F1)
+val MutedWhite = Color(0xFFB7B7B7)
+val PureBlack = Color(0xFF0D0D0D)
