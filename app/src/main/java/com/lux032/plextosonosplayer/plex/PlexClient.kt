@@ -27,10 +27,36 @@ data class PlexServer(val name: String, val uri: String, val accessToken: String
 
 data class PlexSection(val key: String, val title: String, val type: String)
 
+data class PlexAlbum(
+    val ratingKey: String,
+    val title: String,
+    val section: PlexSection,
+)
+
+data class PlexTrackStream(
+    val ratingKey: String,
+    val title: String,
+    val streamUrl: String,
+    val partKey: String,
+    val durationMillis: Long?,
+)
+
 data class PlexAlbumResult(
     val serverName: String,
     val sections: List<PlexSection>,
     val albums: List<String>,
+)
+
+data class PlexAlbumsResult(
+    val serverName: String,
+    val sections: List<PlexSection>,
+    val albums: List<PlexAlbum>,
+)
+
+data class PlexAlbumTracksResult(
+    val serverName: String,
+    val album: PlexAlbum,
+    val tracks: List<PlexTrackStream>,
 )
 
 class PlexClient(private val config: PlexAuthConfig) {
@@ -40,6 +66,15 @@ class PlexClient(private val config: PlexAuthConfig) {
     private val platform = "Android ${Build.VERSION.RELEASE ?: "Unknown"}"
 
     suspend fun fetchAlbumNames(): PlexAlbumResult = withContext(Dispatchers.IO) {
+        val albumsResult = fetchAlbums()
+        PlexAlbumResult(
+            serverName = albumsResult.serverName,
+            sections = albumsResult.sections,
+            albums = albumsResult.albums.map(PlexAlbum::title),
+        )
+    }
+
+    suspend fun fetchAlbums(): PlexAlbumsResult = withContext(Dispatchers.IO) {
         val token = resolveToken()
         val server = resolveServer(token)
         val sections = listMusicSections(server, token)
@@ -49,13 +84,34 @@ class PlexClient(private val config: PlexAuthConfig) {
 
         val albums = sections
             .flatMap { section -> listAlbums(server, section, token) }
-            .distinct()
-            .sorted()
+            .distinctBy { it.ratingKey }
+            .sortedBy { it.title.lowercase() }
 
-        PlexAlbumResult(
+        PlexAlbumsResult(
             serverName = server.name,
             sections = sections,
             albums = albums,
+        )
+    }
+
+    suspend fun fetchAlbumTrackStreams(albumTitle: String): PlexAlbumTracksResult = withContext(Dispatchers.IO) {
+        val normalizedAlbumTitle = albumTitle.trim()
+        require(normalizedAlbumTitle.isNotEmpty()) { "缺少专辑名称。" }
+
+        val matchedAlbum = fetchAlbums().albums
+            .firstOrNull { it.title.equals(normalizedAlbumTitle, ignoreCase = true) }
+            ?: error("未找到专辑 '$normalizedAlbumTitle'。")
+
+        fetchAlbumTrackStreams(matchedAlbum)
+    }
+
+    suspend fun fetchAlbumTrackStreams(album: PlexAlbum): PlexAlbumTracksResult = withContext(Dispatchers.IO) {
+        val token = resolveToken()
+        val server = resolveServer(token)
+        PlexAlbumTracksResult(
+            serverName = server.name,
+            album = album,
+            tracks = listAlbumTracks(server, album, token),
         )
     }
 
@@ -156,7 +212,7 @@ class PlexClient(private val config: PlexAuthConfig) {
         }
     }
 
-    private fun listAlbums(server: PlexServer, section: PlexSection, token: String): List<String> {
+    private fun listAlbums(server: PlexServer, section: PlexSection, token: String): List<PlexAlbum> {
         val response = request(
             method = "GET",
             url = "${server.uri}/library/sections/${section.key}/all?type=9",
@@ -167,7 +223,51 @@ class PlexClient(private val config: PlexAuthConfig) {
         return buildList {
             for (index in 0 until directories.length) {
                 val directory = directories.item(index) as? Element ?: continue
-                directory.getAttribute("title").takeIf { it.isNotBlank() }?.let(::add)
+                val title = directory.getAttribute("title").trim()
+                val ratingKey = directory.getAttribute("ratingKey").trim()
+                if (title.isBlank() || ratingKey.isBlank()) {
+                    continue
+                }
+                add(
+                    PlexAlbum(
+                        ratingKey = ratingKey,
+                        title = title,
+                        section = section,
+                    )
+                )
+            }
+        }
+    }
+
+    private fun listAlbumTracks(server: PlexServer, album: PlexAlbum, token: String): List<PlexTrackStream> {
+        val accessToken = server.accessToken.orEmpty().ifBlank { token }
+        val response = request(
+            method = "GET",
+            url = "${server.uri}/library/metadata/${album.ratingKey}/children",
+            headers = mapOf("X-Plex-Token" to accessToken),
+        )
+        val root = parseXml(response.body)
+        val tracks = root.getElementsByTagName("Track")
+        return buildList {
+            for (index in 0 until tracks.length) {
+                val track = tracks.item(index) as? Element ?: continue
+                val title = track.getAttribute("title").trim()
+                val ratingKey = track.getAttribute("ratingKey").trim()
+                val durationMillis = track.getAttribute("duration").trim().toLongOrNull()
+                if (title.isBlank() || ratingKey.isBlank()) {
+                    continue
+                }
+
+                val partKey = track.firstPartKey() ?: continue
+                add(
+                    PlexTrackStream(
+                        ratingKey = ratingKey,
+                        title = title,
+                        partKey = partKey,
+                        streamUrl = buildStreamUrl(server.uri, partKey, accessToken),
+                        durationMillis = durationMillis,
+                    )
+                )
             }
         }
     }
@@ -244,8 +344,25 @@ private fun DocumentBuilderFactory.setSafeFeature(name: String, value: Boolean) 
     runCatching { setFeature(name, value) }
 }
 
+private fun buildStreamUrl(serverUri: String, partKey: String, token: String): String {
+    val separator = if (partKey.contains("?")) "&" else "?"
+    return "${serverUri.trimEnd('/')}$partKey$separator${"X-Plex-Token"}=$token"
+}
+
 private fun Element.childText(tagName: String): String? {
     val nodes = getElementsByTagName(tagName)
     if (nodes.length == 0) return null
     return nodes.item(0)?.textContent?.trim()?.takeIf { it.isNotBlank() }
+}
+
+private fun Element.firstPartKey(): String? {
+    val parts = getElementsByTagName("Part")
+    for (index in 0 until parts.length) {
+        val part = parts.item(index) as? Element ?: continue
+        val key = part.getAttribute("key").trim()
+        if (key.isNotBlank()) {
+            return key
+        }
+    }
+    return null
 }

@@ -1,0 +1,42 @@
+package com.lux032.plextosonosplayer
+
+import android.content.Context
+
+data class PlexConnectionPreferences(
+    val username: String = "",
+    val password: String = "",
+    val token: String = "",
+    val server: String = "",
+    val baseUrl: String = "",
+)
+
+class AppPreferences(context: Context) {
+    private val sharedPreferences =
+        context.applicationContext.getSharedPreferences("plex_to_sonos_prefs", Context.MODE_PRIVATE)
+
+    fun loadPlexConnectionPreferences(): PlexConnectionPreferences = PlexConnectionPreferences(
+        username = sharedPreferences.getString(KEY_USERNAME, "").orEmpty(),
+        password = sharedPreferences.getString(KEY_PASSWORD, "").orEmpty(),
+        token = sharedPreferences.getString(KEY_TOKEN, "").orEmpty(),
+        server = sharedPreferences.getString(KEY_SERVER, "").orEmpty(),
+        baseUrl = sharedPreferences.getString(KEY_BASE_URL, "").orEmpty(),
+    )
+
+    fun savePlexConnectionPreferences(preferences: PlexConnectionPreferences) {
+        sharedPreferences.edit()
+            .putString(KEY_USERNAME, preferences.username)
+            .putString(KEY_PASSWORD, preferences.password)
+            .putString(KEY_TOKEN, preferences.token)
+            .putString(KEY_SERVER, preferences.server)
+            .putString(KEY_BASE_URL, preferences.baseUrl)
+            .apply()
+    }
+
+    private companion object {
+        const val KEY_USERNAME = "username"
+        const val KEY_PASSWORD = "password"
+        const val KEY_TOKEN = "token"
+        const val KEY_SERVER = "server"
+        const val KEY_BASE_URL = "base_url"
+    }
+}
