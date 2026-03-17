@@ -1,6 +1,7 @@
 package com.lux032.plextosonosplayer
 
 import android.content.Context
+import androidx.core.content.edit
 
 data class PlexConnectionPreferences(
     val username: String = "",
@@ -23,13 +24,34 @@ class AppPreferences(context: Context) {
     )
 
     fun savePlexConnectionPreferences(preferences: PlexConnectionPreferences) {
-        sharedPreferences.edit()
-            .putString(KEY_USERNAME, preferences.username)
-            .putString(KEY_PASSWORD, preferences.password)
-            .putString(KEY_TOKEN, preferences.token)
-            .putString(KEY_SERVER, preferences.server)
-            .putString(KEY_BASE_URL, preferences.baseUrl)
-            .apply()
+        sharedPreferences.edit {
+            putString(KEY_USERNAME, preferences.username)
+            putString(KEY_PASSWORD, preferences.password)
+            putString(KEY_TOKEN, preferences.token)
+            putString(KEY_SERVER, preferences.server)
+            putString(KEY_BASE_URL, preferences.baseUrl)
+        }
+    }
+
+    fun loadRecentPlayedAlbumKeys(): List<String> =
+        sharedPreferences.getString(KEY_RECENT_PLAYED_ALBUM_KEYS, "")
+            .orEmpty()
+            .split(RECENT_PLAYED_SEPARATOR)
+            .map(String::trim)
+            .filter(String::isNotEmpty)
+
+    fun markAlbumPlayed(ratingKey: String) {
+        val normalizedKey = ratingKey.trim()
+        if (normalizedKey.isEmpty()) return
+
+        val updatedKeys = buildList {
+            add(normalizedKey)
+            addAll(loadRecentPlayedAlbumKeys().filterNot { it == normalizedKey }.take(MAX_RECENT_PLAYED - 1))
+        }
+
+        sharedPreferences.edit {
+            putString(KEY_RECENT_PLAYED_ALBUM_KEYS, updatedKeys.joinToString(RECENT_PLAYED_SEPARATOR))
+        }
     }
 
     private companion object {
@@ -38,5 +60,8 @@ class AppPreferences(context: Context) {
         const val KEY_TOKEN = "token"
         const val KEY_SERVER = "server"
         const val KEY_BASE_URL = "base_url"
+        const val KEY_RECENT_PLAYED_ALBUM_KEYS = "recent_played_album_keys"
+        const val RECENT_PLAYED_SEPARATOR = "|"
+        const val MAX_RECENT_PLAYED = 100
     }
 }

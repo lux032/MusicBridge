@@ -4,7 +4,8 @@
       "Bash(git init:*)",
       "Bash(git add:*)",
       "WebSearch",
-      "WebFetch(domain:github.com)"
+      "WebFetch(domain:github.com)",
+      "Bash(./gradlew :app:lintDebug --console=plain)"
     ]
   }
 }

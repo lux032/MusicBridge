@@ -263,8 +263,11 @@ class SonosController {
     suspend fun playTrack(room: SonosRoom, trackUrl: String, title: String, albumTitle: String) = withContext(Dispatchers.IO) {
         val controlUrl = "${room.coordinatorBaseUrl}/MediaRenderer/AVTransport/Control"
         val serviceType = "urn:schemas-upnp-org:service:AVTransport:1"
-
-        val didl = """<DIDL-Lite xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/" xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/"><item id="0" parentID="0" restricted="1"><dc:title>${xmlEscape(title)}</dc:title><upnp:class>object.item.audioItem.musicTrack</upnp:class><res protocolInfo="http-get:*:*:*">${xmlEscape(trackUrl)}</res></item></DIDL-Lite>"""
+        val didl = buildTrackMetadata(
+            trackUrl = trackUrl,
+            title = title,
+            albumTitle = albumTitle,
+        )
 
         soapRequest(
             controlUrl = controlUrl,
@@ -298,6 +301,29 @@ class SonosController {
             serviceType = "urn:schemas-upnp-org:service:AVTransport:1",
             action = "Play",
             innerXml = """<InstanceID>0</InstanceID><Speed>1</Speed>""",
+        )
+    }
+
+    suspend fun getPlaybackStatus(room: SonosRoom): SonosPlaybackStatus = withContext(Dispatchers.IO) {
+        val transportResponse = soapRequest(
+            controlUrl = "${room.coordinatorBaseUrl}/MediaRenderer/AVTransport/Control",
+            serviceType = "urn:schemas-upnp-org:service:AVTransport:1",
+            action = "GetTransportInfo",
+            innerXml = """<InstanceID>0</InstanceID>""",
+        )
+        val positionResponse = soapRequest(
+            controlUrl = "${room.coordinatorBaseUrl}/MediaRenderer/AVTransport/Control",
+            serviceType = "urn:schemas-upnp-org:service:AVTransport:1",
+            action = "GetPositionInfo",
+            innerXml = """<InstanceID>0</InstanceID>""",
+        )
+        val transportRoot = parseXml(transportResponse)
+        val positionRoot = parseXml(positionResponse)
+        SonosPlaybackStatus(
+            transportState = transportRoot.textOfFirstTag("CurrentTransportState").orEmpty(),
+            currentTrackUri = positionRoot.textOfFirstTag("TrackURI"),
+            relTimeSeconds = positionRoot.textOfFirstTag("RelTime")?.toDurationSeconds(),
+            trackDurationSeconds = positionRoot.textOfFirstTag("TrackDuration")?.toDurationSeconds(),
         )
     }
 
@@ -341,6 +367,55 @@ class SonosController {
             }
         }
     }
+
+}
+
+data class SonosPlaybackStatus(
+    val transportState: String,
+    val currentTrackUri: String?,
+    val relTimeSeconds: Int?,
+    val trackDurationSeconds: Int?,
+)
+
+private fun buildTrackMetadata(
+    trackUrl: String,
+    title: String,
+    albumTitle: String,
+    creator: String? = null,
+): String = buildString {
+    val protocolInfo = "http-get:*:${guessMimeType(trackUrl)}:*"
+    append("""<DIDL-Lite xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/" xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/">""")
+    append("""<item id="0" parentID="0" restricted="1">""")
+    append("<dc:title>${xmlEscape(title)}</dc:title>")
+    creator?.takeIf { it.isNotBlank() }?.let {
+        append("<dc:creator>${xmlEscape(it)}</dc:creator>")
+    }
+    append("<upnp:album>${xmlEscape(albumTitle)}</upnp:album>")
+    append("<upnp:class>object.item.audioItem.musicTrack</upnp:class>")
+    append("""<res protocolInfo="$protocolInfo">${xmlEscape(trackUrl)}</res>""")
+    append("</item></DIDL-Lite>")
+}
+
+private fun guessMimeType(url: String): String {
+    val normalized = url.substringBefore('?').lowercase()
+    return when {
+        normalized.endsWith(".m4a") || normalized.endsWith(".mp4") -> "audio/mp4"
+        normalized.endsWith(".aac") -> "audio/aac"
+        normalized.endsWith(".flac") -> "audio/flac"
+        normalized.endsWith(".ogg") -> "application/ogg"
+        normalized.endsWith(".wav") -> "audio/wav"
+        normalized.endsWith(".mp3") -> "audio/mpeg"
+        else -> "audio/mpeg"
+    }
+}
+
+private fun String.toDurationSeconds(): Int? {
+    val parts = split(':')
+    if (parts.size != 3) return null
+    val hours = parts[0].toIntOrNull() ?: return null
+    val minutes = parts[1].toIntOrNull() ?: return null
+    val seconds = parts[2].toIntOrNull() ?: return null
+    return (hours * 3600) + (minutes * 60) + seconds
 }
 
 private fun readGroupVolume(baseUrl: String): String? = runCatching {

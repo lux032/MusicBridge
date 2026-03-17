@@ -30,8 +30,17 @@ data class PlexSection(val key: String, val title: String, val type: String)
 data class PlexAlbum(
     val ratingKey: String,
     val title: String,
+    val artistName: String?,
+    val year: Int?,
+    val thumbUrl: String?,
+    val userRating: Float?,
+    val addedAtEpochSeconds: Long?,
+    val lastViewedAtEpochSeconds: Long?,
     val section: PlexSection,
-)
+) {
+    val isFavorite: Boolean
+        get() = userRating != null
+}
 
 data class PlexTrackStream(
     val ratingKey: String,
@@ -77,13 +86,14 @@ class PlexClient(private val config: PlexAuthConfig) {
     suspend fun fetchAlbums(): PlexAlbumsResult = withContext(Dispatchers.IO) {
         val token = resolveToken()
         val server = resolveServer(token)
+        val accessToken = server.accessToken.orEmpty().ifBlank { token }
         val sections = listMusicSections(server, token)
         if (sections.isEmpty()) {
             error("服务器 '${server.name}' 上没有找到音乐库。")
         }
 
         val albums = sections
-            .flatMap { section -> listAlbums(server, section, token) }
+            .flatMap { section -> listAlbums(server, section, accessToken) }
             .distinctBy { it.ratingKey }
             .sortedBy { it.title.lowercase() }
 
@@ -91,6 +101,13 @@ class PlexClient(private val config: PlexAuthConfig) {
             serverName = server.name,
             sections = sections,
             albums = albums,
+        )
+    }
+
+    suspend fun fetchFavoriteAlbums(): PlexAlbumsResult = withContext(Dispatchers.IO) {
+        val albumsResult = fetchAlbums()
+        albumsResult.copy(
+            albums = albumsResult.albums.filter(PlexAlbum::isFavorite)
         )
     }
 
@@ -232,6 +249,15 @@ class PlexClient(private val config: PlexAuthConfig) {
                     PlexAlbum(
                         ratingKey = ratingKey,
                         title = title,
+                        artistName = directory.getAttribute("parentTitle").trim().ifBlank { null },
+                        year = directory.getAttribute("year").trim().toIntOrNull(),
+                        thumbUrl = directory.getAttribute("thumb")
+                            .trim()
+                            .takeIf { it.isNotBlank() }
+                            ?.let { buildMediaUrl(server.uri, it, token) },
+                        userRating = directory.getAttribute("userRating").trim().toFloatOrNull(),
+                        addedAtEpochSeconds = directory.getAttribute("addedAt").trim().toLongOrNull(),
+                        lastViewedAtEpochSeconds = directory.getAttribute("lastViewedAt").trim().toLongOrNull(),
                         section = section,
                     )
                 )
@@ -347,6 +373,11 @@ private fun DocumentBuilderFactory.setSafeFeature(name: String, value: Boolean) 
 private fun buildStreamUrl(serverUri: String, partKey: String, token: String): String {
     val separator = if (partKey.contains("?")) "&" else "?"
     return "${serverUri.trimEnd('/')}$partKey$separator${"X-Plex-Token"}=$token"
+}
+
+private fun buildMediaUrl(serverUri: String, mediaPath: String, token: String): String {
+    val separator = if (mediaPath.contains("?")) "&" else "?"
+    return "${serverUri.trimEnd('/')}$mediaPath$separator${"X-Plex-Token"}=$token"
 }
 
 private fun Element.childText(tagName: String): String? {
