@@ -17,7 +17,11 @@
       "Bash(sed -n '265,1065p' \"D:\\\\MyPlan\\\\PlexToSonosPlayer\\\\app\\\\src\\\\main\\\\java\\\\com\\\\lux032\\\\plextosonosplayer\\\\MainActivity.kt\")",
       "Read(//tmp/**)",
       "Bash(sed -n '1066,1600p' \"D:\\\\MyPlan\\\\PlexToSonosPlayer\\\\app\\\\src\\\\main\\\\java\\\\com\\\\lux032\\\\plextosonosplayer\\\\MainActivity.kt\")",
-      "Bash(\"D:\\\\MyPlan\\\\PlexToSonosPlayer\\\\app\\\\src\\\\main\\\\java\\\\com\\\\lux032\\\\plextosonosplayer\\\\UIComponents.kt\")"
+      "Bash(\"D:\\\\MyPlan\\\\PlexToSonosPlayer\\\\app\\\\src\\\\main\\\\java\\\\com\\\\lux032\\\\plextosonosplayer\\\\UIComponents.kt\")",
+      "Bash(\"D:\\\\MyPlan\\\\PlexToSonosPlayer\\\\app\\\\src\\\\main\\\\java\\\\com\\\\lux032\\\\plextosonosplayer\\\\ArtistSection.kt\":*)",
+      "Bash(\"D:\\\\MyPlan\\\\PlexToSonosPlayer\\\\app\\\\src\\\\main\\\\java\\\\com\\\\lux032\\\\plextosonosplayer\\\\PlaybackSection.kt\":*)",
+      "Bash(./gradlew :app:compileDebugKotlin)",
+      "Bash(ls -lh \"D:\\\\MyPlan\\\\PlexToSonosPlayer\\\\app\\\\src\\\\main\\\\java\\\\com\\\\lux032\\\\plextosonosplayer\"/*.kt)"
     ]
   }
 }
