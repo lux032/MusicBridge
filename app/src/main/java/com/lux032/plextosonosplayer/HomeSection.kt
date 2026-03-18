@@ -1,8 +1,11 @@
 package com.lux032.plextosonosplayer
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -14,18 +17,26 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.lux032.plextosonosplayer.plex.PlexAlbum
 import com.lux032.plextosonosplayer.sonos.SonosRoom
 import coil3.request.ImageRequest
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.math.absoluteValue
 
 @Composable
 internal fun HomeSection(
     connectionPreferences: PlexConnectionPreferences,
     allAlbums: List<PlexAlbum>,
+    recentPlayedAlbums: List<PlexAlbum>,
     favoriteAlbums: List<PlexAlbum>,
     recentAddedAlbums: List<PlexAlbum>,
     selectedAlbum: PlexAlbum?,
@@ -43,8 +54,8 @@ internal fun HomeSection(
     val context = LocalContext.current
     val imageLoader = remember(context) { AlbumArtworkImageLoader.get(context) }
 
-    LaunchedEffect(favoriteAlbums, recentAddedAlbums) {
-        (favoriteAlbums.take(9) + recentAddedAlbums.take(9))
+    LaunchedEffect(recentPlayedAlbums, favoriteAlbums, recentAddedAlbums) {
+        (recentPlayedAlbums.take(9) + favoriteAlbums.take(9) + recentAddedAlbums.take(9))
             .mapNotNull(PlexAlbum::thumbUrl)
             .distinct()
             .forEach { imageUrl ->
@@ -59,12 +70,9 @@ internal fun HomeSection(
     HomeStatusCard(
         selectedRoom = selectedSonosRoom,
         lastAlbumSyncEpochMillis = lastAlbumSyncEpochMillis,
-        isLoading = isLoading,
-        onRefresh = onRefreshFavorites,
     )
 
     errorMessage?.let { MessageCard(label = "错误", message = it, tone = MessageTone.Error) }
-    actionMessage?.let { MessageCard(label = "状态", message = it, tone = MessageTone.Info) }
 
     if (isLoading) {
         LoadingCard(message = "正在从 Plex 同步专辑")
@@ -93,14 +101,21 @@ internal fun HomeSection(
         EntryActionCard(
             title = "全部专辑",
             body = "已同步 ${allAlbums.size} 张专辑",
-            actionLabel = "查看全部并搜索",
+            actionLabel = "查看",
             onAction = onOpenAllAlbums,
+        )
+    }
+    if (recentPlayedAlbums.isNotEmpty()) {
+        RecentPlayedCarouselSection(
+            albums = recentPlayedAlbums.take(9),
+            selectedAlbum = selectedAlbum,
+            onAlbumClick = onAlbumClick,
         )
     }
     if (favoriteAlbums.isNotEmpty()) {
         AlbumPreviewGridSection(
             title = "收藏专辑",
-            subtitle = "按最近播放顺序优先展示，首页预览前 9 张，进入后可查看全部收藏。",
+            subtitle = "",
             albums = favoriteAlbums.take(9),
             selectedAlbum = selectedAlbum,
             actionLabel = "查看全部",
@@ -111,13 +126,188 @@ internal fun HomeSection(
     if (recentAddedAlbums.isNotEmpty()) {
         AlbumPreviewGridSection(
             title = "最近添加",
-            subtitle = "这里预览最新 9 张，进入后可查看最近添加的前 100 张。",
+            subtitle = "",
             albums = recentAddedAlbums.take(9),
             selectedAlbum = selectedAlbum,
             actionLabel = "查看前 100 张",
             onAction = onOpenRecentAdded,
             onAlbumClick = onAlbumClick,
         )
+    }
+}
+
+@Composable
+internal fun HomeStatusCard(
+    selectedRoom: SonosRoom?,
+    lastAlbumSyncEpochMillis: Long?,
+) {
+    Surface(
+        shape = RoundedCornerShape(20.dp),
+        color = AppColors.Surface,
+        border = BorderStroke(1.dp, AppColors.Border),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(
+                text = "当前输出房间",
+                color = AppColors.TextTertiary,
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Text(
+                text = selectedRoom?.roomName ?: "还没有选定 Sonos 房间",
+                color = AppColors.TextPrimary,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = formatSyncStatus(lastAlbumSyncEpochMillis),
+                color = AppColors.TextSecondary,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+    }
+}
+
+@Composable
+private fun RecentPlayedCarouselSection(
+    albums: List<PlexAlbum>,
+    selectedAlbum: PlexAlbum?,
+    onAlbumClick: (PlexAlbum) -> Unit,
+) {
+    val pagerState = rememberPagerState(pageCount = { albums.size })
+
+    LaunchedEffect(albums.size) {
+        if (albums.size <= 1) return@LaunchedEffect
+        while (true) {
+            delay(3_500)
+            pagerState.animateScrollToPage((pagerState.currentPage + 1) % albums.size)
+        }
+    }
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(
+                text = "最近播放",
+                style = MaterialTheme.typography.titleLarge,
+                color = AppColors.TextPrimary,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+
+        HorizontalPager(
+            state = pagerState,
+            contentPadding = PaddingValues(horizontal = 28.dp),
+            pageSpacing = 12.dp,
+            modifier = Modifier.fillMaxWidth(),
+        ) { page ->
+            val album = albums[page]
+            val offset = ((pagerState.currentPage - page) + pagerState.currentPageOffsetFraction).absoluteValue
+                .coerceIn(0f, 1f)
+            val scale = 0.9f + ((1f - offset) * 0.1f)
+            val alpha = 0.7f + ((1f - offset) * 0.3f)
+
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .graphicsLayer {
+                        scaleX = scale
+                        scaleY = scale
+                        this.alpha = alpha
+                    }
+                    .clickable { onAlbumClick(album) },
+                shape = RoundedCornerShape(28.dp),
+                color = AppColors.Surface,
+                border = BorderStroke(
+                    width = if (selectedAlbum?.ratingKey == album.ratingKey) 1.5.dp else 1.dp,
+                    color = if (selectedAlbum?.ratingKey == album.ratingKey) AppColors.Accent else AppColors.Border,
+                ),
+                shadowElevation = 6.dp,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(1.18f)
+                ) {
+                    AsyncAlbumArtwork(
+                        imageUrl = album.thumbUrl,
+                        title = album.title,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop,
+                    )
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(
+                                Brush.verticalGradient(
+                                    colors = listOf(
+                                        Color.Transparent,
+                                        Color.Black.copy(alpha = 0.18f + offset * 0.18f),
+                                        Color.Black.copy(alpha = 0.72f),
+                                    )
+                                )
+                            )
+                    )
+                    Column(
+                        modifier = Modifier
+                            .align(Alignment.BottomStart)
+                            .fillMaxWidth()
+                            .padding(18.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        if (selectedAlbum?.ratingKey == album.ratingKey) {
+                            Text(
+                                text = "当前浏览",
+                                color = AppColors.Accent,
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold,
+                            )
+                        }
+                        Text(
+                            text = album.title,
+                            color = Color.White,
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            text = album.artistName ?: "未知艺人",
+                            color = Color.White.copy(alpha = 0.88f),
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+            }
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.Center,
+        ) {
+            albums.forEachIndexed { index, _ ->
+                Box(
+                    modifier = Modifier
+                        .padding(horizontal = 4.dp)
+                        .size(
+                            width = if (index == pagerState.currentPage) 22.dp else 8.dp,
+                            height = 8.dp,
+                        )
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(
+                            if (index == pagerState.currentPage) AppColors.Accent
+                            else AppColors.BorderStrong.copy(alpha = 0.7f)
+                        )
+                )
+            }
+        }
     }
 }
 
@@ -402,59 +592,6 @@ internal fun AllAlbumsSection(
                     }
                 },
             )
-        }
-    }
-}
-
-@Composable
-internal fun HomeStatusCard(
-    selectedRoom: SonosRoom?,
-    lastAlbumSyncEpochMillis: Long?,
-    isLoading: Boolean,
-    onRefresh: () -> Unit,
-) {
-    Surface(
-        shape = RoundedCornerShape(20.dp),
-        color = AppColors.Surface,
-        border = BorderStroke(1.dp, AppColors.Border),
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 14.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                Text(
-                    text = "当前输出房间",
-                    color = AppColors.TextTertiary,
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                Text(
-                    text = selectedRoom?.roomName ?: "还没有选定 Sonos 房间",
-                    color = AppColors.TextPrimary,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Text(
-                    text = formatSyncStatus(lastAlbumSyncEpochMillis),
-                    color = AppColors.TextSecondary,
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
-            Button(
-                onClick = onRefresh,
-                enabled = !isLoading,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = AppColors.Accent,
-                    contentColor = AppColors.SurfaceStrong,
-                ),
-            ) {
-                Text("刷新首页")
-            }
         }
     }
 }

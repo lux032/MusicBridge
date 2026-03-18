@@ -230,6 +230,7 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                             AppSection.Home -> HomeSection(
                                 connectionPreferences = state.connectionPreferences,
                                 allAlbums = state.allAlbums,
+                                recentPlayedAlbums = state.recentPlayedAlbums.take(9),
                                 favoriteAlbums = state.favoriteAlbums,
                                 recentAddedAlbums = state.recentAddedAlbums.take(100),
                                 selectedAlbum = state.selectedAlbum,
@@ -275,6 +276,7 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                                 rooms = state.sonosRooms,
                                 playbackMode = state.playbackMode,
                                 isLoading = state.isPlaybackCommandLoading,
+                                isFavoriteLoading = state.isFavoriteMutationLoading,
                                 onBack = state::navigateBack,
                                 onPrevious = {
                                     val playerState = state.miniPlayerState ?: return@PlaybackDetailSection
@@ -294,6 +296,7 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                                 onSeek = state::seekPlayback,
                                 onAlbumClick = state::openAlbumDetail,
                                 onArtistClick = state::openArtistAlbumsByName,
+                                onToggleTrackFavorite = state::toggleTrackFavorite,
                                 onSelectTrack = { index -> state.playQueueIndex(index) },
                                 onSelectPlaybackMode = state::updatePlaybackMode,
                                 onSelectRoom = state::switchPlaybackRoom,
@@ -325,20 +328,15 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                                 selectedRoom = state.selectedSonosRoom,
                                 isSonosLoading = state.isSonosLoading,
                                 discoveryAttempted = state.sonosDiscoveryAttempted,
-                                username = username,
-                                password = password,
                                 token = token,
-                                server = server,
                                 baseUrl = baseUrl,
                                 onDiscoverSonos = state::refreshSonosRooms,
                                 onSelectRoom = state::selectSonosRoom,
-                                onUsernameChange = { username = it },
-                                onPasswordChange = { password = it },
                                 onTokenChange = { token = it },
-                                onServerChange = { server = it },
                                 onBaseUrlChange = { baseUrl = it },
                                 onSave = { state.saveSettings(username, password, token, server, baseUrl, false) },
                                 onSaveAndRefresh = { state.saveSettings(username, password, token, server, baseUrl, true) },
+                                onRefreshHome = { scope.launch { state.refreshAlbums() } },
                             )
                         AppSection.Artists -> Unit
                         AppSection.AllAlbums -> Unit
@@ -403,6 +401,7 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                 },
             )
         }
+
     }
 }
 }

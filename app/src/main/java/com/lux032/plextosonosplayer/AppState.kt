@@ -87,6 +87,19 @@ class AppState(
                     .thenBy { it.title.lowercase() }
             )
 
+    val recentPlayedAlbums: List<PlexAlbum>
+        get() = allAlbums
+            .filter { album ->
+                album.ratingKey in recentPlayedAlbumKeys || (album.lastViewedAtEpochSeconds ?: 0L) > 0L
+            }
+            .sortedWith(
+                compareBy<PlexAlbum> { album ->
+                    recentPlayedAlbumKeys.indexOf(album.ratingKey).takeIf { it >= 0 } ?: Int.MAX_VALUE
+                }
+                    .thenByDescending { it.lastViewedAtEpochSeconds ?: 0L }
+                    .thenBy { it.title.lowercase() }
+            )
+
     val recentAddedAlbums: List<PlexAlbum>
         get() = allAlbums
             .sortedWith(

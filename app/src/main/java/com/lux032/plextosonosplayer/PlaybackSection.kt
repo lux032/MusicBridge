@@ -41,6 +41,7 @@ internal fun PlaybackDetailSection(
     rooms: List<SonosRoom>,
     playbackMode: PlaybackMode,
     isLoading: Boolean,
+    isFavoriteLoading: Boolean,
     onBack: () -> Unit,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
@@ -48,6 +49,7 @@ internal fun PlaybackDetailSection(
     onSeek: (MiniPlayerState, Long) -> Unit,
     onAlbumClick: (PlexAlbum) -> Unit,
     onArtistClick: (String?) -> Unit,
+    onToggleTrackFavorite: (PlexTrackStream) -> Unit,
     onSelectTrack: (Int) -> Unit,
     onSelectPlaybackMode: (PlaybackMode) -> Unit,
     onSelectRoom: (SonosRoom) -> Unit,
@@ -196,10 +198,13 @@ internal fun PlaybackDetailSection(
         }
         Spacer(modifier = Modifier.height(2.dp))
         PlaybackActionBar(
+            currentTrack = currentTrack,
             playbackMode = playbackMode,
+            isFavoriteLoading = isFavoriteLoading,
             modifier = Modifier.fillMaxWidth(),
             onShowPlaylist = { isPlaylistSheetVisible = true },
             onShowModePicker = { isModeDialogVisible = true },
+            onToggleTrackFavorite = { onToggleTrackFavorite(currentTrack) },
             onShowRoomPicker = { isRoomDialogVisible = true },
         )
     }
@@ -387,10 +392,13 @@ internal fun PlaybackDetailSection(
 
 @Composable
 private fun PlaybackActionBar(
+    currentTrack: PlexTrackStream,
     playbackMode: PlaybackMode,
+    isFavoriteLoading: Boolean,
     modifier: Modifier = Modifier,
     onShowPlaylist: () -> Unit,
     onShowModePicker: () -> Unit,
+    onToggleTrackFavorite: () -> Unit,
     onShowRoomPicker: () -> Unit,
 ) {
     Row(
@@ -417,6 +425,24 @@ private fun PlaybackActionBar(
             isSelected = playbackMode != PlaybackMode.Sequential,
             onClick = onShowModePicker,
         )
+        Box(
+            modifier = Modifier.weight(1f),
+            contentAlignment = Alignment.Center,
+        ) {
+            Column(
+                modifier = Modifier
+                    .clickable(enabled = !isFavoriteLoading, onClick = onToggleTrackFavorite)
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                FavoriteIconGraphic(
+                    isFavorite = currentTrack.isFavorite,
+                    tint = if (currentTrack.isFavorite) AppColors.Accent else AppColors.TextSecondary,
+                    modifier = Modifier.size(24.dp),
+                )
+            }
+        }
         PlaybackActionButton(
             icon = Icons.Filled.Speaker,
             contentDescription = "投射房间",
@@ -799,20 +825,15 @@ internal fun SettingsSection(
     selectedRoom: SonosRoom?,
     isSonosLoading: Boolean,
     discoveryAttempted: Boolean,
-    username: String,
-    password: String,
     token: String,
-    server: String,
     baseUrl: String,
     onDiscoverSonos: () -> Unit,
     onSelectRoom: (SonosRoom) -> Unit,
-    onUsernameChange: (String) -> Unit,
-    onPasswordChange: (String) -> Unit,
     onTokenChange: (String) -> Unit,
-    onServerChange: (String) -> Unit,
     onBaseUrlChange: (String) -> Unit,
     onSave: () -> Unit,
     onSaveAndRefresh: () -> Unit,
+    onRefreshHome: () -> Unit,
 ) {
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -833,32 +854,10 @@ internal fun SettingsSection(
             color = AppColors.TextSecondary,
         )
         OutlinedTextField(
-            value = username,
-            onValueChange = onUsernameChange,
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text("Plex 用户名") },
-            singleLine = true,
-        )
-        OutlinedTextField(
-            value = password,
-            onValueChange = onPasswordChange,
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text("Plex 密码") },
-            visualTransformation = PasswordVisualTransformation(),
-            singleLine = true,
-        )
-        OutlinedTextField(
             value = token,
             onValueChange = onTokenChange,
             modifier = Modifier.fillMaxWidth(),
             label = { Text("Plex Token（可选，优先）") },
-            singleLine = true,
-        )
-        OutlinedTextField(
-            value = server,
-            onValueChange = onServerChange,
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text("服务器名称（可选）") },
             singleLine = true,
         )
         OutlinedTextField(
@@ -887,6 +886,14 @@ internal fun SettingsSection(
             ) {
                 Text("保存并刷新首页")
             }
+        }
+        OutlinedButton(
+            onClick = onRefreshHome,
+            modifier = Modifier.fillMaxWidth(),
+            border = BorderStroke(1.dp, AppColors.BorderStrong),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = AppColors.TextPrimary),
+        ) {
+            Text("刷新首页")
         }
     }
 }
