@@ -2,7 +2,6 @@ package com.lux032.plextosonosplayer
 
 import android.content.Context
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -15,13 +14,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -88,6 +87,10 @@ internal fun BottomNavigationBar(
     modifier: Modifier = Modifier,
     onSectionChange: (AppSection) -> Unit,
 ) {
+    val navigationBarBottomInset = WindowInsets.navigationBars
+        .asPaddingValues()
+        .calculateBottomPadding()
+
     Surface(
         modifier = modifier.fillMaxWidth(),
         color = AppColors.Surface,
@@ -96,7 +99,12 @@ internal fun BottomNavigationBar(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
+                .padding(
+                    start = 16.dp,
+                    top = 12.dp,
+                    end = 16.dp,
+                    bottom = navigationBarBottomInset + 12.dp,
+                ),
             horizontalArrangement = Arrangement.SpaceEvenly,
         ) {
             BottomNavButton(
@@ -399,20 +407,12 @@ internal fun FavoriteIconGraphic(
             modifier = modifier.size(size),
         )
     } else {
-        Canvas(modifier = modifier.size(size)) {
-            val path = Path().apply {
-                val w = this@Canvas.size.width
-                val h = this@Canvas.size.height
-                moveTo(w * 0.5f, h * 0.85f)
-                lineTo(w * 0.15f, h * 0.45f)
-                cubicTo(w * 0.1f, h * 0.35f, w * 0.1f, h * 0.2f, w * 0.2f, h * 0.1f)
-                cubicTo(w * 0.3f, h * 0.0f, w * 0.45f, h * 0.05f, w * 0.5f, h * 0.15f)
-                cubicTo(w * 0.55f, h * 0.05f, w * 0.7f, h * 0.0f, w * 0.8f, h * 0.1f)
-                cubicTo(w * 0.9f, h * 0.2f, w * 0.9f, h * 0.35f, w * 0.85f, h * 0.45f)
-                close()
-            }
-            drawPath(path = path, color = tint)
-        }
+        Icon(
+            imageVector = Icons.Outlined.FavoriteBorder,
+            contentDescription = "未收藏",
+            tint = tint,
+            modifier = modifier.size(size),
+        )
     }
 }
 
