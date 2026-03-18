@@ -13,10 +13,12 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -26,10 +28,14 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -73,10 +79,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -105,6 +113,7 @@ import okio.Path.Companion.toOkioPath
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.text.Normalizer
 
 class MainActivity : ComponentActivity() {
     var onHardwareVolumeStep: ((Int) -> Boolean)? = null
@@ -196,6 +205,14 @@ private data class ArtistSummary(
     val albumCount: Int,
     val albums: List<PlexAlbum> = emptyList(),
 )
+
+private data class IndexedGroup<T>(
+    val label: String,
+    val items: List<T>,
+)
+
+private val KanaIndexOrder = listOf("あ", "か", "さ", "た", "な", "は", "ま", "や", "ら", "わ")
+private val SupportedIndexOrder = listOf("0-9") + ('A'..'Z').map(Char::toString) + KanaIndexOrder + "#"
 
 private object AppColors {
     val BackgroundTop = Color(0xFF050505)
@@ -1211,76 +1228,153 @@ private fun ArtistsSection(
         return
     }
 
+    val artistGroups = remember(artists) {
+        buildIndexedGroups(artists) { it.name }
+    }
+    val scope = rememberCoroutineScope()
+
     when (presentation) {
         ArtistPresentation.Covers -> {
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(2),
-                horizontalArrangement = Arrangement.spacedBy(14.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
-            ) {
-                item(span = { GridItemSpan(2) }) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(bottom = 2.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Text(
-                                text = "歌手",
-                                style = MaterialTheme.typography.headlineMedium,
-                                color = AppColors.TextPrimary,
-                                fontWeight = FontWeight.Bold,
-                            )
-                            Text(
-                                text = "按本地已同步专辑聚合，点击任一歌手进入他的专辑页。",
-                                color = AppColors.TextSecondary,
+            val gridState = rememberLazyGridState()
+            val jumpTargets = remember(artistGroups) {
+                buildGridJumpTargets(
+                    leadingItemCount = 1,
+                    groups = artistGroups,
+                )
+            }
+
+            Box(modifier = Modifier.fillMaxSize()) {
+                LazyVerticalGrid(
+                    state = gridState,
+                    columns = GridCells.Fixed(2),
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(end = 42.dp, bottom = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
+                    item(span = { GridItemSpan(2) }) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 2.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text(
+                                    text = "歌手",
+                                    style = MaterialTheme.typography.headlineMedium,
+                                    color = AppColors.TextPrimary,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                                Text(
+                                    text = "按索引分组展示，右侧可直接跳转到字母或五十音分组。",
+                                    color = AppColors.TextSecondary,
+                                )
+                            }
+                            ArtistPresentationToggle(
+                                presentation = presentation,
+                                onPresentationChange = onPresentationChange,
                             )
                         }
-                        ArtistPresentationToggle(
-                            presentation = presentation,
-                            onPresentationChange = onPresentationChange,
-                        )
+                    }
+                    artistGroups.forEach { group ->
+                        item(
+                            key = "artist-grid-header-${group.label}",
+                            span = { GridItemSpan(maxLineSpan) },
+                        ) {
+                            IndexSectionHeader(label = group.label)
+                        }
+                        items(
+                            items = group.items,
+                            key = { artist -> "artist-${artist.name}" },
+                        ) { artist ->
+                            ArtistCoverCard(
+                                artist = artist,
+                                onClick = { onArtistClick(artist) },
+                            )
+                        }
                     }
                 }
-                items(artists) { artist ->
-                    ArtistCoverCard(
-                        artist = artist,
-                        onClick = { onArtistClick(artist) },
+
+                if (jumpTargets.size > 1) {
+                    VerticalIndexBar(
+                        labels = jumpTargets.map { it.first },
+                        modifier = Modifier.padding(top = 56.dp, bottom = 12.dp),
+                        onSelect = { label ->
+                            jumpTargets.firstOrNull { it.first == label }?.let { (_, index) ->
+                                scope.launch { gridState.animateScrollToItem(index) }
+                            }
+                        },
                     )
                 }
             }
         }
         ArtistPresentation.List -> {
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
+            val listState = rememberLazyListState()
+            val jumpTargets = remember(artistGroups) {
+                buildListJumpTargets(
+                    leadingItemCount = 1,
+                    groups = artistGroups,
+                )
+            }
+
+            Box(modifier = Modifier.fillMaxSize()) {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(end = 42.dp, bottom = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text(
-                            text = "歌手",
-                            style = MaterialTheme.typography.headlineMedium,
-                            color = AppColors.TextPrimary,
-                            fontWeight = FontWeight.Bold,
-                        )
-                        Text(
-                            text = "按本地已同步专辑聚合，点击任一歌手进入他的专辑页。",
-                            color = AppColors.TextSecondary,
-                        )
+                    item {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text(
+                                    text = "歌手",
+                                    style = MaterialTheme.typography.headlineMedium,
+                                    color = AppColors.TextPrimary,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                                Text(
+                                    text = "按索引分组展示，右侧可直接跳转到字母或五十音分组。",
+                                    color = AppColors.TextSecondary,
+                                )
+                            }
+                            ArtistPresentationToggle(
+                                presentation = presentation,
+                                onPresentationChange = onPresentationChange,
+                            )
+                        }
                     }
-                    ArtistPresentationToggle(
-                        presentation = presentation,
-                        onPresentationChange = onPresentationChange,
+                    artistGroups.forEach { group ->
+                        item(key = "artist-list-header-${group.label}") {
+                            IndexSectionHeader(label = group.label)
+                        }
+                        items(
+                            items = group.items,
+                            key = { artist -> "artist-list-${artist.name}" },
+                        ) { artist ->
+                            ArtistListRow(
+                                artist = artist,
+                                onClick = { onArtistClick(artist) },
+                            )
+                        }
+                    }
+                }
+
+                if (jumpTargets.size > 1) {
+                    VerticalIndexBar(
+                        labels = jumpTargets.map { it.first },
+                        modifier = Modifier.padding(top = 56.dp, bottom = 12.dp),
+                        onSelect = { label ->
+                            jumpTargets.firstOrNull { it.first == label }?.let { (_, index) ->
+                                scope.launch { listState.animateScrollToItem(index) }
+                            }
+                        },
                     )
                 }
-                ArtistList(
-                    artists = artists,
-                    onArtistClick = onArtistClick,
-                )
             }
         }
     }
@@ -1345,61 +1439,223 @@ private fun ArtistCoverCard(
 }
 
 @Composable
-private fun ArtistList(
-    artists: List<ArtistSummary>,
-    onArtistClick: (ArtistSummary) -> Unit,
+private fun ArtistListRow(
+    artist: ArtistSummary,
+    onClick: () -> Unit,
 ) {
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+    Surface(
+        modifier = Modifier.clickable(onClick = onClick),
+        shape = RoundedCornerShape(20.dp),
+        color = AppColors.Surface,
+        border = BorderStroke(1.dp, AppColors.Border),
     ) {
-        artists.forEach { artist ->
-            Surface(
-                modifier = Modifier.clickable(onClick = { onArtistClick(artist) }),
-                shape = RoundedCornerShape(20.dp),
-                color = AppColors.Surface,
-                border = BorderStroke(1.dp, AppColors.Border),
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            AsyncAlbumArtwork(
+                imageUrl = artist.coverUrl,
+                title = artist.name,
+                modifier = Modifier
+                    .size(68.dp)
+                    .clip(RoundedCornerShape(18.dp)),
+            )
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                Row(
+                Text(
+                    text = artist.name,
+                    color = AppColors.TextPrimary,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = "${artist.albumCount} 张专辑",
+                    color = AppColors.TextSecondary,
+                )
+            }
+            NavIconGraphic(
+                icon = NavIcon.Artists,
+                tint = AppColors.TextTertiary,
+                modifier = Modifier.size(18.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun IndexSectionHeader(
+    label: String,
+    modifier: Modifier = Modifier,
+) {
+    Text(
+        text = label,
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(top = 6.dp, bottom = 2.dp),
+        color = AppColors.TextSecondary,
+        style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.Bold,
+    )
+}
+
+@Composable
+private fun BoxScope.VerticalIndexBar(
+    labels: List<String>,
+    onSelect: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    if (labels.isEmpty()) return
+
+    var barHeightPx by remember { mutableIntStateOf(0) }
+    var activeLabel by remember { mutableStateOf<String?>(null) }
+
+    fun selectLabelAt(y: Float) {
+        if (barHeightPx <= 0 || labels.isEmpty()) return
+        val slotHeight = barHeightPx.toFloat() / labels.size
+        val index = (y / slotHeight).toInt().coerceIn(0, labels.lastIndex)
+        val label = labels[index]
+        if (activeLabel == label) return
+        activeLabel = label
+        onSelect(label)
+    }
+
+    Surface(
+        modifier = modifier
+            .align(Alignment.CenterEnd)
+            .onSizeChanged { barHeightPx = it.height }
+            .pointerInput(labels) {
+                detectVerticalDragGestures(
+                    onDragStart = { offset ->
+                        selectLabelAt(offset.y)
+                    },
+                    onVerticalDrag = { change, _ ->
+                        change.consume()
+                        selectLabelAt(change.position.y)
+                    },
+                    onDragEnd = { activeLabel = null },
+                    onDragCancel = { activeLabel = null },
+                )
+            },
+        shape = RoundedCornerShape(20.dp),
+        color = AppColors.SurfaceStrong.copy(alpha = 0.94f),
+        border = BorderStroke(1.dp, AppColors.BorderStrong),
+        shadowElevation = 6.dp,
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            labels.forEach { label ->
+                Text(
+                    text = label,
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    AsyncAlbumArtwork(
-                        imageUrl = artist.coverUrl,
-                        title = artist.name,
-                        modifier = Modifier
-                            .size(68.dp)
-                            .clip(RoundedCornerShape(18.dp)),
-                    )
-                    Column(
-                        modifier = Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        Text(
-                            text = artist.name,
-                            color = AppColors.TextPrimary,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Text(
-                            text = "${artist.albumCount} 张专辑",
-                            color = AppColors.TextSecondary,
-                        )
-                    }
-                    NavIconGraphic(
-                        icon = NavIcon.Artists,
-                        tint = AppColors.TextTertiary,
-                        modifier = Modifier.size(18.dp),
-                    )
-                }
+                        .width(26.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable { onSelect(label) }
+                        .padding(vertical = 2.dp),
+                    color = if (label == activeLabel) AppColors.SurfaceStrong else AppColors.TextPrimary,
+                    textAlign = TextAlign.Center,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.SemiBold,
+                )
             }
         }
     }
 }
+
+private fun <T> buildIndexedGroups(
+    items: List<T>,
+    labelOf: (T) -> String?,
+): List<IndexedGroup<T>> {
+    return items
+        .sortedWith(
+            compareBy<T> { indexOrderOf(indexLabelForText(labelOf(it))) }
+                .thenBy { normalizedIndexValue(labelOf(it)) }
+        )
+        .groupBy { indexLabelForText(labelOf(it)) }
+        .entries
+        .sortedBy { indexOrderOf(it.key) }
+        .map { IndexedGroup(label = it.key, items = it.value) }
+}
+
+private fun <T> buildListJumpTargets(
+    leadingItemCount: Int,
+    groups: List<IndexedGroup<T>>,
+): List<Pair<String, Int>> {
+    var index = leadingItemCount
+    return buildList {
+        groups.forEach { group ->
+            add(group.label to index)
+            index += 1 + group.items.size
+        }
+    }
+}
+
+private fun <T> buildGridJumpTargets(
+    leadingItemCount: Int,
+    groups: List<IndexedGroup<T>>,
+): List<Pair<String, Int>> {
+    var index = leadingItemCount
+    return buildList {
+        groups.forEach { group ->
+            add(group.label to index)
+            index += 1 + group.items.size
+        }
+    }
+}
+
+private fun indexOrderOf(label: String): Int =
+    SupportedIndexOrder.indexOf(label).takeIf { it >= 0 } ?: Int.MAX_VALUE
+
+private fun normalizedIndexValue(value: String?): String {
+    val normalized = Normalizer.normalize(value.orEmpty().trim(), Normalizer.Form.NFKC)
+    return buildString(normalized.length) {
+        normalized.forEach { char ->
+            append(char.normalizeForIndex())
+        }
+    }.lowercase()
+}
+
+private fun indexLabelForText(value: String?): String {
+    val firstChar = normalizedIndexValue(value)
+        .firstOrNull { !it.isWhitespace() && !it.isIgnoredIndexPrefix() }
+        ?: return "#"
+
+    if (firstChar.isDigit()) return "0-9"
+    if (firstChar in 'a'..'z') return firstChar.uppercaseChar().toString()
+
+    return when (firstChar) {
+        in "あいうえおぁぃぅぇぉ" -> "あ"
+        in "かきくけこがぎぐげごゕゖ" -> "か"
+        in "さしすせそざじずぜぞ" -> "さ"
+        in "たちつてとだぢづでどっ" -> "た"
+        in "なにぬねの" -> "な"
+        in "はひふへほばびぶべぼぱぴぷぺぽゔ" -> "は"
+        in "まみむめも" -> "ま"
+        in "やゆよゃゅょ" -> "や"
+        in "らりるれろ" -> "ら"
+        in "わをんゎ" -> "わ"
+        else -> "#"
+    }
+}
+
+private fun Char.normalizeForIndex(): Char {
+    val codePoint = code
+    return when {
+        codePoint in 0x30A1..0x30F6 -> (codePoint - 0x60).toChar()
+        else -> this
+    }
+}
+
+private fun Char.isIgnoredIndexPrefix(): Boolean =
+    this in setOf('\'', '"', '‘', '’', '“', '”', '・', '･', 'ー', '-', '_', '(', ')', '[', ']', '【', '】', '「', '」', '『', '』')
 
 @Composable
 private fun ArtistAlbumsSection(
@@ -1589,79 +1845,118 @@ private fun AllAlbumsSection(
     onBack: () -> Unit,
     onAlbumClick: (PlexAlbum) -> Unit,
 ) {
-    LazyVerticalGrid(
-        columns = GridCells.Fixed(2),
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = 16.dp),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(
-            top = 16.dp,
-            bottom = bottomContentPadding,
-        ),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
-    ) {
-        item(span = { GridItemSpan(maxLineSpan) }) {
-            OutlinedButton(onClick = onBack) {
-                Text("返回首页")
+    val albumGroups = remember(albums) {
+        buildIndexedGroups(albums) { it.title }
+    }
+    val gridState = rememberLazyGridState()
+    val scope = rememberCoroutineScope()
+    val jumpTargets = remember(albumGroups) {
+        buildGridJumpTargets(
+            leadingItemCount = 3,
+            groups = albumGroups,
+        )
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        LazyVerticalGrid(
+            state = gridState,
+            columns = GridCells.Fixed(2),
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 16.dp),
+            contentPadding = PaddingValues(
+                top = 16.dp,
+                end = 42.dp,
+                bottom = bottomContentPadding,
+            ),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                OutlinedButton(onClick = onBack) {
+                    Text("返回首页")
+                }
+            }
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = "全部专辑",
+                        style = MaterialTheme.typography.headlineMedium,
+                        color = AppColors.TextPrimary,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Text(
+                        text = if (searchQuery.isBlank()) {
+                            "当前展示本地已同步的全部 ${albums.size} 张专辑，可从右侧索引快速跳转。"
+                        } else {
+                            "搜索 \"$searchQuery\" 命中 ${albums.size} 张专辑，仍可按索引分组跳转。"
+                        },
+                        color = AppColors.TextSecondary,
+                    )
+                }
+            }
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = onSearchQueryChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("搜索专辑或艺人") },
+                    singleLine = true,
+                )
+            }
+            if (isSearchLoading) {
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    LoadingCard(message = "正在查询本地专辑库")
+                }
+            } else if (albums.isEmpty()) {
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    EmptyStateCard(
+                        title = if (searchQuery.isBlank()) "本地还没有专辑" else "没有匹配结果",
+                        body = if (searchQuery.isBlank()) {
+                            "先回首页同步一次 Plex 音乐库，之后这里会显示全部专辑。"
+                        } else {
+                            "换个关键词试试，搜索会匹配专辑名和艺人名。"
+                        },
+                        actionLabel = "返回首页",
+                        onAction = onBack,
+                    )
+                }
+            } else {
+                albumGroups.forEach { group ->
+                    item(
+                        key = "album-header-${group.label}",
+                        span = { GridItemSpan(maxLineSpan) },
+                    ) {
+                        IndexSectionHeader(label = group.label)
+                    }
+                    items(
+                        items = group.items,
+                        key = { album -> album.ratingKey },
+                    ) { album ->
+                        AlbumCoverCard(
+                            album = album,
+                            selected = selectedAlbum?.ratingKey == album.ratingKey,
+                            onClick = { onAlbumClick(album) },
+                            compact = false,
+                        )
+                    }
+                }
             }
         }
-        item(span = { GridItemSpan(maxLineSpan) }) {
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Text(
-                    text = "全部专辑",
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = AppColors.TextPrimary,
-                    fontWeight = FontWeight.Bold,
-                )
-                Text(
-                    text = if (searchQuery.isBlank()) {
-                        "当前展示本地已同步的全部 ${albums.size} 张专辑。"
-                    } else {
-                        "搜索 \"$searchQuery\" 命中 ${albums.size} 张专辑。"
-                    },
-                    color = AppColors.TextSecondary,
-                )
-            }
-        }
-        item(span = { GridItemSpan(maxLineSpan) }) {
-            OutlinedTextField(
-                value = searchQuery,
-                onValueChange = onSearchQueryChange,
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("搜索专辑或艺人") },
-                singleLine = true,
+
+        if (!isSearchLoading && jumpTargets.size > 1) {
+            VerticalIndexBar(
+                labels = jumpTargets.map { it.first },
+                modifier = Modifier.padding(top = 100.dp, end = 4.dp, bottom = 12.dp),
+                onSelect = { label ->
+                    jumpTargets.firstOrNull { it.first == label }?.let { (_, index) ->
+                        scope.launch { gridState.animateScrollToItem(index) }
+                    }
+                },
             )
-        }
-        if (isSearchLoading) {
-            item(span = { GridItemSpan(maxLineSpan) }) {
-                LoadingCard(message = "正在查询本地专辑库")
-            }
-        } else if (albums.isEmpty()) {
-            item(span = { GridItemSpan(maxLineSpan) }) {
-                EmptyStateCard(
-                    title = if (searchQuery.isBlank()) "本地还没有专辑" else "没有匹配结果",
-                    body = if (searchQuery.isBlank()) {
-                        "先回首页同步一次 Plex 音乐库，之后这里会显示全部专辑。"
-                    } else {
-                        "换个关键词试试，搜索会匹配专辑名和艺人名。"
-                    },
-                    actionLabel = "返回首页",
-                    onAction = onBack,
-                )
-            }
-        } else {
-            items(albums, key = { it.ratingKey }) { album ->
-                AlbumCoverCard(
-                    album = album,
-                    selected = selectedAlbum?.ratingKey == album.ratingKey,
-                    onClick = { onAlbumClick(album) },
-                    compact = false,
-                )
-            }
         }
     }
 }
