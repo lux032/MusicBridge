@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "com.lux032.plextosonosplayer"
+    namespace = "com.lux032.musicbridge"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.lux032.plextosonosplayer"
+        applicationId = "com.lux032.musicbridge"
         minSdk = 24
         targetSdk = 36
         versionCode = 1
@@ -17,13 +17,22 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        create("release") {
+            // For GitHub releases, you can use debug signing or create a keystore
+            // To create keystore: keytool -genkey -v -keystore release.keystore -alias musicbridge -keyalg RSA -keysize 2048 -validity 10000
+        }
+    }
+
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            // signingConfig = signingConfigs.getByName("release")
         }
     }
     compileOptions {

@@ -22,5 +22,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "PlexToSonosPlayer"
+rootProject.name = "MusicBridge"
 include(":app")
