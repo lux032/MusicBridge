@@ -6,7 +6,7 @@
 
 ## 下载
 
-从 [Releases](https://github.com/yourusername/MusicBridge/releases) 下载最新的 APK
+从 [Releases](https://github.com/lux032/MusicBridge/releases) 下载最新的 APK
 
 ## 功能特性
 
@@ -26,7 +26,7 @@
 
 1. 克隆仓库
 ```bash
-git clone https://github.com/yourusername/MusicBridge.git
+git clone https://github.com/lux032/MusicBridge.git
 ```
 2. 使用 Android Studio 打开项目
 3. 构建并在设备上运行

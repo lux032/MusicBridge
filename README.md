@@ -6,7 +6,7 @@ An Android app that bridges your Plex media library to Sonos speakers.
 
 ## Download
 
-Download the latest APK from [Releases](https://github.com/yourusername/MusicBridge/releases)
+Download the latest APK from [Releases](https://github.com/lux032/MusicBridge/releases)
 
 ## Features
 
@@ -26,7 +26,7 @@ Download the latest APK from [Releases](https://github.com/yourusername/MusicBri
 
 1. Clone the repository
 ```bash
-git clone https://github.com/yourusername/MusicBridge.git
+git clone https://github.com/lux032/MusicBridge.git
 ```
 2. Open in Android Studio
 3. Build and run on your device
