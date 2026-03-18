@@ -48,6 +48,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Strings.init(this)
         enableEdgeToEdge()
         setContent {
             PlexToSonosPlayerTheme {
@@ -262,13 +263,13 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                                 },
                                 onPlayTrack = { album: PlexAlbum, track: PlexTrackStream, room: SonosRoom ->
                                     val currentTrackResult = state.trackResult
-                                    val playlist = if (currentTrackResult?.album?.ratingKey == album.ratingKey) {
-                                        currentTrackResult.tracks
+                                    if (currentTrackResult?.album?.ratingKey == album.ratingKey) {
+                                        val trackIndex = currentTrackResult.tracks.indexOfFirst { it.ratingKey == track.ratingKey }.coerceAtLeast(0)
+                                        val playlist = currentTrackResult.tracks.drop(trackIndex)
+                                        state.startSingleTrackPlayback(album, playlist, 0, room)
                                     } else {
-                                        listOf(track)
+                                        state.startSingleTrackPlayback(album, listOf(track), 0, room)
                                     }
-                                    val trackIndex = playlist.indexOfFirst { it.ratingKey == track.ratingKey }.coerceAtLeast(0)
-                                    state.startSingleTrackPlayback(album, playlist, trackIndex, room)
                                 },
                             )
                             AppSection.PlaybackDetail -> PlaybackDetailSection(
@@ -308,16 +309,16 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                                 onAlbumClick = state::openAlbumDetail,
                             )
                             AppSection.FavoriteCollection -> AlbumCollectionSection(
-                                title = "收藏专辑",
-                                subtitle = "按最近播放顺序优先展示全部收藏专辑，点击封面可以继续进入专辑详情。",
+                                title = Strings.favoriteAlbumsCollection,
+                                subtitle = Strings.favoriteAlbumsCollectionDesc,
                                 albums = state.favoriteAlbums,
                                 selectedAlbum = state.selectedAlbum,
                                 onBack = state::navigateBack,
                                 onAlbumClick = state::openAlbumDetail,
                             )
                             AppSection.RecentAdded -> AlbumCollectionSection(
-                                title = "最近添加的 100 张专辑",
-                                subtitle = "按 Plex 最近添加时间倒序展示，点击封面可直接进入专辑详情。",
+                                title = Strings.recentAdded100,
+                                subtitle = Strings.recentAdded100Desc,
                                 albums = state.recentAddedAlbums.take(100),
                                 selectedAlbum = state.selectedAlbum,
                                 onBack = state::navigateBack,

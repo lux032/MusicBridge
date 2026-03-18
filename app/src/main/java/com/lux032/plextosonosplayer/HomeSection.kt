@@ -72,17 +72,17 @@ internal fun HomeSection(
         lastAlbumSyncEpochMillis = lastAlbumSyncEpochMillis,
     )
 
-    errorMessage?.let { MessageCard(label = "错误", message = it, tone = MessageTone.Error) }
+    errorMessage?.let { MessageCard(label = Strings.error, message = it, tone = MessageTone.Error) }
 
     if (isLoading) {
-        LoadingCard(message = "正在从 Plex 同步专辑")
+        LoadingCard(message = Strings.loading)
     }
 
     if (!connectionPreferences.hasCredentials() && allAlbums.isEmpty()) {
         EmptyStateCard(
-            title = "先在设置里填写 Plex 服务器",
-            body = "首页现在只保留封面展示和播放链路，连接信息已移到设置页并支持持久化。",
-            actionLabel = "刷新首页",
+            title = Strings.settingsPromptTitle,
+            body = Strings.settingsPromptBody,
+            actionLabel = Strings.refreshHome,
             onAction = onRefreshFavorites,
         )
         return
@@ -90,18 +90,18 @@ internal fun HomeSection(
 
     if (!isLoading && favoriteAlbums.isEmpty() && errorMessage == null) {
         EmptyStateCard(
-            title = "还没有检测到已收藏专辑",
-            body = "当前按 Plex 返回的 userRating 识别收藏专辑。你也可以先打开任意专辑，在详情页直接点击收藏。",
-            actionLabel = "重新获取",
+            title = Strings.noFavoritesTitle,
+            body = Strings.noFavoritesBody,
+            actionLabel = Strings.retry,
             onAction = onRefreshFavorites,
         )
     }
 
     if (allAlbums.isNotEmpty()) {
         EntryActionCard(
-            title = "全部专辑",
-            body = "已同步 ${allAlbums.size} 张专辑",
-            actionLabel = "查看",
+            title = Strings.allAlbums,
+            body = Strings.albumsSynced(allAlbums.size),
+            actionLabel = Strings.view,
             onAction = onOpenAllAlbums,
         )
     }
@@ -114,22 +114,22 @@ internal fun HomeSection(
     }
     if (favoriteAlbums.isNotEmpty()) {
         AlbumPreviewGridSection(
-            title = "收藏专辑",
+            title = Strings.favoriteAlbums,
             subtitle = "",
             albums = favoriteAlbums.take(9),
             selectedAlbum = selectedAlbum,
-            actionLabel = "查看全部",
+            actionLabel = Strings.viewAll,
             onAction = onOpenFavorites,
             onAlbumClick = onAlbumClick,
         )
     }
     if (recentAddedAlbums.isNotEmpty()) {
         AlbumPreviewGridSection(
-            title = "最近添加",
+            title = Strings.recentAdded,
             subtitle = "",
             albums = recentAddedAlbums.take(9),
             selectedAlbum = selectedAlbum,
-            actionLabel = "查看前 100 张",
+            actionLabel = Strings.viewTop100,
             onAction = onOpenRecentAdded,
             onAlbumClick = onAlbumClick,
         )
@@ -153,12 +153,12 @@ internal fun HomeStatusCard(
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             Text(
-                text = "当前输出房间",
+                text = Strings.currentOutputRoom,
                 color = AppColors.TextTertiary,
                 style = MaterialTheme.typography.bodySmall,
             )
             Text(
-                text = selectedRoom?.roomName ?: "还没有选定 Sonos 房间",
+                text = selectedRoom?.roomName ?: Strings.noRoomSelected,
                 color = AppColors.TextPrimary,
                 fontWeight = FontWeight.SemiBold,
             )
@@ -193,7 +193,7 @@ private fun RecentPlayedCarouselSection(
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(
-                text = "最近播放",
+                text = Strings.recentPlayed,
                 style = MaterialTheme.typography.titleLarge,
                 color = AppColors.TextPrimary,
                 fontWeight = FontWeight.SemiBold,
@@ -262,7 +262,7 @@ private fun RecentPlayedCarouselSection(
                     ) {
                         if (selectedAlbum?.ratingKey == album.ratingKey) {
                             Text(
-                                text = "当前浏览",
+                                text = Strings.currentViewing,
                                 color = AppColors.Accent,
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.Bold,
@@ -277,7 +277,7 @@ private fun RecentPlayedCarouselSection(
                             overflow = TextOverflow.Ellipsis,
                         )
                         Text(
-                            text = album.artistName ?: "未知艺人",
+                            text = album.artistName ?: Strings.unknownArtist,
                             color = Color.White.copy(alpha = 0.88f),
                             style = MaterialTheme.typography.bodyMedium,
                             maxLines = 1,
@@ -416,8 +416,8 @@ internal fun AlbumCollectionSection(
     if (heroAlbum == null) {
         EmptyStateCard(
             title = title,
-            body = "这里还没有可展示的专辑。",
-            actionLabel = "返回首页",
+            body = Strings.noAlbumsToShow,
+            actionLabel = Strings.backToHome,
             onAction = onBack,
         )
         return
@@ -428,7 +428,7 @@ internal fun AlbumCollectionSection(
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         OutlinedButton(onClick = onBack) {
-            Text("返回首页")
+            Text(Strings.backToHome)
         }
         AsyncAlbumArtwork(
             imageUrl = heroAlbum.thumbUrl,
@@ -449,12 +449,12 @@ internal fun AlbumCollectionSection(
                 fontWeight = FontWeight.Bold,
             )
             Text(
-                text = "$subtitle 共 ${albums.size} 张。",
+                text = "$subtitle ${Strings.totalAlbums(albums.size)}",
                 color = AppColors.TextSecondary,
             )
             selectedAlbum?.let {
                 Text(
-                    text = "当前高亮：${it.title}",
+                    text = Strings.currentHighlight(it.title),
                     color = AppColors.TextTertiary,
                 )
             }
@@ -509,7 +509,7 @@ internal fun AllAlbumsSection(
         ) {
             item(span = { GridItemSpan(maxLineSpan) }) {
                 OutlinedButton(onClick = onBack) {
-                    Text("返回首页")
+                    Text(Strings.backToHome)
                 }
             }
             item(span = { GridItemSpan(maxLineSpan) }) {
@@ -518,16 +518,16 @@ internal fun AllAlbumsSection(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     Text(
-                        text = "全部专辑",
+                        text = Strings.allAlbums,
                         style = MaterialTheme.typography.headlineMedium,
                         color = AppColors.TextPrimary,
                         fontWeight = FontWeight.Bold,
                     )
                     Text(
                         text = if (searchQuery.isBlank()) {
-                            "当前展示本地已同步的全部 ${albums.size} 张专辑，可从右侧索引快速跳转。"
+                            Strings.allAlbumsDesc(albums.size)
                         } else {
-                            "搜索 \"$searchQuery\" 命中 ${albums.size} 张专辑，仍可按索引分组跳转。"
+                            Strings.searchResults(searchQuery, albums.size)
                         },
                         color = AppColors.TextSecondary,
                     )
@@ -538,24 +538,24 @@ internal fun AllAlbumsSection(
                     value = searchQuery,
                     onValueChange = onSearchQueryChange,
                     modifier = Modifier.fillMaxWidth(),
-                    label = { Text("搜索专辑或艺人") },
+                    label = { Text(Strings.searchPlaceholder) },
                     singleLine = true,
                 )
             }
             if (isSearchLoading) {
                 item(span = { GridItemSpan(maxLineSpan) }) {
-                    LoadingCard(message = "正在查询本地专辑库")
+                    LoadingCard(message = Strings.searchingLocal)
                 }
             } else if (albums.isEmpty()) {
                 item(span = { GridItemSpan(maxLineSpan) }) {
                     EmptyStateCard(
-                        title = if (searchQuery.isBlank()) "本地还没有专辑" else "没有匹配结果",
+                        title = if (searchQuery.isBlank()) Strings.noLocalAlbums else Strings.noSearchResults,
                         body = if (searchQuery.isBlank()) {
-                            "先回首页同步一次 Plex 音乐库，之后这里会显示全部专辑。"
+                            Strings.noLocalAlbumsDesc
                         } else {
-                            "换个关键词试试，搜索会匹配专辑名和艺人名。"
+                            Strings.noSearchResultsDesc
                         },
-                        actionLabel = "返回首页",
+                        actionLabel = Strings.backToHome,
                         onAction = onBack,
                     )
                 }
@@ -616,8 +616,8 @@ internal fun SonosSettingsCard(
                 .padding(18.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            Text("Sonos 房间", style = MaterialTheme.typography.titleLarge, color = AppColors.TextPrimary)
-            Text("先在这里选择默认输出房间，专辑详情和播放详情都会直接使用它。", color = AppColors.TextSecondary)
+            Text(Strings.sonosRooms, style = MaterialTheme.typography.titleLarge, color = AppColors.TextPrimary)
+            Text(Strings.sonosRoomsDesc, color = AppColors.TextSecondary)
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Button(
                     onClick = onDiscover,
@@ -627,12 +627,12 @@ internal fun SonosSettingsCard(
                         contentColor = AppColors.SurfaceStrong,
                     ),
                 ) {
-                    Text("发现设备")
+                    Text(Strings.discoverDevices)
                 }
             }
 
             if (discoveryAttempted && rooms.isEmpty() && !isLoading) {
-                Text("当前未发现 Sonos 房间，请确认手机和音箱在同一局域网。", color = AppColors.ErrorText)
+                Text(Strings.noRoomsFound, color = AppColors.ErrorText)
             }
 
             rooms.forEach { room ->
@@ -656,12 +656,12 @@ internal fun SonosSettingsCard(
                         ) {
                             Text(room.roomName, fontWeight = FontWeight.SemiBold, color = AppColors.TextPrimary)
                             Text(
-                                if (room.memberCount > 1) "${room.memberCount} 个成员" else "单房间",
+                                if (room.memberCount > 1) Strings.members(room.memberCount) else Strings.singleRoom,
                                 color = AppColors.TextSecondary,
                             )
                         }
                         Text(
-                            if (room.coordinatorUuid == selectedRoom?.coordinatorUuid) "当前房间" else "选择",
+                            if (room.coordinatorUuid == selectedRoom?.coordinatorUuid) Strings.currentRoom else Strings.select,
                             color = AppColors.TextPrimary,
                             fontWeight = FontWeight.Medium,
                         )

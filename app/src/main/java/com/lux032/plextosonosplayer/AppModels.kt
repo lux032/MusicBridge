@@ -31,13 +31,19 @@ data class MiniPlayerState(
     val durationMillis: Long? = null,
 )
 
-enum class PlaybackMode(
-    val label: String,
-) {
-    Sequential("顺序播放"),
-    RepeatAll("列表循环"),
-    RepeatOne("单曲循环"),
-    Shuffle("随机播放"),
+enum class PlaybackMode {
+    Sequential,
+    RepeatAll,
+    RepeatOne,
+    Shuffle;
+
+    val label: String
+        get() = when (this) {
+            Sequential -> Strings.sequential
+            RepeatAll -> Strings.repeatAll
+            RepeatOne -> Strings.repeatOne
+            Shuffle -> Strings.shuffle
+        }
 }
 
 enum class PlayerIcon {

@@ -48,9 +48,9 @@ internal fun ArtistsSection(
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             EmptyStateCard(
-                title = "还没有可展示的歌手",
-                body = "先到首页同步 Plex 音乐库，之后这里会按专辑自动聚合出歌手。",
-                actionLabel = "去首页",
+                title = Strings.noArtists,
+                body = Strings.noArtistsDesc,
+                actionLabel = Strings.goHome,
                 onAction = onGoHome,
             )
         }
@@ -89,13 +89,13 @@ internal fun ArtistsSection(
                         ) {
                             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 Text(
-                                    text = "歌手",
+                                    text = Strings.artists,
                                     style = MaterialTheme.typography.headlineMedium,
                                     color = AppColors.TextPrimary,
                                     fontWeight = FontWeight.Bold,
                                 )
                                 Text(
-                                    text = "按索引分组展示，右侧可直接跳转到字母或五十音分组。",
+                                    text = Strings.artistsDesc,
                                     color = AppColors.TextSecondary,
                                 )
                             }
@@ -161,13 +161,13 @@ internal fun ArtistsSection(
                         ) {
                             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 Text(
-                                    text = "歌手",
+                                    text = Strings.artists,
                                     style = MaterialTheme.typography.headlineMedium,
                                     color = AppColors.TextPrimary,
                                     fontWeight = FontWeight.Bold,
                                 )
                                 Text(
-                                    text = "按索引分组展示，右侧可直接跳转到字母或五十音分组。",
+                                    text = Strings.artistsDesc,
                                     color = AppColors.TextSecondary,
                                 )
                             }
@@ -259,7 +259,7 @@ internal fun ArtistCoverCard(
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    text = "${artist.albumCount} 张专辑",
+                    text = Strings.albumsCount(artist.albumCount),
                     color = AppColors.TextSecondary,
                 )
             }
@@ -304,7 +304,7 @@ internal fun ArtistListRow(
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    text = "${artist.albumCount} 张专辑",
+                    text = Strings.albumsCount(artist.albumCount),
                     color = AppColors.TextSecondary,
                 )
             }
@@ -409,9 +409,9 @@ internal fun ArtistAlbumsSection(
     val currentArtist = artist
     if (currentArtist == null) {
         EmptyStateCard(
-            title = "歌手不存在或还未同步",
-            body = "先回到歌手页重新选择，或者先同步一次本地音乐库。",
-            actionLabel = "返回歌手页",
+            title = Strings.artistNotFound,
+            body = Strings.artistNotFoundDesc,
+            actionLabel = Strings.backToArtists,
             onAction = onBack,
         )
         return
@@ -424,7 +424,7 @@ internal fun ArtistAlbumsSection(
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         OutlinedButton(onClick = onBack) {
-            Text("返回歌手页")
+            Text(Strings.backToArtists)
         }
         heroAlbum?.let { album ->
             AsyncAlbumArtwork(
@@ -447,7 +447,7 @@ internal fun ArtistAlbumsSection(
                 fontWeight = FontWeight.Bold,
             )
             Text(
-                text = "共 ${currentArtist.albumCount} 张专辑，点击封面进入专辑详情并继续播放。",
+                text = Strings.artistAlbumsDesc(currentArtist.albumCount),
                 color = AppColors.TextSecondary,
             )
         }

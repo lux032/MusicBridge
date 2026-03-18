@@ -58,9 +58,9 @@ internal fun PlaybackDetailSection(
     val currentTrack = currentState?.tracks?.getOrNull(currentState.currentIndex)
     if (currentState == null || currentTrack == null) {
         EmptyStateCard(
-            title = "当前没有播放中的专辑",
-            body = "先从专辑详情里播放内容，底部栏出现后再进入播放详情。",
-            actionLabel = "返回首页",
+            title = Strings.noPlayback,
+            body = Strings.noPlaybackDesc,
+            actionLabel = Strings.backToHome,
             onAction = onBack,
         )
         return
@@ -109,7 +109,7 @@ internal fun PlaybackDetailSection(
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                text = currentState.album.artistName ?: "未知艺人",
+                text = currentState.album.artistName ?: Strings.unknownArtist,
                 color = AppColors.Accent,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
@@ -222,7 +222,7 @@ internal fun PlaybackDetailSection(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Text(
-                    text = "播放列表",
+                    text = Strings.playlist,
                     style = MaterialTheme.typography.titleLarge,
                     color = AppColors.TextPrimary,
                     fontWeight = FontWeight.Bold,
@@ -259,7 +259,7 @@ internal fun PlaybackDetailSection(
                                     overflow = TextOverflow.Ellipsis,
                                 )
                                 Text(
-                                    text = if (isCurrent) "正在播放" else currentState.album.title,
+                                    text = if (isCurrent) Strings.nowPlaying else currentState.album.title,
                                     color = if (isCurrent) AppColors.Accent else AppColors.TextSecondary,
                                     style = MaterialTheme.typography.bodySmall,
                                 )
@@ -284,7 +284,7 @@ internal fun PlaybackDetailSection(
             confirmButton = {},
             title = {
                 Text(
-                    text = "播放模式",
+                    text = Strings.playbackMode,
                     color = AppColors.TextPrimary,
                     fontWeight = FontWeight.Bold,
                 )
@@ -335,14 +335,14 @@ internal fun PlaybackDetailSection(
             confirmButton = {},
             title = {
                 Text(
-                    text = "选择 Sonos 房间",
+                    text = Strings.selectSonosRoom,
                     color = AppColors.TextPrimary,
                     fontWeight = FontWeight.Bold,
                 )
             },
             text = {
                 if (rooms.isEmpty()) {
-                    Text("当前没有可用的 Sonos 房间。", color = AppColors.TextSecondary)
+                    Text(Strings.noAvailableRooms, color = AppColors.TextSecondary)
                 } else {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         rooms.forEach { room ->
@@ -368,7 +368,7 @@ internal fun PlaybackDetailSection(
                                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                         Text(room.roomName, color = AppColors.TextPrimary, fontWeight = FontWeight.Medium)
                                         Text(
-                                            text = if (room.memberCount > 1) "${room.memberCount} 个成员" else "单房间",
+                                            text = if (room.memberCount > 1) Strings.members(room.memberCount) else Strings.singleRoom,
                                             color = AppColors.TextSecondary,
                                             style = MaterialTheme.typography.bodySmall,
                                         )
@@ -408,7 +408,7 @@ private fun PlaybackActionBar(
     ) {
         PlaybackActionButton(
             icon = Icons.Filled.QueueMusic,
-            contentDescription = "播放列表",
+            contentDescription = Strings.playlistLabel,
             modifier = Modifier.weight(1f),
             isSelected = false,
             onClick = onShowPlaylist,
@@ -445,7 +445,7 @@ private fun PlaybackActionBar(
         }
         PlaybackActionButton(
             icon = Icons.Filled.Speaker,
-            contentDescription = "投射房间",
+            contentDescription = Strings.castRoom,
             modifier = Modifier.weight(1f),
             isSelected = false,
             onClick = onShowRoomPicker,
@@ -493,9 +493,9 @@ internal fun AlbumDetailSection(
     val currentTrackResult = trackResult
     if (currentTrackResult == null) {
         EmptyStateCard(
-            title = "还没有打开专辑",
-            body = "先从首页选择一张收藏专辑，再进入专辑详情页。",
-            actionLabel = "返回首页",
+            title = Strings.noAlbumOpened,
+            body = Strings.noAlbumOpenedDesc,
+            actionLabel = Strings.backToHome,
             onAction = onReturnHome,
         )
         return
@@ -518,7 +518,7 @@ internal fun AlbumDetailSection(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            val artistName = currentTrackResult.album.artistName ?: "未知艺人"
+            val artistName = currentTrackResult.album.artistName ?: Strings.unknownArtist
             Text(
                 currentTrackResult.album.title,
                 style = MaterialTheme.typography.headlineMedium,
@@ -545,13 +545,13 @@ internal fun AlbumDetailSection(
                         append(it)
                         append(" · ")
                     }
-                    append("${currentTrackResult.tracks.size} 首")
+                    append(Strings.tracks(currentTrackResult.tracks.size))
                 },
                 color = AppColors.TextSecondary,
                 style = MaterialTheme.typography.bodyMedium,
             )
             Text(
-                text = selectedRoom?.let { "当前将推送到 ${it.roomName}" } ?: "尚未选择 Sonos 房间，请先到设置页选择房间。",
+                text = selectedRoom?.let { Strings.willPushTo(it.roomName) } ?: Strings.noRoomSelectedDesc,
                 color = AppColors.TextTertiary,
             )
             Row(
@@ -809,7 +809,7 @@ internal fun TrackSection(
                                     contentColor = AppColors.TextPrimary,
                                 ),
                             ) {
-                                Text("推送")
+                                Text(Strings.push)
                             }
                         }
                     }
@@ -848,23 +848,23 @@ internal fun SettingsSection(
             onSelectRoom = onSelectRoom,
         )
         HorizontalDivider(color = AppColors.Border)
-        Text("Plex 设置", style = MaterialTheme.typography.headlineSmall, color = AppColors.TextPrimary)
+        Text(Strings.plexSettings, style = MaterialTheme.typography.headlineSmall, color = AppColors.TextPrimary)
         Text(
-            "Plex 连接信息放在 Sonos 设置下面。保存后会持久化到本地，下次启动会自动读取。",
+            Strings.plexSettingsDesc,
             color = AppColors.TextSecondary,
         )
         OutlinedTextField(
             value = token,
             onValueChange = onTokenChange,
             modifier = Modifier.fillMaxWidth(),
-            label = { Text("Plex Token（可选，优先）") },
+            label = { Text(Strings.plexToken) },
             singleLine = true,
         )
         OutlinedTextField(
             value = baseUrl,
             onValueChange = onBaseUrlChange,
             modifier = Modifier.fillMaxWidth(),
-            label = { Text("Plex Base URL（可选）") },
+            label = { Text(Strings.plexBaseUrl) },
             singleLine = true,
         )
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -876,7 +876,7 @@ internal fun SettingsSection(
                     contentColor = AppColors.SurfaceStrong,
                 ),
             ) {
-                Text("保存")
+                Text(Strings.save)
             }
             OutlinedButton(
                 onClick = onSaveAndRefresh,
@@ -884,7 +884,7 @@ internal fun SettingsSection(
                 border = BorderStroke(1.dp, AppColors.BorderStrong),
                 colors = ButtonDefaults.outlinedButtonColors(contentColor = AppColors.TextPrimary),
             ) {
-                Text("保存并刷新首页")
+                Text(Strings.saveAndRefresh)
             }
         }
         OutlinedButton(
@@ -893,7 +893,7 @@ internal fun SettingsSection(
             border = BorderStroke(1.dp, AppColors.BorderStrong),
             colors = ButtonDefaults.outlinedButtonColors(contentColor = AppColors.TextPrimary),
         ) {
-            Text("刷新首页")
+            Text(Strings.refreshHome)
         }
     }
 }

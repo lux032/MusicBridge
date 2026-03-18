@@ -140,9 +140,9 @@ internal fun BottomNavButton(
         else -> NavIcon.Home
     }
     val label = when (section) {
-        AppSection.Home -> "首页"
-        AppSection.Artists -> "歌手"
-        AppSection.Settings -> "设置"
+        AppSection.Home -> Strings.home
+        AppSection.Artists -> Strings.artists
+        AppSection.Settings -> Strings.settings
         else -> ""
     }
     Column(
@@ -319,14 +319,14 @@ internal fun AlbumCoverCard(
                         overflow = TextOverflow.Ellipsis,
                     )
                     Text(
-                        text = album.artistName ?: "未知艺人",
+                        text = album.artistName ?: Strings.unknownArtist,
                         color = AppColors.TextSecondary,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                     if (selected) {
                         Text(
-                            text = "当前浏览",
+                            text = Strings.currentViewing,
                             color = AppColors.TextTertiary,
                             style = MaterialTheme.typography.bodySmall,
                             fontWeight = FontWeight.Medium,
@@ -347,31 +347,31 @@ internal fun PlayerIconGraphic(
     when (icon) {
         PlayerIcon.Play -> Icon(
             imageVector = Icons.Filled.PlayArrow,
-            contentDescription = "播放",
+            contentDescription = Strings.play,
             tint = tint,
             modifier = modifier,
         )
         PlayerIcon.Pause -> Icon(
             imageVector = Icons.Filled.Pause,
-            contentDescription = "暂停",
+            contentDescription = Strings.pause,
             tint = tint,
             modifier = modifier,
         )
         PlayerIcon.Back -> Icon(
             imageVector = Icons.Filled.ArrowBack,
-            contentDescription = "返回",
+            contentDescription = Strings.back,
             tint = tint,
             modifier = modifier,
         )
         PlayerIcon.Previous -> Icon(
             imageVector = Icons.Filled.SkipPrevious,
-            contentDescription = "上一首",
+            contentDescription = Strings.previous,
             tint = tint,
             modifier = modifier,
         )
         PlayerIcon.Next -> Icon(
             imageVector = Icons.Filled.SkipNext,
-            contentDescription = "下一首",
+            contentDescription = Strings.next,
             tint = tint,
             modifier = modifier,
         )
@@ -385,11 +385,11 @@ internal fun NavIconGraphic(
     modifier: Modifier = Modifier,
 ) {
     when (icon) {
-        NavIcon.Home -> Icon(Icons.Filled.Home, "首页", tint = tint, modifier = modifier)
-        NavIcon.Artists -> Icon(Icons.Filled.Person, "歌手", tint = tint, modifier = modifier)
-        NavIcon.Settings -> Icon(Icons.Filled.Settings, "设置", tint = tint, modifier = modifier)
-        NavIcon.Covers -> Icon(Icons.Filled.GridView, "封面", tint = tint, modifier = modifier)
-        NavIcon.List -> Icon(Icons.Filled.List, "列表", tint = tint, modifier = modifier)
+        NavIcon.Home -> Icon(Icons.Filled.Home, Strings.home, tint = tint, modifier = modifier)
+        NavIcon.Artists -> Icon(Icons.Filled.Person, Strings.artists, tint = tint, modifier = modifier)
+        NavIcon.Settings -> Icon(Icons.Filled.Settings, Strings.settings, tint = tint, modifier = modifier)
+        NavIcon.Covers -> Icon(Icons.Filled.GridView, "Covers", tint = tint, modifier = modifier)
+        NavIcon.List -> Icon(Icons.Filled.List, "List", tint = tint, modifier = modifier)
     }
 }
 
@@ -403,14 +403,14 @@ internal fun FavoriteIconGraphic(
     if (isFavorite) {
         Icon(
             imageVector = Icons.Filled.Favorite,
-            contentDescription = "已收藏",
+            contentDescription = Strings.favorited,
             tint = tint,
             modifier = modifier.size(size),
         )
     } else {
         Icon(
             imageVector = Icons.Outlined.FavoriteBorder,
-            contentDescription = "未收藏",
+            contentDescription = Strings.notFavorited,
             tint = tint,
             modifier = modifier.size(size),
         )
@@ -446,7 +446,7 @@ internal fun GlobalVolumeOverlay(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    text = "音量",
+                    text = Strings.volume,
                     color = AppColors.TextPrimary,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
@@ -459,7 +459,7 @@ internal fun GlobalVolumeOverlay(
                 )
             }
             Text(
-                text = if (isVolumeLoading) "正在读取 ${room.roomName} 的音量" else room.roomName,
+                text = if (isVolumeLoading) Strings.loadingVolume(room.roomName) else room.roomName,
                 color = AppColors.TextSecondary,
                 style = MaterialTheme.typography.bodyMedium,
             )
@@ -512,7 +512,7 @@ internal fun PlexConnectionPreferences.hasCredentials(): Boolean =
     token.isNotBlank() || (username.isNotBlank() && password.isNotBlank())
 
 internal fun formatSyncStatus(epochMillis: Long?): String {
-    if (epochMillis == null) return "未同步"
+    if (epochMillis == null) return Strings.notSynced
     val instant = Instant.ofEpochMilli(epochMillis)
     val formatter = DateTimeFormatter.ofPattern("MM-dd HH:mm").withZone(ZoneId.systemDefault())
     return formatter.format(instant)
