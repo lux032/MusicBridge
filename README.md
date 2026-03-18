@@ -1,5 +1,9 @@
 # MusicBridge
 
+<p align="center">
+  <img src="image/icon.png" alt="MusicBridge Icon" width="120"/>
+</p>
+
 [中文](./README_CN.md) | English
 
 An Android app that bridges your Plex media library to Sonos speakers.
@@ -38,6 +42,16 @@ On first launch:
 2. Enter your Plex authentication token
 3. The app will automatically discover Sonos speakers on your network
 4. Select a speaker and start playing music
+
+## Screenshots
+
+<p align="center">
+  <img src="image/01.jpg" width="200"/>
+  <img src="image/02.jpg" width="200"/>
+  <img src="image/03.jpg" width="200"/>
+  <img src="image/04.jpg" width="200"/>
+  <img src="image/05.jpg" width="200"/>
+</p>
 
 ## License
 

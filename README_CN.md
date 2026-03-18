@@ -1,5 +1,9 @@
 # MusicBridge
 
+<p align="center">
+  <img src="image/icon.png" alt="MusicBridge Icon" width="120"/>
+</p>
+
 中文 | [English](./README.md)
 
 一个将 Plex 媒体库桥接到 Sonos 音箱的 Android 应用。
@@ -38,6 +42,16 @@ git clone https://github.com/lux032/MusicBridge.git
 2. 输入 Plex 认证令牌
 3. 应用会自动发现网络中的 Sonos 音箱
 4. 选择音箱并开始播放音乐
+
+## 应用截图
+
+<p align="center">
+  <img src="image/01.jpg" width="200"/>
+  <img src="image/02.jpg" width="200"/>
+  <img src="image/03.jpg" width="200"/>
+  <img src="image/04.jpg" width="200"/>
+  <img src="image/05.jpg" width="200"/>
+</p>
 
 ## 许可证
 
