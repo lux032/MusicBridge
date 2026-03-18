@@ -65,6 +65,7 @@ internal fun PlaybackDetailSection(
         )
         return
     }
+    val displayAlbum = currentTrack.toDisplayAlbum(currentState.album)
 
     val trackDurationMillis = currentState.durationMillis?.takeIf { it > 0L } ?: currentTrack.durationMillis
     var isSeeking by remember(currentTrack.ratingKey) { mutableStateOf(false) }
@@ -87,8 +88,8 @@ internal fun PlaybackDetailSection(
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         AsyncAlbumArtwork(
-            imageUrl = currentState.album.thumbUrl,
-            title = currentState.album.title,
+            imageUrl = displayAlbum.thumbUrl,
+            title = displayAlbum.title,
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(1f)
@@ -109,24 +110,24 @@ internal fun PlaybackDetailSection(
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                text = currentState.album.artistName ?: Strings.unknownArtist,
+                text = displayAlbum.artistName ?: Strings.unknownArtist,
                 color = AppColors.Accent,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { onArtistClick(currentState.album.artistName) },
+                    .clickable { onArtistClick(displayAlbum.artistName) },
             )
             Text(
-                text = currentState.album.title,
+                text = displayAlbum.title,
                 color = AppColors.TextSecondary,
                 fontWeight = FontWeight.Medium,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { onAlbumClick(currentState.album) },
+                    .clickable { onAlbumClick(displayAlbum) },
             )
             Text(
                 text = "${currentState.room.roomName} · ${currentState.currentIndex + 1}/${currentState.tracks.size}",
@@ -259,7 +260,7 @@ internal fun PlaybackDetailSection(
                                     overflow = TextOverflow.Ellipsis,
                                 )
                                 Text(
-                                    text = if (isCurrent) Strings.nowPlaying else currentState.album.title,
+                                    text = if (isCurrent) Strings.nowPlaying else (track.albumTitle ?: currentState.album.title),
                                     color = if (isCurrent) AppColors.Accent else AppColors.TextSecondary,
                                     style = MaterialTheme.typography.bodySmall,
                                 )
@@ -649,6 +650,7 @@ internal fun BottomMiniPlayer(
     onTogglePause: () -> Unit,
 ) {
     val currentTrack = state.tracks.getOrNull(state.currentIndex) ?: return
+    val displayAlbum = currentTrack.toDisplayAlbum(state.album)
     Surface(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(24.dp),
@@ -669,8 +671,8 @@ internal fun BottomMiniPlayer(
                     .clickable(onClick = onArtworkClick),
             ) {
                 AsyncAlbumArtwork(
-                    imageUrl = state.album.thumbUrl,
-                    title = state.album.title,
+                    imageUrl = displayAlbum.thumbUrl,
+                    title = displayAlbum.title,
                     modifier = Modifier.size(52.dp),
                 )
             }
@@ -919,7 +921,7 @@ internal suspend fun playAlbumSequentially(
             room = room,
             trackUrl = track.streamUrl,
             title = track.title,
-            albumTitle = trackResult.album.title,
+            albumTitle = track.albumTitle ?: trackResult.album.title,
         )
         if (startPositionMillis > 0L) {
             sonosController.seek(room, (startPositionMillis / 1_000L).toInt())
@@ -978,3 +980,16 @@ internal suspend fun waitForTrackToFinish(
         }
     }
 }
+
+private fun PlexTrackStream.toDisplayAlbum(fallbackAlbum: PlexAlbum): PlexAlbum =
+    PlexAlbum(
+        ratingKey = albumRatingKey ?: fallbackAlbum.ratingKey,
+        title = albumTitle ?: fallbackAlbum.title,
+        artistName = artistName ?: fallbackAlbum.artistName,
+        year = fallbackAlbum.year,
+        thumbUrl = thumbUrl ?: fallbackAlbum.thumbUrl,
+        userRating = fallbackAlbum.userRating,
+        addedAtEpochSeconds = fallbackAlbum.addedAtEpochSeconds,
+        lastViewedAtEpochSeconds = fallbackAlbum.lastViewedAtEpochSeconds,
+        section = fallbackAlbum.section,
+    )

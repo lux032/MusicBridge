@@ -119,6 +119,11 @@ internal fun BottomNavigationBar(
                 onClick = { onSectionChange(AppSection.Artists) },
             )
             BottomNavButton(
+                section = AppSection.Playlists,
+                isSelected = primarySection == AppSection.Playlists,
+                onClick = { onSectionChange(AppSection.Playlists) },
+            )
+            BottomNavButton(
                 section = AppSection.Settings,
                 isSelected = primarySection == AppSection.Settings,
                 onClick = { onSectionChange(AppSection.Settings) },
@@ -136,12 +141,14 @@ internal fun BottomNavButton(
     val icon = when (section) {
         AppSection.Home -> NavIcon.Home
         AppSection.Artists -> NavIcon.Artists
+        AppSection.Playlists -> NavIcon.Playlists
         AppSection.Settings -> NavIcon.Settings
         else -> NavIcon.Home
     }
     val label = when (section) {
         AppSection.Home -> Strings.home
         AppSection.Artists -> Strings.artists
+        AppSection.Playlists -> Strings.playlists
         AppSection.Settings -> Strings.settings
         else -> ""
     }
@@ -387,6 +394,7 @@ internal fun NavIconGraphic(
     when (icon) {
         NavIcon.Home -> Icon(Icons.Filled.Home, Strings.home, tint = tint, modifier = modifier)
         NavIcon.Artists -> Icon(Icons.Filled.Person, Strings.artists, tint = tint, modifier = modifier)
+        NavIcon.Playlists -> Icon(Icons.Filled.QueueMusic, Strings.playlists, tint = tint, modifier = modifier)
         NavIcon.Settings -> Icon(Icons.Filled.Settings, Strings.settings, tint = tint, modifier = modifier)
         NavIcon.Covers -> Icon(Icons.Filled.GridView, "Covers", tint = tint, modifier = modifier)
         NavIcon.List -> Icon(Icons.Filled.List, "List", tint = tint, modifier = modifier)

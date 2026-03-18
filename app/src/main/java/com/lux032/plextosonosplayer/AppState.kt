@@ -12,6 +12,9 @@ import com.lux032.plextosonosplayer.plex.PlexAlbum
 import com.lux032.plextosonosplayer.plex.PlexAlbumTracksResult
 import com.lux032.plextosonosplayer.plex.PlexAuthConfig
 import com.lux032.plextosonosplayer.plex.PlexClient
+import com.lux032.plextosonosplayer.plex.PlexPlaylist
+import com.lux032.plextosonosplayer.plex.PlexPlaylistTracksResult
+import com.lux032.plextosonosplayer.plex.PlexSection
 import com.lux032.plextosonosplayer.plex.PlexTrackStream
 import com.lux032.plextosonosplayer.plex.isFavorite
 import com.lux032.plextosonosplayer.sonos.SonosPlaybackStatus
@@ -68,10 +71,15 @@ class AppState(
     var volumeChangeJob by mutableStateOf<Job?>(null)
     var albumPlaybackJob by mutableStateOf<Job?>(null)
     var playbackReportingJob by mutableStateOf<Job?>(null)
+    var favoriteTrackSyncJob by mutableStateOf<Job?>(null)
     var miniPlayerState by mutableStateOf<MiniPlayerState?>(null)
     var playbackMode by mutableStateOf(PlaybackMode.Sequential)
     var recentPlayedAlbumKeys by mutableStateOf(appPreferences.loadRecentPlayedAlbumKeys())
     var artists by mutableStateOf<List<ArtistSummary>>(emptyList())
+    var playlists by mutableStateOf<List<PlexPlaylist>>(emptyList())
+    var selectedPlaylist by mutableStateOf<PlexPlaylist?>(null)
+    var playlistTrackResult by mutableStateOf<PlexPlaylistTracksResult?>(null)
+    var favoriteTracks by mutableStateOf<List<PlexTrackStream>>(emptyList())
 
     val activeSection: AppSection
         get() = navigationStack.lastOrNull() ?: AppSection.Home
@@ -156,6 +164,9 @@ class AppState(
         allAlbums = withContext(Dispatchers.IO) {
             albumLocalStore.getAllAlbums()
         }
+        favoriteTracks = withContext(Dispatchers.IO) {
+            albumLocalStore.getFavoriteTracks()
+        }
         hasLoadedLocalAlbums = true
     }
 
@@ -182,14 +193,15 @@ class AppState(
         initialPositionMillis: Long = 0L,
     ) {
         val targetTrack = tracks.getOrNull(trackIndex) ?: return
+        val displayAlbum = resolveAlbumForTrack(targetTrack, album)
         albumPlaybackJob?.cancel()
         playbackReportingJob?.cancel()
-        appPreferences.markAlbumPlayed(album.ratingKey)
+        appPreferences.markAlbumPlayed(displayAlbum.ratingKey)
         recentPlayedAlbumKeys = appPreferences.loadRecentPlayedAlbumKeys()
         selectedSonosRoom = room
         volumeSyncKey += 1
         miniPlayerState = MiniPlayerState(
-            album = album,
+            album = displayAlbum,
             tracks = tracks,
             currentIndex = trackIndex,
             room = room,
@@ -206,7 +218,7 @@ class AppState(
                     room = room,
                     trackUrl = targetTrack.streamUrl,
                     title = targetTrack.title,
-                    albumTitle = album.title,
+                    albumTitle = targetTrack.albumTitle ?: displayAlbum.title,
                 )
                 if (initialPositionMillis > 0L) {
                     sonosController.seek(room, (initialPositionMillis / 1_000L).toInt())
@@ -452,6 +464,121 @@ class AppState(
         navigateTo(AppSection.ArtistAlbums)
     }
 
+    fun loadPlaylists() {
+        scope.launch {
+            runCatching {
+                val result = withContext(Dispatchers.IO) { client().fetchPlaylists() }
+                playlists = result.playlists
+            }.onFailure {
+                errorMessage = it.message ?: "加载歌单失败"
+            }
+        }
+    }
+
+    fun loadFavoriteTracks() {
+        scope.launch {
+            runCatching {
+                val tracks = loadFavoriteTracksFromCacheOrRemote()
+                favoriteTracks = tracks
+            }.onFailure {
+                errorMessage = it.message ?: "加载收藏单曲失败"
+            }
+        }
+    }
+
+    fun openFavoriteTracks() {
+        isLoading = true
+        errorMessage = null
+        scope.launch {
+            runCatching {
+                val tracks = loadFavoriteTracksFromCacheOrRemote()
+                favoriteTracks = tracks
+                val fakePlaylist = PlexPlaylist(
+                    ratingKey = "favorites",
+                    title = Strings.myFavoriteTracks,
+                    thumbUrl = null,
+                    leafCount = tracks.size,
+                )
+                playlistTrackResult = PlexPlaylistTracksResult("", fakePlaylist, tracks)
+                navigateTo(AppSection.PlaylistDetail)
+            }.onFailure {
+                errorMessage = it.message ?: "加载收藏单曲失败"
+            }
+            isLoading = false
+        }
+    }
+
+    fun openPlaylistDetail(playlist: PlexPlaylist) {
+        selectedPlaylist = playlist
+        scope.launch {
+            runCatching {
+                playlistTrackResult = withContext(Dispatchers.IO) { client().fetchPlaylistTracks(playlist) }
+                navigateTo(AppSection.PlaylistDetail)
+            }.onFailure {
+                errorMessage = it.message ?: "加载歌单详情失败"
+            }
+        }
+    }
+
+    fun startPlaylistPlayback(playlistResult: PlexPlaylistTracksResult, room: SonosRoom, shuffle: Boolean = false) {
+        if (playlistResult.tracks.isEmpty()) return
+        albumPlaybackJob?.cancel()
+        playbackReportingJob?.cancel()
+        selectedSonosRoom = room
+        volumeSyncKey += 1
+        val tracks = if (shuffle) playlistResult.tracks.shuffled() else playlistResult.tracks
+        val fakeAlbum = PlexAlbum(
+            ratingKey = playlistResult.playlist.ratingKey,
+            title = playlistResult.playlist.title,
+            artistName = null,
+            year = null,
+            thumbUrl = playlistResult.playlist.thumbUrl,
+            userRating = null,
+            addedAtEpochSeconds = null,
+            lastViewedAtEpochSeconds = null,
+            section = PlexSection("", "", ""),
+        )
+        val initialAlbum = tracks.firstOrNull()?.let { resolveAlbumForTrack(it, fakeAlbum) } ?: fakeAlbum
+        miniPlayerState = MiniPlayerState(
+            album = initialAlbum,
+            tracks = tracks,
+            currentIndex = 0,
+            room = room,
+            isPaused = false,
+        )
+        isPlaybackCommandLoading = true
+        albumPlaybackJob = scope.launch {
+            runCatching {
+                playAlbumSequentially(
+                    sonosController = sonosController,
+                    room = room,
+                    trackResult = PlexAlbumTracksResult("", fakeAlbum, tracks),
+                    startIndex = 0,
+                    initialPositionMillis = 0L,
+                    getNextIndex = { currentIndex ->
+                        when (playbackMode) {
+                            PlaybackMode.Sequential -> if (currentIndex < tracks.lastIndex) currentIndex + 1 else null
+                            PlaybackMode.RepeatAll -> (currentIndex + 1) % tracks.size
+                            PlaybackMode.RepeatOne -> currentIndex
+                            PlaybackMode.Shuffle -> Random.nextInt(tracks.size)
+                        }
+                    },
+                    onTrackChanged = { index, track, positionMillis ->
+                        miniPlayerState = miniPlayerState?.copy(
+                            album = resolveAlbumForTrack(track, fakeAlbum),
+                            currentIndex = index,
+                            currentPositionMillis = positionMillis,
+                            durationMillis = track.durationMillis,
+                        )
+                    },
+                )
+            }.onFailure {
+                errorMessage = it.message ?: "播放失败"
+            }
+            isPlaybackCommandLoading = false
+        }
+    }
+
     fun replaceAlbumInState(updatedAlbum: PlexAlbum) {
         allAlbums = allAlbums.map { album ->
             if (album.ratingKey == updatedAlbum.ratingKey) updatedAlbum else album
@@ -490,7 +617,7 @@ class AppState(
                 )
             }
         }
-        miniPlayerState = miniPlayerState?.let { current ->
+        playlistTrackResult = playlistTrackResult?.let { current ->
             if (current.tracks.none { it.ratingKey == updatedTrack.ratingKey }) {
                 current
             } else {
@@ -499,6 +626,70 @@ class AppState(
                         if (track.ratingKey == updatedTrack.ratingKey) updatedTrack else track
                     }
                 )
+            }
+        }
+        favoriteTracks = favoriteTracks.mapNotNull { track ->
+            when {
+                track.ratingKey != updatedTrack.ratingKey -> track
+                updatedTrack.isFavorite -> updatedTrack
+                else -> null
+            }
+        }
+        scope.launch(Dispatchers.IO) {
+            if (updatedTrack.isFavorite) {
+                albumLocalStore.upsertFavoriteTrack(updatedTrack)
+            } else {
+                albumLocalStore.deleteFavoriteTrack(updatedTrack.ratingKey)
+            }
+        }
+        miniPlayerState = miniPlayerState?.let { current ->
+            if (current.tracks.none { it.ratingKey == updatedTrack.ratingKey }) {
+                current
+            } else {
+                current.copy(
+                    album = current.tracks
+                        .getOrNull(current.currentIndex)
+                        ?.takeIf { it.ratingKey == updatedTrack.ratingKey }
+                        ?.let { resolveAlbumForTrack(updatedTrack, current.album) }
+                        ?: current.album,
+                    tracks = current.tracks.map { track ->
+                        if (track.ratingKey == updatedTrack.ratingKey) updatedTrack else track
+                    }
+                )
+            }
+        }
+    }
+
+    private suspend fun loadFavoriteTracksFromCacheOrRemote(): List<PlexTrackStream> {
+        val cachedTracks = withContext(Dispatchers.IO) {
+            albumLocalStore.getFavoriteTracks()
+        }
+        if (cachedTracks.isNotEmpty()) {
+            refreshFavoriteTracksInBackground()
+            return cachedTracks
+        }
+
+        val remoteTracks = loadFavoriteTracksInternal()
+        withContext(Dispatchers.IO) {
+            albumLocalStore.replaceAllFavoriteTracks(remoteTracks)
+        }
+        return remoteTracks
+    }
+
+    private suspend fun loadFavoriteTracksInternal(): List<PlexTrackStream> = withContext(Dispatchers.IO) {
+        val plexClient = client()
+        plexClient.fetchFavoriteTracks()
+    }
+
+    private fun refreshFavoriteTracksInBackground() {
+        favoriteTrackSyncJob?.cancel()
+        favoriteTrackSyncJob = scope.launch {
+            runCatching {
+                val tracks = loadFavoriteTracksInternal()
+                withContext(Dispatchers.IO) {
+                    albumLocalStore.replaceAllFavoriteTracks(tracks)
+                }
+                favoriteTracks = tracks
             }
         }
     }
@@ -619,7 +810,7 @@ class AppState(
             )
         } else {
             startSingleTrackPlayback(
-                album = playerState.album,
+                album = resolveAlbumForTrack(playerState.tracks[targetIndex], playerState.album),
                 tracks = playerState.tracks,
                 trackIndex = targetIndex,
                 room = targetRoom,
@@ -888,5 +1079,27 @@ class AppState(
         transportState.equals("PAUSED_PLAYBACK", ignoreCase = true) -> "paused"
         transportState.equals("TRANSITIONING", ignoreCase = true) -> "buffering"
         else -> "stopped"
+    }
+
+    private fun resolveAlbumForTrack(track: PlexTrackStream, fallbackAlbum: PlexAlbum? = null): PlexAlbum {
+        val matchedAlbum = track.albumRatingKey?.let { ratingKey ->
+            allAlbums.firstOrNull { album -> album.ratingKey == ratingKey }
+        }
+        if (matchedAlbum != null) {
+            return matchedAlbum
+        }
+
+        val fallback = fallbackAlbum ?: selectedAlbum
+        return PlexAlbum(
+            ratingKey = track.albumRatingKey ?: fallback?.ratingKey ?: track.ratingKey,
+            title = track.albumTitle ?: fallback?.title ?: track.title,
+            artistName = track.artistName ?: fallback?.artistName,
+            year = fallback?.year,
+            thumbUrl = track.thumbUrl ?: fallback?.thumbUrl,
+            userRating = fallback?.userRating,
+            addedAtEpochSeconds = fallback?.addedAtEpochSeconds,
+            lastViewedAtEpochSeconds = fallback?.lastViewedAtEpochSeconds,
+            section = fallback?.section ?: PlexSection("", "", ""),
+        )
     }
 }

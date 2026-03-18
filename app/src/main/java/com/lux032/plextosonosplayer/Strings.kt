@@ -105,4 +105,11 @@ object Strings {
     val repeatAll get() = if (isZhCN) "列表循环" else "Repeat All"
     val repeatOne get() = if (isZhCN) "单曲循环" else "Repeat One"
     val shuffle get() = if (isZhCN) "随机播放" else "Shuffle"
+    val playlists get() = if (isZhCN) "歌单" else "Playlists"
+    val noPlaylists get() = if (isZhCN) "还没有可展示的歌单" else "No Playlists to Display"
+    val noPlaylistsDesc get() = if (isZhCN) "先到 Plex 创建音频播放列表，之后这里会自动同步。" else "Create audio playlists in Plex first, then they will sync here automatically."
+    val playlistDetail get() = if (isZhCN) "歌单详情" else "Playlist Details"
+    val backToPlaylists get() = if (isZhCN) "返回歌单页" else "Back to Playlists"
+    val myFavoriteTracks get() = if (isZhCN) "我的收藏" else "My Favorites"
+    val myFavoriteTracksDesc get() = if (isZhCN) "收藏的满分单曲" else "Favorite tracks with full rating"
 }

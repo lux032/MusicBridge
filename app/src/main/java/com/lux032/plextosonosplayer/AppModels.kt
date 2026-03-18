@@ -7,8 +7,10 @@ import com.lux032.plextosonosplayer.sonos.SonosRoom
 enum class AppSection {
     Home,
     Artists,
+    Playlists,
     AlbumDetail,
     ArtistAlbums,
+    PlaylistDetail,
     PlaybackDetail,
     FavoriteCollection,
     RecentAdded,
@@ -67,6 +69,7 @@ enum class ArtistPresentation {
 enum class NavIcon {
     Home,
     Artists,
+    Playlists,
     Settings,
     Covers,
     List,

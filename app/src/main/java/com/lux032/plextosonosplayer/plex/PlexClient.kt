@@ -50,6 +50,10 @@ data class PlexTrackStream(
     val partKey: String,
     val durationMillis: Long?,
     val userRating: Float?,
+    val albumRatingKey: String? = null,
+    val albumTitle: String? = null,
+    val artistName: String? = null,
+    val thumbUrl: String? = null,
 )
 
 val PlexTrackStream.isFavorite: Boolean
@@ -83,6 +87,27 @@ data class PlexAlbumTracksResult(
     val album: PlexAlbum,
     val tracks: List<PlexTrackStream>,
 )
+
+data class PlexPlaylist(
+    val ratingKey: String,
+    val title: String,
+    val thumbUrl: String?,
+    val leafCount: Int,
+)
+
+data class PlexPlaylistsResult(
+    val serverName: String,
+    val playlists: List<PlexPlaylist>,
+)
+
+data class PlexPlaylistTracksResult(
+    val serverName: String,
+    val playlist: PlexPlaylist,
+    val tracks: List<PlexTrackStream>,
+)
+
+private const val FAVORITE_TRACK_RATING = 10
+private const val PAGED_CONTAINER_SIZE = 200
 
 class PlexClient(private val config: PlexAuthConfig) {
     private val appName = "PlexToSonosPlayer"
@@ -149,6 +174,21 @@ class PlexClient(private val config: PlexAuthConfig) {
         )
     }
 
+    suspend fun fetchFavoriteTracks(): List<PlexTrackStream> = withContext(Dispatchers.IO) {
+        val token = resolveToken()
+        val server = resolveServer(token)
+        val accessToken = server.accessToken.orEmpty().ifBlank { token }
+        val sections = listMusicSections(server, token)
+        if (sections.isEmpty()) {
+            emptyList()
+        } else {
+            sections
+                .flatMap { section -> listFavoriteTracks(server, section, accessToken) }
+                .distinctBy(PlexTrackStream::ratingKey)
+                .sortedBy { it.title.lowercase() }
+        }
+    }
+
     suspend fun fetchAlbumTrackStreams(albumTitle: String): PlexAlbumTracksResult = withContext(Dispatchers.IO) {
         val normalizedAlbumTitle = albumTitle.trim()
         require(normalizedAlbumTitle.isNotEmpty()) { "缺少专辑名称。" }
@@ -168,6 +208,65 @@ class PlexClient(private val config: PlexAuthConfig) {
             album = album,
             tracks = listAlbumTracks(server, album, token),
         )
+    }
+
+    suspend fun fetchPlaylists(): PlexPlaylistsResult = withContext(Dispatchers.IO) {
+        val token = resolveToken()
+        val server = resolveServer(token)
+        val accessToken = server.accessToken.orEmpty().ifBlank { token }
+        val response = request(
+            method = "GET",
+            url = "${server.uri}/playlists?playlistType=audio",
+            headers = mapOf("X-Plex-Token" to accessToken),
+        )
+        val root = parseXml(response.body)
+        val playlists = root.getElementsByTagName("Playlist")
+        val playlistList = buildList {
+            for (i in 0 until playlists.length) {
+                val playlist = playlists.item(i) as? Element ?: continue
+                add(PlexPlaylist(
+                    ratingKey = playlist.getAttribute("ratingKey"),
+                    title = playlist.getAttribute("title"),
+                    thumbUrl = playlist.getAttribute("thumb").takeIf { it.isNotBlank() }?.let { "${server.uri}$it?X-Plex-Token=$accessToken" },
+                    leafCount = playlist.getAttribute("leafCount").toIntOrNull() ?: 0,
+                ))
+            }
+        }
+        PlexPlaylistsResult(serverName = server.name, playlists = playlistList)
+    }
+
+    suspend fun fetchPlaylistTracks(playlist: PlexPlaylist): PlexPlaylistTracksResult = withContext(Dispatchers.IO) {
+        val token = resolveToken()
+        val server = resolveServer(token)
+        val accessToken = server.accessToken.orEmpty().ifBlank { token }
+        val response = request(
+            method = "GET",
+            url = "${server.uri}/playlists/${playlist.ratingKey}/items",
+            headers = mapOf("X-Plex-Token" to accessToken),
+        )
+        val root = parseXml(response.body)
+        val tracks = root.getElementsByTagName("Track")
+        val trackList = buildList {
+            for (i in 0 until tracks.length) {
+                val track = tracks.item(i) as? Element ?: continue
+                val media = track.getElementsByTagName("Media").item(0) as? Element ?: continue
+                val part = media.getElementsByTagName("Part").item(0) as? Element ?: continue
+                val partKey = part.getAttribute("key")
+                add(PlexTrackStream(
+                    ratingKey = track.getAttribute("ratingKey"),
+                    title = track.getAttribute("title"),
+                    streamUrl = "${server.uri}$partKey?X-Plex-Token=$accessToken",
+                    partKey = partKey,
+                    durationMillis = track.getAttribute("duration").toLongOrNull(),
+                    userRating = track.getAttribute("userRating").toFloatOrNull(),
+                    albumRatingKey = track.getAttribute("parentRatingKey").trim().ifBlank { null },
+                    albumTitle = track.getAttribute("parentTitle").trim().ifBlank { null },
+                    artistName = track.getAttribute("grandparentTitle").trim().ifBlank { null },
+                    thumbUrl = track.trackThumbUrl(server.uri, accessToken),
+                ))
+            }
+        }
+        PlexPlaylistTracksResult(serverName = server.name, playlist = playlist, tracks = trackList)
     }
 
     suspend fun setFavorite(ratingKey: String, isFavorite: Boolean): Unit = withContext(Dispatchers.IO) {
@@ -421,10 +520,49 @@ class PlexClient(private val config: PlexAuthConfig) {
                         streamUrl = buildStreamUrl(server.uri, partKey, accessToken),
                         durationMillis = durationMillis,
                         userRating = track.getAttribute("userRating").trim().toFloatOrNull(),
+                        albumRatingKey = track.getAttribute("parentRatingKey").trim().ifBlank { null },
+                        albumTitle = track.getAttribute("parentTitle").trim().ifBlank { null },
+                        artistName = track.getAttribute("grandparentTitle").trim().ifBlank { null },
+                        thumbUrl = track.trackThumbUrl(server.uri, accessToken),
                     )
                 )
             }
         }
+    }
+
+    private fun listFavoriteTracks(server: PlexServer, section: PlexSection, token: String): List<PlexTrackStream> {
+        val tracks = mutableListOf<PlexTrackStream>()
+        var containerStart = 0
+
+        while (true) {
+            val response = request(
+                method = "GET",
+                url = buildPlexUrl(
+                    serverUri = server.uri,
+                    path = "/library/sections/${section.key}/all",
+                    queryParameters = listOf(
+                        "type" to "10",
+                        "userRating>=" to FAVORITE_TRACK_RATING.toString(),
+                        "X-Plex-Container-Start" to containerStart.toString(),
+                        "X-Plex-Container-Size" to PAGED_CONTAINER_SIZE.toString(),
+                    ),
+                ),
+                headers = mapOf("X-Plex-Token" to token),
+            )
+            val root = parseXml(response.body)
+            val pageTracks = root.getElementsByTagName("Track").toTrackStreams(server.uri, token)
+            if (pageTracks.isEmpty()) {
+                break
+            }
+
+            tracks += pageTracks
+            if (pageTracks.size < PAGED_CONTAINER_SIZE) {
+                break
+            }
+            containerStart += pageTracks.size
+        }
+
+        return tracks
     }
 
     private fun request(method: String, url: String, headers: Map<String, String>): HttpResponse {
@@ -571,6 +709,44 @@ private fun Element.firstPartKey(): String? {
     }
     return null
 }
+
+private fun Element.trackThumbUrl(serverUri: String, token: String): String? {
+    val mediaPath = getAttribute("thumb")
+        .trim()
+        .ifBlank { getAttribute("parentThumb").trim() }
+        .ifBlank { null }
+        ?: return null
+    return buildMediaUrl(serverUri, mediaPath, token)
+}
+
+private fun org.w3c.dom.NodeList.toTrackStreams(serverUri: String, token: String): List<PlexTrackStream> =
+    buildList {
+        for (index in 0 until length) {
+            val track = item(index) as? Element ?: continue
+            val title = track.getAttribute("title").trim()
+            val ratingKey = track.getAttribute("ratingKey").trim()
+            val durationMillis = track.getAttribute("duration").trim().toLongOrNull()
+            if (title.isBlank() || ratingKey.isBlank()) {
+                continue
+            }
+
+            val partKey = track.firstPartKey() ?: continue
+            add(
+                PlexTrackStream(
+                    ratingKey = ratingKey,
+                    title = title,
+                    streamUrl = buildStreamUrl(serverUri, partKey, token),
+                    partKey = partKey,
+                    durationMillis = durationMillis,
+                    userRating = track.getAttribute("userRating").trim().toFloatOrNull(),
+                    albumRatingKey = track.getAttribute("parentRatingKey").trim().ifBlank { null },
+                    albumTitle = track.getAttribute("parentTitle").trim().ifBlank { null },
+                    artistName = track.getAttribute("grandparentTitle").trim().ifBlank { null },
+                    thumbUrl = track.trackThumbUrl(serverUri, token),
+                )
+            )
+        }
+    }
 
 private fun String.urlEncode(): String =
     URLEncoder.encode(this, StandardCharsets.UTF_8.name())

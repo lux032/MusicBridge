@@ -36,6 +36,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import com.lux032.plextosonosplayer.plex.PlexAlbum
 import com.lux032.plextosonosplayer.plex.PlexAlbumTracksResult
+import com.lux032.plextosonosplayer.plex.PlexSection
 import com.lux032.plextosonosplayer.plex.PlexTrackStream
 import com.lux032.plextosonosplayer.sonos.SonosRoom
 import com.lux032.plextosonosplayer.ui.theme.PlexToSonosPlayerTheme
@@ -140,6 +141,7 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
 
     LaunchedEffect(state.connectionPreferences) {
         state.loadArtists()
+        state.loadPlaylists()
     }
 
     DisposableEffect(activity, state.selectedSonosRoom, state.sonosVolume, state.hasLoadedSonosVolume) {
@@ -173,11 +175,13 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
         when (activeSection) {
             AppSection.AlbumDetail,
             AppSection.ArtistAlbums,
+            AppSection.PlaylistDetail,
             AppSection.PlaybackDetail,
             AppSection.FavoriteCollection,
             AppSection.RecentAdded,
             AppSection.AllAlbums,
             AppSection.Artists,
+            AppSection.Playlists,
             AppSection.Settings -> state.navigateBack()
             AppSection.Home -> Unit
         }
@@ -217,6 +221,19 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                             onPresentationChange = { state.artistPresentation = it },
                             onGoHome = { state.switchPrimarySection(AppSection.Home) },
                             onArtistClick = state::openArtistAlbums,
+                        )
+                    }
+                } else if (activeSection == AppSection.Playlists) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(start = 16.dp, top = 16.dp, end = 16.dp, bottom = contentBottomPadding),
+                    ) {
+                        PlaylistsSection(
+                            playlists = state.playlists,
+                            onGoHome = { state.switchPrimarySection(AppSection.Home) },
+                            onPlaylistClick = state::openPlaylistDetail,
+                            onOpenFavorites = state::openFavoriteTracks,
                         )
                     }
                 } else {
@@ -308,6 +325,38 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                                 onBack = state::navigateBack,
                                 onAlbumClick = state::openAlbumDetail,
                             )
+                            AppSection.PlaylistDetail -> PlaylistDetailSection(
+                                playlistResult = state.playlistTrackResult,
+                                selectedRoom = state.selectedSonosRoom,
+                                isPlaybackLoading = state.isPlaybackCommandLoading,
+                                isFavoriteLoading = state.isFavoriteMutationLoading,
+                                onBack = state::navigateBack,
+                                onToggleTrackFavorite = state::toggleTrackFavorite,
+                                onPlayPlaylist = { playlistResult, room ->
+                                    state.startPlaylistPlayback(playlistResult, room, shuffle = false)
+                                },
+                                onShufflePlaylist = { playlistResult, room ->
+                                    state.startPlaylistPlayback(playlistResult, room, shuffle = true)
+                                },
+                                onPlayTrack = { playlist, track, room, index ->
+                                    val currentResult = state.playlistTrackResult
+                                    if (currentResult != null) {
+                                        val tracksFromIndex = currentResult.tracks.drop(index)
+                                        val fakeAlbum = PlexAlbum(
+                                            ratingKey = playlist.ratingKey,
+                                            title = playlist.title,
+                                            artistName = null,
+                                            year = null,
+                                            thumbUrl = playlist.thumbUrl,
+                                            userRating = null,
+                                            addedAtEpochSeconds = null,
+                                            lastViewedAtEpochSeconds = null,
+                                            section = PlexSection("", "", ""),
+                                        )
+                                        state.startSingleTrackPlayback(fakeAlbum, tracksFromIndex, 0, room)
+                                    }
+                                },
+                            )
                             AppSection.FavoriteCollection -> AlbumCollectionSection(
                                 title = Strings.favoriteAlbumsCollection,
                                 subtitle = Strings.favoriteAlbumsCollectionDesc,
@@ -340,6 +389,7 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                                 onRefreshHome = { scope.launch { state.refreshAlbums() } },
                             )
                         AppSection.Artists -> Unit
+                        AppSection.Playlists -> Unit
                         AppSection.AllAlbums -> Unit
                     }
                 }
@@ -355,6 +405,7 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                     when (section) {
                         AppSection.Home,
                         AppSection.Artists,
+                        AppSection.Playlists,
                         AppSection.Settings -> state.switchPrimarySection(section)
                         else -> Unit
                     }
