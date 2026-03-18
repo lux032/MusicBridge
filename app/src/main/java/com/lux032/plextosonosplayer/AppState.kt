@@ -1,0 +1,546 @@
+package com.lux032.plextosonosplayer
+
+import android.content.Context
+import androidx.compose.runtime.Stable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import com.lux032.plextosonosplayer.plex.PlexAlbum
+import com.lux032.plextosonosplayer.plex.PlexAlbumTracksResult
+import com.lux032.plextosonosplayer.plex.PlexAuthConfig
+import com.lux032.plextosonosplayer.plex.PlexClient
+import com.lux032.plextosonosplayer.plex.PlexTrackStream
+import com.lux032.plextosonosplayer.plex.isFavorite
+import com.lux032.plextosonosplayer.sonos.SonosController
+import com.lux032.plextosonosplayer.sonos.SonosDiscovery
+import com.lux032.plextosonosplayer.sonos.SonosRoom
+import com.lux032.plextosonosplayer.storage.AlbumLocalStore
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+@Stable
+class AppState(
+    private val context: Context,
+    private val scope: CoroutineScope,
+) {
+    private val appPreferences = AppPreferences(context)
+    private val albumLocalStore = AlbumLocalStore(context)
+    private val sonosController = SonosController()
+    private val initialPreferences = appPreferences.loadPlexConnectionPreferences()
+
+    val navigationStack = mutableStateListOf(AppSection.Home)
+    var primarySection by mutableStateOf(AppSection.Home)
+    var connectionPreferences by mutableStateOf(initialPreferences)
+
+    var isLoading by mutableStateOf(false)
+    var isSonosLoading by mutableStateOf(false)
+    var errorMessage by mutableStateOf<String?>(null)
+    var actionMessage by mutableStateOf<String?>(null)
+    var allAlbums by mutableStateOf<List<PlexAlbum>>(emptyList())
+    var hasLoadedLocalAlbums by mutableStateOf(false)
+    var lastAlbumSyncEpochMillis by mutableStateOf(appPreferences.loadLastAlbumSyncEpochMillis())
+    var albumSearchQuery by mutableStateOf("")
+    var albumSearchResults by mutableStateOf<List<PlexAlbum>>(emptyList())
+    var isAlbumSearchLoading by mutableStateOf(false)
+    var selectedAlbum by mutableStateOf<PlexAlbum?>(null)
+    var selectedArtistName by mutableStateOf<String?>(null)
+    var artistPresentation by mutableStateOf(ArtistPresentation.Covers)
+    var trackResult by mutableStateOf<PlexAlbumTracksResult?>(null)
+    var sonosRooms by mutableStateOf<List<SonosRoom>>(emptyList())
+    var selectedSonosRoom by mutableStateOf<SonosRoom?>(null)
+    var sonosDiscoveryAttempted by mutableStateOf(false)
+    var sonosVolume by mutableFloatStateOf(0f)
+    var hasLoadedSonosVolume by mutableStateOf(false)
+    var isVolumeLoading by mutableStateOf(false)
+    var isVolumeChanging by mutableStateOf(false)
+    var isPlaybackCommandLoading by mutableStateOf(false)
+    var isFavoriteMutationLoading by mutableStateOf(false)
+    var volumeSyncKey by mutableIntStateOf(0)
+    var volumeChangeJob by mutableStateOf<Job?>(null)
+    var albumPlaybackJob by mutableStateOf<Job?>(null)
+    var miniPlayerState by mutableStateOf<MiniPlayerState?>(null)
+    var recentPlayedAlbumKeys by mutableStateOf(appPreferences.loadRecentPlayedAlbumKeys())
+    var artists by mutableStateOf<List<ArtistSummary>>(emptyList())
+
+    val activeSection: AppSection
+        get() = navigationStack.lastOrNull() ?: AppSection.Home
+
+    val favoriteAlbums: List<PlexAlbum>
+        get() = allAlbums
+            .filter(PlexAlbum::isFavorite)
+            .sortedWith(
+                compareBy<PlexAlbum> { album ->
+                    recentPlayedAlbumKeys.indexOf(album.ratingKey).takeIf { it >= 0 } ?: Int.MAX_VALUE
+                }
+                    .thenByDescending { it.lastViewedAtEpochSeconds ?: 0L }
+                    .thenBy { it.title.lowercase() }
+            )
+
+    val recentAddedAlbums: List<PlexAlbum>
+        get() = allAlbums
+            .sortedWith(
+                compareByDescending<PlexAlbum> { it.addedAtEpochSeconds ?: 0L }
+                    .thenBy { it.title.lowercase() }
+            )
+
+    val selectedArtist: ArtistSummary?
+        get() = selectedArtistName?.let { selectedName ->
+            val albums = albumLocalStore.getAlbumsByArtist(selectedName)
+            val summary = artists.firstOrNull { it.name == selectedName }
+            summary?.let {
+                ArtistSummary(
+                    name = it.name,
+                    coverUrl = it.coverUrl,
+                    albumCount = it.albumCount,
+                    albums = albums
+                )
+            }
+        }
+
+    fun navigateTo(section: AppSection) {
+        if (navigationStack.lastOrNull() == section) return
+        navigationStack.add(section)
+    }
+
+    fun replaceWith(section: AppSection) {
+        navigationStack.clear()
+        navigationStack.add(section)
+    }
+
+    fun switchPrimarySection(section: AppSection) {
+        primarySection = section
+        replaceWith(section)
+    }
+
+    fun navigateBack() {
+        if (navigationStack.size > 1) {
+            navigationStack.removeAt(navigationStack.lastIndex)
+        }
+    }
+
+    fun client(preferences: PlexConnectionPreferences = connectionPreferences) = PlexClient(
+        PlexAuthConfig(
+            username = preferences.username,
+            password = preferences.password,
+            preferredServer = preferences.server,
+            baseUrl = preferences.baseUrl,
+            token = preferences.token,
+        )
+    )
+
+    suspend fun loadAlbumsFromLocalStore() {
+        allAlbums = withContext(Dispatchers.IO) {
+            albumLocalStore.getAllAlbums()
+        }
+        hasLoadedLocalAlbums = true
+    }
+
+    suspend fun searchAlbums(query: String) {
+        val normalizedQuery = query.trim()
+        if (normalizedQuery.isEmpty()) {
+            albumSearchResults = emptyList()
+            isAlbumSearchLoading = false
+            return
+        }
+
+        isAlbumSearchLoading = true
+        albumSearchResults = withContext(Dispatchers.IO) {
+            albumLocalStore.searchAlbums(normalizedQuery)
+        }
+        isAlbumSearchLoading = false
+    }
+
+    fun startSingleTrackPlayback(
+        album: PlexAlbum,
+        tracks: List<PlexTrackStream>,
+        trackIndex: Int,
+        room: SonosRoom,
+    ) {
+        val targetTrack = tracks.getOrNull(trackIndex) ?: return
+        albumPlaybackJob?.cancel()
+        appPreferences.markAlbumPlayed(album.ratingKey)
+        recentPlayedAlbumKeys = appPreferences.loadRecentPlayedAlbumKeys()
+        selectedSonosRoom = room
+        volumeSyncKey += 1
+        miniPlayerState = MiniPlayerState(
+            album = album,
+            tracks = tracks,
+            currentIndex = trackIndex,
+            room = room,
+            isPaused = false,
+        )
+        isPlaybackCommandLoading = true
+        errorMessage = null
+        actionMessage = null
+        scope.launch {
+            runCatching {
+                sonosController.playTrack(
+                    room = room,
+                    trackUrl = targetTrack.streamUrl,
+                    title = targetTrack.title,
+                    albumTitle = album.title,
+                )
+            }.onSuccess {
+                actionMessage = "已将 ${targetTrack.title} 推送到 ${room.roomName}"
+            }.onFailure {
+                errorMessage = it.message ?: "未知错误"
+            }
+            isPlaybackCommandLoading = false
+        }
+    }
+
+    fun startAlbumPlayback(
+        albumTrackResult: PlexAlbumTracksResult,
+        room: SonosRoom,
+        startIndex: Int = 0,
+    ) {
+        albumPlaybackJob?.cancel()
+        appPreferences.markAlbumPlayed(albumTrackResult.album.ratingKey)
+        recentPlayedAlbumKeys = appPreferences.loadRecentPlayedAlbumKeys()
+        selectedSonosRoom = room
+        volumeSyncKey += 1
+        miniPlayerState = MiniPlayerState(
+            album = albumTrackResult.album,
+            tracks = albumTrackResult.tracks,
+            currentIndex = startIndex,
+            room = room,
+            isPaused = false,
+        )
+        isPlaybackCommandLoading = true
+        errorMessage = null
+        actionMessage = null
+        albumPlaybackJob = scope.launch {
+            runCatching<Unit> {
+                var didStartFirstTrack = false
+                playAlbumSequentially(
+                    sonosController = sonosController,
+                    room = room,
+                    trackResult = albumTrackResult,
+                    startIndex = startIndex,
+                    onTrackChanged = { index: Int, track: PlexTrackStream ->
+                        if (!didStartFirstTrack) {
+                            didStartFirstTrack = true
+                            isPlaybackCommandLoading = false
+                        }
+                        miniPlayerState = miniPlayerState?.copy(
+                            currentIndex = index,
+                            isPaused = false,
+                        )
+                        actionMessage = "正在连续播放：${track.title}"
+                    },
+                )
+            }.onSuccess { _: Unit ->
+                actionMessage = "专辑播放结束：${albumTrackResult.album.title}"
+            }.onFailure { e: Throwable ->
+                errorMessage = e.message ?: "未知错误"
+                isPlaybackCommandLoading = false
+            }
+        }
+    }
+
+    suspend fun refreshAlbums(showLoading: Boolean = true) {
+        if (!connectionPreferences.hasCredentials()) {
+            selectedAlbum = null
+            trackResult = null
+            return
+        }
+
+        if (showLoading) {
+            isLoading = true
+        }
+        errorMessage = null
+        actionMessage = null
+        runCatching {
+            client().fetchAlbums()
+        }.onSuccess {
+            allAlbums = it.albums
+            withContext(Dispatchers.IO) {
+                albumLocalStore.replaceAllAlbums(it.albums)
+            }
+            lastAlbumSyncEpochMillis = System.currentTimeMillis()
+            appPreferences.saveLastAlbumSyncEpochMillis(lastAlbumSyncEpochMillis!!)
+            if (selectedAlbum?.ratingKey?.let { key -> it.albums.none { album -> album.ratingKey == key } } == true) {
+                selectedAlbum = null
+                trackResult = null
+            }
+            actionMessage = "已同步 ${it.albums.size} 张专辑到本地"
+        }.onFailure {
+            selectedAlbum = null
+            trackResult = null
+            errorMessage = it.message ?: "未知错误"
+        }
+        if (showLoading) {
+            isLoading = false
+        }
+    }
+
+    fun saveSettings(
+        username: String,
+        password: String,
+        token: String,
+        server: String,
+        baseUrl: String,
+        refreshAfterSave: Boolean
+    ) {
+        val newPreferences = PlexConnectionPreferences(
+            username = username.trim(),
+            password = password,
+            token = token.trim(),
+            server = server.trim(),
+            baseUrl = baseUrl.trim(),
+        )
+        connectionPreferences = newPreferences
+        appPreferences.savePlexConnectionPreferences(newPreferences)
+        actionMessage = "Plex 连接信息已保存到设置"
+        errorMessage = null
+        if (refreshAfterSave) {
+            scope.launch {
+                refreshAlbums()
+                if (allAlbums.isNotEmpty()) {
+                    switchPrimarySection(AppSection.Home)
+                }
+            }
+        }
+    }
+
+    fun refreshSonosRooms() {
+        isSonosLoading = true
+        errorMessage = null
+        actionMessage = null
+        sonosDiscoveryAttempted = true
+        scope.launch {
+            runCatching {
+                SonosDiscovery(context).discoverRooms()
+            }.onSuccess { rooms ->
+                sonosRooms = rooms
+                selectedSonosRoom = selectedSonosRoom
+                    ?.let { current -> rooms.firstOrNull { room -> room.coordinatorUuid == current.coordinatorUuid } }
+                    ?: rooms.firstOrNull()
+                actionMessage = if (rooms.isEmpty()) {
+                    "当前未发现 Sonos 房间"
+                } else {
+                    "已同步 ${rooms.size} 个 Sonos 房间"
+                }
+                volumeSyncKey += 1
+            }.onFailure {
+                errorMessage = it.message ?: "未知错误"
+            }
+            isSonosLoading = false
+        }
+    }
+
+    suspend fun loadVolume(room: SonosRoom) {
+        isVolumeLoading = true
+        hasLoadedSonosVolume = false
+        errorMessage = null
+        runCatching {
+            sonosController.getVolume(room)
+        }.onSuccess {
+            sonosVolume = it.toFloat()
+            hasLoadedSonosVolume = true
+        }.onFailure {
+            errorMessage = it.message ?: "未知错误"
+        }
+        isVolumeLoading = false
+    }
+
+    fun applyVolumeChange(room: SonosRoom, newValue: Float) {
+        sonosVolume = newValue
+        hasLoadedSonosVolume = true
+        errorMessage = null
+        volumeChangeJob?.cancel()
+        volumeChangeJob = scope.launch {
+            delay(180)
+            val targetVolume = sonosVolume.toInt().coerceIn(0, 100)
+            isVolumeChanging = true
+            runCatching {
+                sonosController.setVolume(room, targetVolume)
+            }.onSuccess {
+                actionMessage = "已将 ${room.roomName} 音量设置为 $targetVolume"
+            }.onFailure {
+                errorMessage = it.message ?: "未知错误"
+                volumeSyncKey += 1
+            }
+            isVolumeChanging = false
+        }
+    }
+
+    fun openAlbumDetail(album: PlexAlbum) {
+        isLoading = true
+        errorMessage = null
+        actionMessage = null
+        selectedAlbum = album
+        scope.launch {
+            runCatching {
+                client().fetchAlbumTrackStreams(album)
+            }.onSuccess {
+                trackResult = it
+                navigateTo(AppSection.AlbumDetail)
+            }.onFailure {
+                errorMessage = it.message ?: "未知错误"
+            }
+            isLoading = false
+        }
+    }
+
+    fun openArtistAlbums(artist: ArtistSummary) {
+        selectedArtistName = artist.name
+        if (activeSection == AppSection.ArtistAlbums) return
+        navigateTo(AppSection.ArtistAlbums)
+    }
+
+    fun openArtistAlbumsByName(artistName: String?) {
+        val normalizedName = artistName?.trim().orEmpty().ifBlank { "未知艺人" }
+        selectedArtistName = normalizedName
+        navigateTo(AppSection.ArtistAlbums)
+    }
+
+    fun replaceAlbumInState(updatedAlbum: PlexAlbum) {
+        allAlbums = allAlbums.map { album ->
+            if (album.ratingKey == updatedAlbum.ratingKey) updatedAlbum else album
+        }
+        scope.launch(Dispatchers.IO) {
+            albumLocalStore.upsertAlbum(updatedAlbum)
+        }
+        if (selectedAlbum?.ratingKey == updatedAlbum.ratingKey) {
+            selectedAlbum = updatedAlbum
+        }
+        trackResult = trackResult?.let { current ->
+            if (current.album.ratingKey == updatedAlbum.ratingKey) {
+                current.copy(album = updatedAlbum)
+            } else {
+                current
+            }
+        }
+        miniPlayerState = miniPlayerState?.let { current ->
+            if (current.album.ratingKey == updatedAlbum.ratingKey) {
+                current.copy(album = updatedAlbum)
+            } else {
+                current
+            }
+        }
+    }
+
+    fun replaceTrackInState(updatedTrack: PlexTrackStream) {
+        trackResult = trackResult?.let { current ->
+            if (current.tracks.none { it.ratingKey == updatedTrack.ratingKey }) {
+                current
+            } else {
+                current.copy(
+                    tracks = current.tracks.map { track ->
+                        if (track.ratingKey == updatedTrack.ratingKey) updatedTrack else track
+                    }
+                )
+            }
+        }
+        miniPlayerState = miniPlayerState?.let { current ->
+            if (current.tracks.none { it.ratingKey == updatedTrack.ratingKey }) {
+                current
+            } else {
+                current.copy(
+                    tracks = current.tracks.map { track ->
+                        if (track.ratingKey == updatedTrack.ratingKey) updatedTrack else track
+                    }
+                )
+            }
+        }
+    }
+
+    fun toggleAlbumFavorite(album: PlexAlbum) {
+        if (isFavoriteMutationLoading) return
+
+        val targetFavorite = !album.isFavorite
+        isFavoriteMutationLoading = true
+        errorMessage = null
+        actionMessage = null
+        scope.launch {
+            runCatching {
+                client().setFavorite(album.ratingKey, targetFavorite)
+            }.onSuccess {
+                replaceAlbumInState(
+                    album.copy(userRating = if (targetFavorite) 10f else null)
+                )
+                actionMessage = if (targetFavorite) {
+                    "已收藏专辑：${album.title}"
+                } else {
+                    "已取消收藏专辑：${album.title}"
+                }
+            }.onFailure {
+                errorMessage = it.message ?: "未知错误"
+            }
+            isFavoriteMutationLoading = false
+        }
+    }
+
+    fun toggleTrackFavorite(track: PlexTrackStream) {
+        if (isFavoriteMutationLoading) return
+
+        val targetFavorite = !track.isFavorite
+        isFavoriteMutationLoading = true
+        errorMessage = null
+        actionMessage = null
+        scope.launch {
+            runCatching {
+                client().setFavorite(track.ratingKey, targetFavorite)
+            }.onSuccess {
+                replaceTrackInState(
+                    track.copy(userRating = if (targetFavorite) 10f else null)
+                )
+                actionMessage = if (targetFavorite) {
+                    "已收藏单曲：${track.title}"
+                } else {
+                    "已取消收藏单曲：${track.title}"
+                }
+            }.onFailure {
+                errorMessage = it.message ?: "未知错误"
+            }
+            isFavoriteMutationLoading = false
+        }
+    }
+
+    suspend fun loadArtists() {
+        if (connectionPreferences.token.isNullOrBlank()) return
+        try {
+            val plexArtists = client().fetchArtists().artists
+            val artistInfoMap = albumLocalStore.getArtistSummaries().associateBy { it.name }
+            artists = plexArtists.map { plexArtist ->
+                val info = artistInfoMap[plexArtist.title]
+                ArtistSummary(
+                    name = plexArtist.title,
+                    coverUrl = plexArtist.thumbUrl,
+                    albumCount = info?.albumCount ?: 0,
+                )
+            }.filter { it.albumCount > 0 }
+        } catch (e: Exception) {
+            artists = albumLocalStore.getArtistSummaries().map { info ->
+                ArtistSummary(
+                    name = info.name,
+                    coverUrl = info.coverUrl,
+                    albumCount = info.albumCount,
+                )
+            }
+        }
+    }
+
+    fun togglePause(state: MiniPlayerState) {
+        isPlaybackCommandLoading = true
+        scope.launch {
+            runCatching {
+                if (state.isPaused) sonosController.resume(state.room) else sonosController.pause(state.room)
+            }.onSuccess {
+                miniPlayerState = miniPlayerState?.copy(isPaused = !state.isPaused)
+                actionMessage = if (state.isPaused) "已继续播放" else "已暂停播放"
+            }.onFailure {
+                errorMessage = it.message ?: "未知错误"
+            }
+            isPlaybackCommandLoading = false
+        }
+    }
+}
