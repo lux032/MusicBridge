@@ -2,8 +2,11 @@ package com.lux032.plextosonosplayer
 
 import android.util.Log
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -17,10 +20,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import kotlin.math.roundToLong
 import com.lux032.plextosonosplayer.plex.PlexAlbum
 import com.lux032.plextosonosplayer.plex.PlexAlbumTracksResult
 import com.lux032.plextosonosplayer.plex.PlexTrackStream
@@ -29,19 +34,23 @@ import com.lux032.plextosonosplayer.sonos.SonosController
 import com.lux032.plextosonosplayer.sonos.SonosRoom
 import kotlinx.coroutines.delay
 
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 internal fun PlaybackDetailSection(
     state: MiniPlayerState?,
-    hasLoadedVolume: Boolean,
-    isVolumeLoading: Boolean,
-    isVolumeChanging: Boolean,
-    volume: Float,
+    rooms: List<SonosRoom>,
+    playbackMode: PlaybackMode,
     isLoading: Boolean,
     onBack: () -> Unit,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
-    onVolumeChange: (MiniPlayerState, Float) -> Unit,
     onTogglePause: (MiniPlayerState) -> Unit,
+    onSeek: (MiniPlayerState, Long) -> Unit,
+    onAlbumClick: (PlexAlbum) -> Unit,
+    onArtistClick: (String?) -> Unit,
+    onSelectTrack: (Int) -> Unit,
+    onSelectPlaybackMode: (PlaybackMode) -> Unit,
+    onSelectRoom: (SonosRoom) -> Unit,
 ) {
     val currentState = state
     val currentTrack = currentState?.tracks?.getOrNull(currentState.currentIndex)
@@ -55,9 +64,24 @@ internal fun PlaybackDetailSection(
         return
     }
 
+    val trackDurationMillis = currentState.durationMillis?.takeIf { it > 0L } ?: currentTrack.durationMillis
+    var isSeeking by remember(currentTrack.ratingKey) { mutableStateOf(false) }
+    var sliderPositionMillis by remember(currentTrack.ratingKey) {
+        mutableStateOf(currentState.currentPositionMillis.toFloat())
+    }
+    var isPlaylistSheetVisible by remember { mutableStateOf(false) }
+    var isModeDialogVisible by remember { mutableStateOf(false) }
+    var isRoomDialogVisible by remember { mutableStateOf(false) }
+
+    LaunchedEffect(currentState.currentPositionMillis, currentTrack.ratingKey, isSeeking) {
+        if (!isSeeking) {
+            sliderPositionMillis = currentState.currentPositionMillis.toFloat()
+        }
+    }
+
     Column(
         modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(20.dp),
+        verticalArrangement = Arrangement.spacedBy(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         AsyncAlbumArtwork(
@@ -75,19 +99,76 @@ internal fun PlaybackDetailSection(
         ) {
             Text(
                 currentTrack.title,
-                style = MaterialTheme.typography.headlineMedium,
+                modifier = Modifier.basicMarquee(),
+                style = MaterialTheme.typography.titleLarge,
                 color = AppColors.TextPrimary,
                 fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
             Text(
-                text = "${currentState.album.title} · ${currentState.album.artistName ?: "未知艺人"}",
+                text = currentState.album.artistName ?: "未知艺人",
+                color = AppColors.Accent,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onArtistClick(currentState.album.artistName) },
+            )
+            Text(
+                text = currentState.album.title,
                 color = AppColors.TextSecondary,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onAlbumClick(currentState.album) },
             )
             Text(
                 text = "${currentState.room.roomName} · ${currentState.currentIndex + 1}/${currentState.tracks.size}",
                 color = AppColors.TextTertiary,
                 style = MaterialTheme.typography.bodyMedium,
             )
+        }
+        trackDurationMillis?.let { durationMillis ->
+            val clampedDuration = durationMillis.coerceAtLeast(1L)
+            val clampedSliderValue = sliderPositionMillis.coerceIn(0f, clampedDuration.toFloat())
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Slider(
+                    value = clampedSliderValue,
+                    onValueChange = {
+                        isSeeking = true
+                        sliderPositionMillis = it
+                    },
+                    onValueChangeFinished = {
+                        isSeeking = false
+                        onSeek(currentState, sliderPositionMillis.roundToLong())
+                    },
+                    valueRange = 0f..clampedDuration.toFloat(),
+                    enabled = !isLoading,
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = formatDuration(clampedSliderValue.roundToLong()),
+                        color = AppColors.TextSecondary,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Text(
+                        text = formatDuration(clampedDuration),
+                        color = AppColors.TextSecondary,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
         }
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -113,26 +194,260 @@ internal fun PlaybackDetailSection(
                 enabled = currentState.currentIndex < currentState.tracks.lastIndex && !isLoading,
             )
         }
-        Column(
+        Spacer(modifier = Modifier.height(2.dp))
+        PlaybackActionBar(
+            playbackMode = playbackMode,
             modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            onShowPlaylist = { isPlaylistSheetVisible = true },
+            onShowModePicker = { isModeDialogVisible = true },
+            onShowRoomPicker = { isRoomDialogVisible = true },
+        )
+    }
+
+    if (isPlaylistSheetVisible) {
+        ModalBottomSheet(
+            onDismissRequest = { isPlaylistSheetVisible = false },
+            containerColor = AppColors.Surface,
         ) {
-            Text(
-                text = when {
-                    isVolumeLoading -> "音量读取中"
-                    isVolumeChanging -> "正在设置音量 ${volume.toInt()}"
-                    hasLoadedVolume -> "音量 ${volume.toInt()}"
-                    else -> "音量未读取"
-                },
-                color = AppColors.TextSecondary,
-            )
-            Slider(
-                value = volume,
-                onValueChange = { onVolumeChange(currentState, it) },
-                valueRange = 0f..100f,
-                enabled = hasLoadedVolume && !isVolumeLoading,
-            )
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                    .padding(bottom = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text(
+                    text = "播放列表",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = AppColors.TextPrimary,
+                    fontWeight = FontWeight.Bold,
+                )
+                currentState.tracks.forEachIndexed { index, track ->
+                    val isCurrent = index == currentState.currentIndex
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                isPlaylistSheetVisible = false
+                                onSelectTrack(index)
+                            },
+                        shape = RoundedCornerShape(14.dp),
+                        color = if (isCurrent) AppColors.SurfaceStrong else AppColors.SurfaceAlt,
+                        border = BorderStroke(1.dp, if (isCurrent) AppColors.Accent else AppColors.Border),
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(
+                                modifier = Modifier.weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                Text(
+                                    text = "${index + 1}. ${track.title}",
+                                    color = AppColors.TextPrimary,
+                                    fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    text = if (isCurrent) "正在播放" else currentState.album.title,
+                                    color = if (isCurrent) AppColors.Accent else AppColors.TextSecondary,
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                            track.durationMillis?.let {
+                                Text(
+                                    text = formatDuration(it),
+                                    color = AppColors.TextTertiary,
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
         }
+    }
+
+    if (isModeDialogVisible) {
+        AlertDialog(
+            onDismissRequest = { isModeDialogVisible = false },
+            confirmButton = {},
+            title = {
+                Text(
+                    text = "播放模式",
+                    color = AppColors.TextPrimary,
+                    fontWeight = FontWeight.Bold,
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    PlaybackMode.entries.forEach { mode ->
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .selectable(
+                                    selected = playbackMode == mode,
+                                    onClick = {
+                                        isModeDialogVisible = false
+                                        onSelectPlaybackMode(mode)
+                                    },
+                                ),
+                            shape = RoundedCornerShape(14.dp),
+                            color = if (playbackMode == mode) AppColors.SurfaceStrong else AppColors.SurfaceAlt,
+                            border = BorderStroke(1.dp, if (playbackMode == mode) AppColors.Accent else AppColors.Border),
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(mode.label, color = AppColors.TextPrimary)
+                                if (playbackMode == mode) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Check,
+                                        contentDescription = null,
+                                        tint = AppColors.Accent,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+        )
+    }
+
+    if (isRoomDialogVisible) {
+        AlertDialog(
+            onDismissRequest = { isRoomDialogVisible = false },
+            confirmButton = {},
+            title = {
+                Text(
+                    text = "选择 Sonos 房间",
+                    color = AppColors.TextPrimary,
+                    fontWeight = FontWeight.Bold,
+                )
+            },
+            text = {
+                if (rooms.isEmpty()) {
+                    Text("当前没有可用的 Sonos 房间。", color = AppColors.TextSecondary)
+                } else {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        rooms.forEach { room ->
+                            val isCurrentRoom = room.coordinatorUuid == currentState.room.coordinatorUuid
+                            Surface(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        isRoomDialogVisible = false
+                                        onSelectRoom(room)
+                                    },
+                                shape = RoundedCornerShape(14.dp),
+                                color = if (isCurrentRoom) AppColors.SurfaceStrong else AppColors.SurfaceAlt,
+                                border = BorderStroke(1.dp, if (isCurrentRoom) AppColors.Accent else AppColors.Border),
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        Text(room.roomName, color = AppColors.TextPrimary, fontWeight = FontWeight.Medium)
+                                        Text(
+                                            text = if (room.memberCount > 1) "${room.memberCount} 个成员" else "单房间",
+                                            color = AppColors.TextSecondary,
+                                            style = MaterialTheme.typography.bodySmall,
+                                        )
+                                    }
+                                    if (isCurrentRoom) {
+                                        Icon(
+                                            imageVector = Icons.Filled.CheckCircle,
+                                            contentDescription = null,
+                                            tint = AppColors.Accent,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+        )
+    }
+}
+
+@Composable
+private fun PlaybackActionBar(
+    playbackMode: PlaybackMode,
+    modifier: Modifier = Modifier,
+    onShowPlaylist: () -> Unit,
+    onShowModePicker: () -> Unit,
+    onShowRoomPicker: () -> Unit,
+) {
+    Row(
+        modifier = modifier.padding(vertical = 0.dp),
+        horizontalArrangement = Arrangement.SpaceEvenly,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        PlaybackActionButton(
+            icon = Icons.Filled.QueueMusic,
+            contentDescription = "播放列表",
+            modifier = Modifier.weight(1f),
+            isSelected = false,
+            onClick = onShowPlaylist,
+        )
+        PlaybackActionButton(
+            icon = when (playbackMode) {
+                PlaybackMode.Sequential -> Icons.Filled.ArrowForward
+                PlaybackMode.RepeatAll -> Icons.Filled.Repeat
+                PlaybackMode.RepeatOne -> Icons.Filled.RepeatOne
+                PlaybackMode.Shuffle -> Icons.Filled.Shuffle
+            },
+            contentDescription = playbackMode.label,
+            modifier = Modifier.weight(1f),
+            isSelected = playbackMode != PlaybackMode.Sequential,
+            onClick = onShowModePicker,
+        )
+        PlaybackActionButton(
+            icon = Icons.Filled.Speaker,
+            contentDescription = "投射房间",
+            modifier = Modifier.weight(1f),
+            isSelected = false,
+            onClick = onShowRoomPicker,
+        )
+    }
+}
+
+@Composable
+private fun PlaybackActionButton(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    contentDescription: String,
+    modifier: Modifier = Modifier,
+    isSelected: Boolean,
+    onClick: () -> Unit,
+) {
+    Column(
+        modifier = modifier
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            tint = if (isSelected) AppColors.Accent else AppColors.TextSecondary,
+            modifier = Modifier.size(24.dp),
+        )
     }
 }
 
@@ -193,20 +508,22 @@ internal fun AlbumDetailSection(
                     text = artistName,
                     color = AppColors.Accent,
                     fontWeight = FontWeight.SemiBold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.clickable { onArtistClick(currentTrackResult.album.artistName) },
                 )
-                Text(
-                    text = buildString {
-                        currentTrackResult.album.year?.let {
-                            append("· ")
-                            append(it)
-                            append(' ')
-                        }
-                        append("· ${currentTrackResult.tracks.size} 首")
-                    },
-                    color = AppColors.TextSecondary,
-                )
             }
+            Text(
+                text = buildString {
+                    currentTrackResult.album.year?.let {
+                        append(it)
+                        append(" · ")
+                    }
+                    append("${currentTrackResult.tracks.size} 首")
+                },
+                color = AppColors.TextSecondary,
+                style = MaterialTheme.typography.bodyMedium,
+            )
             Text(
                 text = selectedRoom?.let { "当前将推送到 ${it.roomName}" } ?: "尚未选择 Sonos 房间，请先到设置页选择房间。",
                 color = AppColors.TextTertiary,
@@ -579,24 +896,28 @@ internal suspend fun playAlbumSequentially(
     room: SonosRoom,
     trackResult: PlexAlbumTracksResult,
     startIndex: Int = 0,
-    onTrackChanged: (Int, PlexTrackStream) -> Unit,
+    initialPositionMillis: Long = 0L,
+    getNextIndex: (Int) -> Int?,
+    onTrackChanged: (Int, PlexTrackStream, Long) -> Unit,
 ) {
     val tracks = trackResult.tracks
     require(tracks.isNotEmpty()) { "专辑里没有可播放的单曲。" }
 
-    tracks.drop(startIndex).forEachIndexed { relativeIndex, track ->
-        val index = startIndex + relativeIndex
+    var index = startIndex.coerceIn(0, tracks.lastIndex)
+
+    while (true) {
+        val track = tracks[index]
+        val startPositionMillis = if (index == startIndex) initialPositionMillis.coerceAtLeast(0L) else 0L
         sonosController.playTrack(
             room = room,
             trackUrl = track.streamUrl,
             title = track.title,
             albumTitle = trackResult.album.title,
         )
-        onTrackChanged(index, track)
-
-        if (index == tracks.lastIndex) {
-            return
+        if (startPositionMillis > 0L) {
+            sonosController.seek(room, (startPositionMillis / 1_000L).toInt())
         }
+        onTrackChanged(index, track, startPositionMillis)
 
         waitForTrackToFinish(
             sonosController = sonosController,
@@ -604,6 +925,13 @@ internal suspend fun playAlbumSequentially(
             expectedTrackUrl = track.streamUrl,
             expectedDurationMillis = track.durationMillis,
         )
+
+        val nextIndex = getNextIndex(index)
+        if (nextIndex == null) {
+            return
+        }
+
+        index = nextIndex.coerceIn(0, tracks.lastIndex)
     }
 }
 

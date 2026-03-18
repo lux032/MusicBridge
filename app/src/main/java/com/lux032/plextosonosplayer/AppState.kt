@@ -25,6 +25,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.random.Random
 
 @Stable
 class AppState(
@@ -68,6 +69,7 @@ class AppState(
     var albumPlaybackJob by mutableStateOf<Job?>(null)
     var playbackReportingJob by mutableStateOf<Job?>(null)
     var miniPlayerState by mutableStateOf<MiniPlayerState?>(null)
+    var playbackMode by mutableStateOf(PlaybackMode.Sequential)
     var recentPlayedAlbumKeys by mutableStateOf(appPreferences.loadRecentPlayedAlbumKeys())
     var artists by mutableStateOf<List<ArtistSummary>>(emptyList())
 
@@ -164,6 +166,7 @@ class AppState(
         tracks: List<PlexTrackStream>,
         trackIndex: Int,
         room: SonosRoom,
+        initialPositionMillis: Long = 0L,
     ) {
         val targetTrack = tracks.getOrNull(trackIndex) ?: return
         albumPlaybackJob?.cancel()
@@ -178,6 +181,8 @@ class AppState(
             currentIndex = trackIndex,
             room = room,
             isPaused = false,
+            currentPositionMillis = initialPositionMillis.coerceAtLeast(0L),
+            durationMillis = targetTrack.durationMillis,
         )
         isPlaybackCommandLoading = true
         errorMessage = null
@@ -190,11 +195,15 @@ class AppState(
                     title = targetTrack.title,
                     albumTitle = album.title,
                 )
+                if (initialPositionMillis > 0L) {
+                    sonosController.seek(room, (initialPositionMillis / 1_000L).toInt())
+                }
             }.onSuccess {
                 startPlaybackReporting(
                     room = room,
                     tracks = tracks,
                     initialTrackIndex = trackIndex,
+                    initialPositionMillis = initialPositionMillis,
                 )
                 actionMessage = "已将 ${targetTrack.title} 推送到 ${room.roomName}"
             }.onFailure {
@@ -208,6 +217,7 @@ class AppState(
         albumTrackResult: PlexAlbumTracksResult,
         room: SonosRoom,
         startIndex: Int = 0,
+        initialPositionMillis: Long = 0L,
     ) {
         albumPlaybackJob?.cancel()
         playbackReportingJob?.cancel()
@@ -221,6 +231,8 @@ class AppState(
             currentIndex = startIndex,
             room = room,
             isPaused = false,
+            currentPositionMillis = initialPositionMillis.coerceAtLeast(0L),
+            durationMillis = albumTrackResult.tracks.getOrNull(startIndex)?.durationMillis,
         )
         isPlaybackCommandLoading = true
         errorMessage = null
@@ -233,7 +245,14 @@ class AppState(
                     room = room,
                     trackResult = albumTrackResult,
                     startIndex = startIndex,
-                    onTrackChanged = { index: Int, track: PlexTrackStream ->
+                    initialPositionMillis = initialPositionMillis,
+                    getNextIndex = { currentIndex: Int ->
+                        resolveNextPlaybackIndex(
+                            trackCount = albumTrackResult.tracks.size,
+                            currentIndex = currentIndex,
+                        )
+                    },
+                    onTrackChanged = { index: Int, track: PlexTrackStream, startPositionMillis: Long ->
                         if (!didStartFirstTrack) {
                             didStartFirstTrack = true
                             isPlaybackCommandLoading = false
@@ -241,11 +260,15 @@ class AppState(
                                 room = room,
                                 tracks = albumTrackResult.tracks,
                                 initialTrackIndex = index,
+                                initialPositionMillis = startPositionMillis,
                             )
                         }
                         miniPlayerState = miniPlayerState?.copy(
                             currentIndex = index,
                             isPaused = false,
+                            currentPositionMillis = startPositionMillis,
+                            durationMillis = track.durationMillis,
+                            room = room,
                         )
                         actionMessage = "正在连续播放：${track.title}"
                     },
@@ -558,10 +581,82 @@ class AppState(
         }
     }
 
+    fun selectSonosRoom(room: SonosRoom) {
+        selectedSonosRoom = room
+        actionMessage = "已选择 Sonos 房间: ${room.roomName}"
+        volumeSyncKey += 1
+    }
+
+    fun updatePlaybackMode(mode: PlaybackMode) {
+        playbackMode = mode
+        actionMessage = "播放模式已切换为：${mode.label}"
+    }
+
+    fun playQueueIndex(index: Int, positionMillis: Long = 0L, room: SonosRoom? = null) {
+        val playerState = miniPlayerState ?: return
+        val targetRoom = room ?: playerState.room
+        val targetIndex = index.coerceIn(0, playerState.tracks.lastIndex)
+        val currentTrackResult = trackResult?.takeIf { it.album.ratingKey == playerState.album.ratingKey }
+        if (currentTrackResult != null) {
+            startAlbumPlayback(
+                albumTrackResult = currentTrackResult,
+                room = targetRoom,
+                startIndex = targetIndex,
+                initialPositionMillis = positionMillis,
+            )
+        } else {
+            startSingleTrackPlayback(
+                album = playerState.album,
+                tracks = playerState.tracks,
+                trackIndex = targetIndex,
+                room = targetRoom,
+                initialPositionMillis = positionMillis,
+            )
+        }
+    }
+
+    fun switchPlaybackRoom(room: SonosRoom) {
+        val playerState = miniPlayerState ?: run {
+            selectSonosRoom(room)
+            return
+        }
+        if (room.coordinatorUuid == playerState.room.coordinatorUuid) {
+            selectSonosRoom(room)
+            return
+        }
+        playQueueIndex(
+            index = playerState.currentIndex,
+            positionMillis = playerState.currentPositionMillis,
+            room = room,
+        )
+        actionMessage = "正在切换到 ${room.roomName}"
+    }
+
+    fun seekPlayback(state: MiniPlayerState, positionMillis: Long) {
+        val durationMillis = state.durationMillis?.takeIf { it > 0L } ?: return
+        val targetMillis = positionMillis.coerceIn(0L, durationMillis)
+        miniPlayerState = miniPlayerState?.takeIf { current ->
+            current.room.coordinatorUuid == state.room.coordinatorUuid
+        }?.copy(currentPositionMillis = targetMillis)
+
+        isPlaybackCommandLoading = true
+        scope.launch {
+            runCatching {
+                sonosController.seek(state.room, (targetMillis / 1_000L).toInt())
+            }.onSuccess {
+                actionMessage = "已跳转到 ${formatDuration(targetMillis)}"
+            }.onFailure {
+                errorMessage = it.message ?: "未知错误"
+            }
+            isPlaybackCommandLoading = false
+        }
+    }
+
     private fun startPlaybackReporting(
         room: SonosRoom,
         tracks: List<PlexTrackStream>,
         initialTrackIndex: Int,
+        initialPositionMillis: Long = 0L,
     ) {
         val normalizedInitialIndex = initialTrackIndex.coerceIn(0, tracks.lastIndex)
         playbackReportingJob?.cancel()
@@ -569,7 +664,7 @@ class AppState(
             val plexClient = client()
             val scrobbledTrackKeys = mutableSetOf<String>()
             var currentTrack = tracks.getOrNull(normalizedInitialIndex) ?: return@launch
-            var currentTrackTimeMillis = 0L
+            var currentTrackTimeMillis = initialPositionMillis.coerceAtLeast(0L)
             var currentTrackDurationMillis = currentTrack.durationMillis
             var lastReportedState: String? = null
             var lastTimelineReportAt = 0L
@@ -579,7 +674,7 @@ class AppState(
                 plexClient = plexClient,
                 track = currentTrack,
                 state = "playing",
-                timeMillis = 0L,
+                timeMillis = currentTrackTimeMillis,
                 durationMillis = currentTrackDurationMillis,
                 continuing = false,
             )
@@ -634,6 +729,8 @@ class AppState(
                     currentIndex = tracks.indexOfFirst { it.ratingKey == currentTrack.ratingKey }
                         .takeIf { it >= 0 } ?: latestMiniPlayerState.currentIndex,
                     isPaused = playbackState == "paused",
+                    currentPositionMillis = currentTrackTimeMillis,
+                    durationMillis = currentTrackDurationMillis,
                 )
 
                 val now = System.currentTimeMillis()
@@ -753,6 +850,24 @@ class AppState(
             tracks.firstOrNull { it.streamUrl.substringBefore('?') == normalizedCurrentUri }?.let { return it }
         }
         return tracks.getOrNull(latestMiniPlayerState.currentIndex)
+    }
+
+    private fun resolveNextPlaybackIndex(trackCount: Int, currentIndex: Int): Int? {
+        if (trackCount <= 0) return null
+        val safeCurrentIndex = currentIndex.coerceIn(0, trackCount - 1)
+        return when (playbackMode) {
+            PlaybackMode.Sequential -> (safeCurrentIndex + 1).takeIf { it < trackCount }
+            PlaybackMode.RepeatAll -> if (trackCount == 1) 0 else (safeCurrentIndex + 1) % trackCount
+            PlaybackMode.RepeatOne -> safeCurrentIndex
+            PlaybackMode.Shuffle -> {
+                if (trackCount == 1) {
+                    0
+                } else {
+                    val randomIndex = Random.nextInt(trackCount - 1)
+                    if (randomIndex >= safeCurrentIndex) randomIndex + 1 else randomIndex
+                }
+            }
+        }
     }
 
     private fun SonosPlaybackStatus.toPlexPlaybackState(): String = when {

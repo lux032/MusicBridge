@@ -304,6 +304,15 @@ class SonosController {
         )
     }
 
+    suspend fun seek(room: SonosRoom, positionSeconds: Int) = withContext(Dispatchers.IO) {
+        soapRequest(
+            controlUrl = "${room.coordinatorBaseUrl}/MediaRenderer/AVTransport/Control",
+            serviceType = "urn:schemas-upnp-org:service:AVTransport:1",
+            action = "Seek",
+            innerXml = """<InstanceID>0</InstanceID><Unit>REL_TIME</Unit><Target>${positionSeconds.toSonosDuration()}</Target>""",
+        )
+    }
+
     suspend fun getPlaybackStatus(room: SonosRoom): SonosPlaybackStatus = withContext(Dispatchers.IO) {
         val transportResponse = soapRequest(
             controlUrl = "${room.coordinatorBaseUrl}/MediaRenderer/AVTransport/Control",
@@ -416,6 +425,14 @@ private fun String.toDurationSeconds(): Int? {
     val minutes = parts[1].toIntOrNull() ?: return null
     val seconds = parts[2].toIntOrNull() ?: return null
     return (hours * 3600) + (minutes * 60) + seconds
+}
+
+private fun Int.toSonosDuration(): String {
+    val safeValue = coerceAtLeast(0)
+    val hours = safeValue / 3600
+    val minutes = (safeValue % 3600) / 60
+    val seconds = safeValue % 60
+    return "%02d:%02d:%02d".format(hours, minutes, seconds)
 }
 
 private fun readGroupVolume(baseUrl: String): String? = runCatching {

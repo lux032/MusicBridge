@@ -39,6 +39,7 @@ import com.lux032.plextosonosplayer.plex.PlexAlbumTracksResult
 import com.lux032.plextosonosplayer.plex.PlexTrackStream
 import com.lux032.plextosonosplayer.sonos.SonosRoom
 import com.lux032.plextosonosplayer.ui.theme.PlexToSonosPlayerTheme
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 
@@ -88,15 +89,33 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
     var server by rememberSaveable { mutableStateOf(state.connectionPreferences.server) }
     var baseUrl by rememberSaveable { mutableStateOf(state.connectionPreferences.baseUrl) }
     var miniPlayerHeightPx by remember { mutableIntStateOf(0) }
+    var isVolumeOverlayVisible by remember { mutableStateOf(false) }
+    var volumeOverlayNonce by remember { mutableIntStateOf(0) }
 
     val activeSection = state.activeSection
     val bottomNavigationHeight = 84.dp
     val contentBottomPadding = with(density) {
-        if (state.miniPlayerState != null && activeSection != AppSection.PlaybackDetail) {
+        if (activeSection == AppSection.PlaybackDetail) {
+            20.dp
+        } else if (state.miniPlayerState != null) {
             miniPlayerHeightPx.toDp() + bottomNavigationHeight + 28.dp
         } else {
             bottomNavigationHeight + 20.dp
         }
+    }
+    val volumeOverlayBottomPadding = with(density) {
+        if (activeSection == AppSection.PlaybackDetail) {
+            24.dp
+        } else if (state.miniPlayerState != null) {
+            miniPlayerHeightPx.toDp() + bottomNavigationHeight + 32.dp
+        } else {
+            bottomNavigationHeight + 24.dp
+        }
+    }
+
+    fun showVolumeOverlay() {
+        isVolumeOverlayVisible = true
+        volumeOverlayNonce += 1
     }
 
     LaunchedEffect(Unit) {
@@ -131,6 +150,7 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                 val baseVolume = if (state.hasLoadedSonosVolume) state.sonosVolume else 0f
                 val targetVolume = (baseVolume + step).coerceIn(0f, 100f)
                 state.applyVolumeChange(room, targetVolume)
+                showVolumeOverlay()
                 true
             }
         }
@@ -140,6 +160,12 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                 activity.onHardwareVolumeStep = null
             }
         }
+    }
+
+    LaunchedEffect(volumeOverlayNonce) {
+        if (volumeOverlayNonce == 0) return@LaunchedEffect
+        delay(2_000)
+        isVolumeOverlayVisible = false
     }
 
     BackHandler(enabled = state.navigationStack.size > 1) {
@@ -246,41 +272,31 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                             )
                             AppSection.PlaybackDetail -> PlaybackDetailSection(
                                 state = state.miniPlayerState,
-                                hasLoadedVolume = state.hasLoadedSonosVolume && state.selectedSonosRoom?.coordinatorUuid == state.miniPlayerState?.room?.coordinatorUuid,
-                                isVolumeLoading = state.isVolumeLoading,
-                                isVolumeChanging = state.isVolumeChanging,
-                                volume = state.sonosVolume,
+                                rooms = state.sonosRooms,
+                                playbackMode = state.playbackMode,
                                 isLoading = state.isPlaybackCommandLoading,
                                 onBack = state::navigateBack,
                                 onPrevious = {
                                     val playerState = state.miniPlayerState ?: return@PlaybackDetailSection
                                     val newIndex = (playerState.currentIndex - 1).coerceAtLeast(0)
                                     if (newIndex != playerState.currentIndex) {
-                                        val currentTrackResult = state.trackResult?.takeIf { it.album.ratingKey == playerState.album.ratingKey }
-                                        if (currentTrackResult != null) {
-                                            state.startAlbumPlayback(currentTrackResult, playerState.room, newIndex)
-                                        } else {
-                                            state.startSingleTrackPlayback(playerState.album, playerState.tracks, newIndex, playerState.room)
-                                        }
+                                        state.playQueueIndex(newIndex, room = playerState.room)
                                     }
                                 },
                                 onNext = {
                                     val playerState = state.miniPlayerState ?: return@PlaybackDetailSection
                                     val newIndex = (playerState.currentIndex + 1).coerceAtMost(playerState.tracks.lastIndex)
                                     if (newIndex != playerState.currentIndex) {
-                                        val currentTrackResult = state.trackResult?.takeIf { it.album.ratingKey == playerState.album.ratingKey }
-                                        if (currentTrackResult != null) {
-                                            state.startAlbumPlayback(currentTrackResult, playerState.room, newIndex)
-                                        } else {
-                                            state.startSingleTrackPlayback(playerState.album, playerState.tracks, newIndex, playerState.room)
-                                        }
+                                        state.playQueueIndex(newIndex, room = playerState.room)
                                     }
                                 },
-                                onVolumeChange = { playerState: MiniPlayerState, newValue: Float ->
-                                    state.selectedSonosRoom = playerState.room
-                                    state.applyVolumeChange(playerState.room, newValue)
-                                },
                                 onTogglePause = state::togglePause,
+                                onSeek = state::seekPlayback,
+                                onAlbumClick = state::openAlbumDetail,
+                                onArtistClick = state::openArtistAlbumsByName,
+                                onSelectTrack = { index -> state.playQueueIndex(index) },
+                                onSelectPlaybackMode = state::updatePlaybackMode,
+                                onSelectRoom = state::switchPlaybackRoom,
                             )
                             AppSection.ArtistAlbums -> ArtistAlbumsSection(
                                 artist = state.selectedArtist,
@@ -315,11 +331,7 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                                 server = server,
                                 baseUrl = baseUrl,
                                 onDiscoverSonos = state::refreshSonosRooms,
-                                onSelectRoom = {
-                                    state.selectedSonosRoom = it
-                                    state.actionMessage = "已选择 Sonos 房间: ${it.roomName}"
-                                    state.volumeSyncKey += 1
-                                },
+                                onSelectRoom = state::selectSonosRoom,
                                 onUsernameChange = { username = it },
                                 onPasswordChange = { password = it },
                                 onTokenChange = { token = it },
@@ -335,19 +347,21 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
             }
         }
 
-        BottomNavigationBar(
-            primarySection = state.primarySection,
-            modifier = Modifier
-                .align(Alignment.BottomCenter),
-            onSectionChange = { section: AppSection ->
-                when (section) {
-                    AppSection.Home,
-                    AppSection.Artists,
-                    AppSection.Settings -> state.switchPrimarySection(section)
-                    else -> Unit
+        if (activeSection != AppSection.PlaybackDetail) {
+            BottomNavigationBar(
+                primarySection = state.primarySection,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter),
+                onSectionChange = { section: AppSection ->
+                    when (section) {
+                        AppSection.Home,
+                        AppSection.Artists,
+                        AppSection.Settings -> state.switchPrimarySection(section)
+                        else -> Unit
+                    }
                 }
-            },
-        )
+            )
+        }
 
         if (activeSection != AppSection.PlaybackDetail) {
             state.miniPlayerState?.let { playerState ->
@@ -370,6 +384,24 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                     onTogglePause = { state.togglePause(playerState) },
                 )
             }
+        }
+
+        val overlayRoom = state.selectedSonosRoom
+        if (isVolumeOverlayVisible && overlayRoom != null) {
+            GlobalVolumeOverlay(
+                room = overlayRoom,
+                volume = state.sonosVolume,
+                hasLoadedVolume = state.hasLoadedSonosVolume,
+                isVolumeLoading = state.isVolumeLoading,
+                isVolumeChanging = state.isVolumeChanging,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(start = 16.dp, end = 16.dp, bottom = volumeOverlayBottomPadding),
+                onVolumeChange = { newValue ->
+                    state.applyVolumeChange(overlayRoom, newValue)
+                    showVolumeOverlay()
+                },
+            )
         }
     }
 }

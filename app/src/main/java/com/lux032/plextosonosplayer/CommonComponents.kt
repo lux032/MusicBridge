@@ -27,6 +27,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.lux032.plextosonosplayer.sonos.SonosRoom
 import com.lux032.plextosonosplayer.plex.PlexAlbum
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
@@ -413,6 +414,62 @@ internal fun FavoriteIconGraphic(
             tint = tint,
             modifier = modifier.size(size),
         )
+    }
+}
+
+@Composable
+internal fun GlobalVolumeOverlay(
+    room: SonosRoom,
+    volume: Float,
+    hasLoadedVolume: Boolean,
+    isVolumeLoading: Boolean,
+    isVolumeChanging: Boolean,
+    modifier: Modifier = Modifier,
+    onVolumeChange: (Float) -> Unit,
+) {
+    Surface(
+        modifier = modifier.widthIn(max = 360.dp),
+        shape = RoundedCornerShape(24.dp),
+        color = AppColors.SurfaceStrong,
+        border = BorderStroke(1.dp, AppColors.BorderStrong),
+        shadowElevation = 10.dp,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 18.dp, vertical = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "音量",
+                    color = AppColors.TextPrimary,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(
+                    text = if (hasLoadedVolume) "${volume.toInt()}" else "--",
+                    color = AppColors.Accent,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+            Text(
+                text = if (isVolumeLoading) "正在读取 ${room.roomName} 的音量" else room.roomName,
+                color = AppColors.TextSecondary,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Slider(
+                value = volume.coerceIn(0f, 100f),
+                onValueChange = onVolumeChange,
+                valueRange = 0f..100f,
+                enabled = hasLoadedVolume && !isVolumeLoading,
+            )
+        }
     }
 }
 
