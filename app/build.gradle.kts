@@ -19,8 +19,10 @@ android {
 
     signingConfigs {
         create("release") {
-            // For GitHub releases, you can use debug signing or create a keystore
-            // To create keystore: keytool -genkey -v -keystore release.keystore -alias musicbridge -keyalg RSA -keysize 2048 -validity 10000
+            storeFile = file("../release.keystore")
+            storePassword = "musicbridge123"
+            keyAlias = "musicbridge"
+            keyPassword = "musicbridge123"
         }
     }
 
@@ -32,7 +34,7 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            // signingConfig = signingConfigs.getByName("release")
+            signingConfig = signingConfigs.getByName("release")
         }
     }
     compileOptions {
