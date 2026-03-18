@@ -1,7 +1,9 @@
 package com.lux032.plextosonosplayer
 
 import android.annotation.SuppressLint
+import android.content.pm.ApplicationInfo
 import android.os.Bundle
+import android.util.Log
 import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -13,19 +15,19 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
@@ -43,6 +45,13 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.filled.List
+import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -73,13 +82,14 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.lux032.plextosonosplayer.plex.PlexAlbum
 import com.lux032.plextosonosplayer.plex.PlexAlbumTracksResult
-import com.lux032.plextosonosplayer.plex.PlexAlbumsResult
 import com.lux032.plextosonosplayer.plex.PlexAuthConfig
 import com.lux032.plextosonosplayer.plex.PlexClient
 import com.lux032.plextosonosplayer.plex.PlexTrackStream
+import com.lux032.plextosonosplayer.plex.isFavorite
 import com.lux032.plextosonosplayer.sonos.SonosController
 import com.lux032.plextosonosplayer.sonos.SonosDiscovery
 import com.lux032.plextosonosplayer.sonos.SonosRoom
+import com.lux032.plextosonosplayer.storage.AlbumLocalStore
 import com.lux032.plextosonosplayer.ui.theme.PlexToSonosPlayerTheme
 import coil3.ImageLoader
 import coil3.compose.AsyncImage
@@ -92,6 +102,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okio.Path.Companion.toOkioPath
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 
 class MainActivity : ComponentActivity() {
     var onHardwareVolumeStep: ((Int) -> Boolean)? = null
@@ -128,10 +141,13 @@ class MainActivity : ComponentActivity() {
 
 private enum class AppSection {
     Home,
+    Artists,
     AlbumDetail,
+    ArtistAlbums,
     PlaybackDetail,
     FavoriteCollection,
     RecentAdded,
+    AllAlbums,
     Settings,
 }
 
@@ -155,6 +171,31 @@ private enum class PlayerIcon {
     Pause,
     Next,
 }
+
+private enum class FavoriteIconStyle {
+    Outline,
+    Filled,
+}
+
+private enum class ArtistPresentation {
+    Covers,
+    List,
+}
+
+private enum class NavIcon {
+    Home,
+    Artists,
+    Settings,
+    Covers,
+    List,
+}
+
+private data class ArtistSummary(
+    val name: String,
+    val coverUrl: String?,
+    val albumCount: Int,
+    val albums: List<PlexAlbum> = emptyList(),
+)
 
 private object AppColors {
     val BackgroundTop = Color(0xFF050505)
@@ -211,10 +252,12 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
     val appPreferences = remember(context) { AppPreferences(context) }
+    val albumLocalStore = remember(context) { AlbumLocalStore(context) }
     val sonosController = remember { SonosController() }
     val initialPreferences = remember(appPreferences) { appPreferences.loadPlexConnectionPreferences() }
 
     val navigationStack = remember { mutableStateListOf(AppSection.Home) }
+    var primarySection by remember { mutableStateOf(AppSection.Home) }
     var connectionPreferences by remember { mutableStateOf(initialPreferences) }
     var username by rememberSaveable { mutableStateOf(initialPreferences.username) }
     var password by rememberSaveable { mutableStateOf(initialPreferences.password) }
@@ -226,8 +269,15 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
     var isSonosLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var actionMessage by remember { mutableStateOf<String?>(null) }
-    var libraryAlbumsResult by remember { mutableStateOf<PlexAlbumsResult?>(null) }
+    var allAlbums by remember { mutableStateOf<List<PlexAlbum>>(emptyList()) }
+    var hasLoadedLocalAlbums by remember { mutableStateOf(false) }
+    var lastAlbumSyncEpochMillis by remember { mutableStateOf(appPreferences.loadLastAlbumSyncEpochMillis()) }
+    var albumSearchQuery by rememberSaveable { mutableStateOf("") }
+    var albumSearchResults by remember { mutableStateOf<List<PlexAlbum>>(emptyList()) }
+    var isAlbumSearchLoading by remember { mutableStateOf(false) }
     var selectedAlbum by remember { mutableStateOf<PlexAlbum?>(null) }
+    var selectedArtistName by remember { mutableStateOf<String?>(null) }
+    var artistPresentation by remember { mutableStateOf(ArtistPresentation.Covers) }
     var trackResult by remember { mutableStateOf<PlexAlbumTracksResult?>(null) }
     var sonosRooms by remember { mutableStateOf<List<SonosRoom>>(emptyList()) }
     var selectedSonosRoom by remember { mutableStateOf<SonosRoom?>(null) }
@@ -237,20 +287,21 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
     var isVolumeLoading by remember { mutableStateOf(false) }
     var isVolumeChanging by remember { mutableStateOf(false) }
     var isPlaybackCommandLoading by remember { mutableStateOf(false) }
+    var isFavoriteMutationLoading by remember { mutableStateOf(false) }
     var volumeSyncKey by remember { mutableIntStateOf(0) }
     var volumeChangeJob by remember { mutableStateOf<Job?>(null) }
     var albumPlaybackJob by remember { mutableStateOf<Job?>(null) }
     var miniPlayerState by remember { mutableStateOf<MiniPlayerState?>(null) }
     var miniPlayerHeightPx by remember { mutableIntStateOf(0) }
     var recentPlayedAlbumKeys by remember { mutableStateOf(appPreferences.loadRecentPlayedAlbumKeys()) }
-    var hasAttemptedInitialAlbumSync by rememberSaveable { mutableStateOf(false) }
 
     val activeSection = navigationStack.lastOrNull() ?: AppSection.Home
+    val bottomNavigationHeight = 84.dp
     val contentBottomPadding = with(density) {
         if (miniPlayerState != null && activeSection != AppSection.PlaybackDetail) {
-            miniPlayerHeightPx.toDp() + 32.dp
+            miniPlayerHeightPx.toDp() + bottomNavigationHeight + 28.dp
         } else {
-            16.dp
+            bottomNavigationHeight + 20.dp
         }
     }
 
@@ -262,6 +313,11 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
     fun replaceWith(section: AppSection) {
         navigationStack.clear()
         navigationStack.add(section)
+    }
+
+    fun switchPrimarySection(section: AppSection) {
+        primarySection = section
+        replaceWith(section)
     }
 
     fun navigateBack() {
@@ -279,6 +335,13 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
             token = preferences.token,
         )
     )
+
+    suspend fun loadAlbumsFromLocalStore() {
+        allAlbums = withContext(Dispatchers.IO) {
+            albumLocalStore.getAllAlbums()
+        }
+        hasLoadedLocalAlbums = true
+    }
 
     fun startSingleTrackPlayback(
         album: PlexAlbum,
@@ -340,14 +403,14 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
         errorMessage = null
         actionMessage = null
         albumPlaybackJob = scope.launch {
-            runCatching {
+            runCatching<Unit> {
                 var didStartFirstTrack = false
                 playAlbumSequentially(
                     sonosController = sonosController,
                     room = room,
                     trackResult = albumTrackResult,
                     startIndex = startIndex,
-                    onTrackChanged = { index, track ->
+                    onTrackChanged = { index: Int, track: PlexTrackStream ->
                         if (!didStartFirstTrack) {
                             didStartFirstTrack = true
                             isPlaybackCommandLoading = false
@@ -359,10 +422,10 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                         actionMessage = "正在连续播放：${track.title}"
                     },
                 )
-            }.onSuccess {
+            }.onSuccess { _: Unit ->
                 actionMessage = "专辑播放结束：${albumTrackResult.album.title}"
-            }.onFailure {
-                errorMessage = it.message ?: "未知错误"
+            }.onFailure { e: Throwable ->
+                errorMessage = e.message ?: "未知错误"
                 isPlaybackCommandLoading = false
             }
         }
@@ -370,7 +433,6 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
 
     suspend fun refreshAlbums(showLoading: Boolean = true) {
         if (!connectionPreferences.hasCredentials()) {
-            libraryAlbumsResult = null
             selectedAlbum = null
             trackResult = null
             return
@@ -384,13 +446,18 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
         runCatching {
             client().fetchAlbums()
         }.onSuccess {
-            libraryAlbumsResult = it
+            allAlbums = it.albums
+            withContext(Dispatchers.IO) {
+                albumLocalStore.replaceAllAlbums(it.albums)
+            }
+            lastAlbumSyncEpochMillis = System.currentTimeMillis()
+            appPreferences.saveLastAlbumSyncEpochMillis(lastAlbumSyncEpochMillis!!)
             if (selectedAlbum?.ratingKey?.let { key -> it.albums.none { album -> album.ratingKey == key } } == true) {
                 selectedAlbum = null
                 trackResult = null
             }
+            actionMessage = "已同步 ${it.albums.size} 张专辑到本地"
         }.onFailure {
-            libraryAlbumsResult = null
             selectedAlbum = null
             trackResult = null
             errorMessage = it.message ?: "未知错误"
@@ -415,8 +482,8 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
         if (refreshAfterSave) {
             scope.launch {
                 refreshAlbums()
-                if (libraryAlbumsResult != null) {
-                    replaceWith(AppSection.Home)
+                if (allAlbums.isNotEmpty()) {
+                    switchPrimarySection(AppSection.Home)
                 }
             }
         }
@@ -449,12 +516,24 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
     }
 
     LaunchedEffect(Unit) {
-        if (!hasAttemptedInitialAlbumSync) {
-            hasAttemptedInitialAlbumSync = true
-            if (connectionPreferences.hasCredentials() && libraryAlbumsResult == null && !isLoading) {
-                refreshAlbums()
-            }
+        if (!hasLoadedLocalAlbums) {
+            loadAlbumsFromLocalStore()
         }
+    }
+
+    LaunchedEffect(albumSearchQuery, allAlbums.size) {
+        val normalizedQuery = albumSearchQuery.trim()
+        if (normalizedQuery.isEmpty()) {
+            albumSearchResults = emptyList()
+            isAlbumSearchLoading = false
+            return@LaunchedEffect
+        }
+
+        isAlbumSearchLoading = true
+        albumSearchResults = withContext(Dispatchers.IO) {
+            albumLocalStore.searchAlbums(normalizedQuery)
+        }
+        isAlbumSearchLoading = false
     }
 
     LaunchedEffect(
@@ -536,7 +615,121 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
         }
     }
 
-    val allAlbums = libraryAlbumsResult?.albums.orEmpty()
+    fun openArtistAlbums(artist: ArtistSummary) {
+        selectedArtistName = artist.name
+        if (activeSection == AppSection.ArtistAlbums) return
+        navigateTo(AppSection.ArtistAlbums)
+    }
+
+    fun openArtistAlbumsByName(artistName: String?) {
+        val normalizedName = artistName?.trim().orEmpty().ifBlank { "未知艺人" }
+        selectedArtistName = normalizedName
+        navigateTo(AppSection.ArtistAlbums)
+    }
+
+    fun replaceAlbumInState(updatedAlbum: PlexAlbum) {
+        allAlbums = allAlbums.map { album ->
+            if (album.ratingKey == updatedAlbum.ratingKey) updatedAlbum else album
+        }
+        scope.launch(Dispatchers.IO) {
+            albumLocalStore.upsertAlbum(updatedAlbum)
+        }
+        if (selectedAlbum?.ratingKey == updatedAlbum.ratingKey) {
+            selectedAlbum = updatedAlbum
+        }
+        trackResult = trackResult?.let { current ->
+            if (current.album.ratingKey == updatedAlbum.ratingKey) {
+                current.copy(album = updatedAlbum)
+            } else {
+                current
+            }
+        }
+        miniPlayerState = miniPlayerState?.let { current ->
+            if (current.album.ratingKey == updatedAlbum.ratingKey) {
+                current.copy(album = updatedAlbum)
+            } else {
+                current
+            }
+        }
+    }
+
+    fun replaceTrackInState(updatedTrack: PlexTrackStream) {
+        trackResult = trackResult?.let { current ->
+            if (current.tracks.none { it.ratingKey == updatedTrack.ratingKey }) {
+                current
+            } else {
+                current.copy(
+                    tracks = current.tracks.map { track ->
+                        if (track.ratingKey == updatedTrack.ratingKey) updatedTrack else track
+                    }
+                )
+            }
+        }
+        miniPlayerState = miniPlayerState?.let { current ->
+            if (current.tracks.none { it.ratingKey == updatedTrack.ratingKey }) {
+                current
+            } else {
+                current.copy(
+                    tracks = current.tracks.map { track ->
+                        if (track.ratingKey == updatedTrack.ratingKey) updatedTrack else track
+                    }
+                )
+            }
+        }
+    }
+
+    fun toggleAlbumFavorite(album: PlexAlbum) {
+        if (isFavoriteMutationLoading) return
+
+        val targetFavorite = !album.isFavorite
+        isFavoriteMutationLoading = true
+        errorMessage = null
+        actionMessage = null
+        scope.launch {
+            runCatching {
+                client().setFavorite(album.ratingKey, targetFavorite)
+            }.onSuccess {
+                replaceAlbumInState(
+                    album.copy(userRating = if (targetFavorite) 10f else null)
+                )
+                actionMessage = if (targetFavorite) {
+                    "已收藏专辑：${album.title}"
+                } else {
+                    "已取消收藏专辑：${album.title}"
+                }
+            }.onFailure {
+                errorMessage = it.message ?: "未知错误"
+            }
+            isFavoriteMutationLoading = false
+        }
+    }
+
+    fun toggleTrackFavorite(track: PlexTrackStream) {
+        if (isFavoriteMutationLoading) return
+
+        val targetFavorite = !track.isFavorite
+        isFavoriteMutationLoading = true
+        errorMessage = null
+        actionMessage = null
+        scope.launch {
+            runCatching {
+                client().setFavorite(track.ratingKey, targetFavorite)
+            }.onSuccess {
+                replaceTrackInState(
+                    track.copy(userRating = if (targetFavorite) 10f else null)
+                )
+                actionMessage = if (targetFavorite) {
+                    "已收藏单曲：${track.title}"
+                } else {
+                    "已取消收藏单曲：${track.title}"
+                }
+            }.onFailure {
+                errorMessage = it.message ?: "未知错误"
+            }
+            isFavoriteMutationLoading = false
+        }
+    }
+
     val favoriteAlbums = allAlbums
         .filter(PlexAlbum::isFavorite)
         .sortedWith(
@@ -552,13 +745,55 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                 .thenBy { it.title.lowercase() }
         )
     val recentAddedTopHundred = recentAddedAlbums.take(100)
+    var artists by remember { mutableStateOf<List<ArtistSummary>>(emptyList()) }
 
-    BackHandler(enabled = activeSection != AppSection.Home) {
+    LaunchedEffect(connectionPreferences) {
+        if (connectionPreferences.token.isNullOrBlank()) return@LaunchedEffect
+        try {
+            val plexArtists = client().fetchArtists().artists
+            val artistInfoMap = albumLocalStore.getArtistSummaries().associateBy { it.name }
+            artists = plexArtists.map { plexArtist ->
+                val info = artistInfoMap[plexArtist.title]
+                ArtistSummary(
+                    name = plexArtist.title,
+                    coverUrl = plexArtist.thumbUrl,
+                    albumCount = info?.albumCount ?: 0,
+                )
+            }.filter { it.albumCount > 0 }
+        } catch (e: Exception) {
+            artists = albumLocalStore.getArtistSummaries().map { info ->
+                ArtistSummary(
+                    name = info.name,
+                    coverUrl = info.coverUrl,
+                    albumCount = info.albumCount,
+                )
+            }
+        }
+    }
+    val selectedArtist = selectedArtistName?.let { selectedName ->
+        remember(selectedName, allAlbums) {
+            val albums = albumLocalStore.getAlbumsByArtist(selectedName)
+            val summary = artists.firstOrNull { it.name == selectedName }
+            summary?.let {
+                ArtistSummary(
+                    name = it.name,
+                    coverUrl = it.coverUrl,
+                    albumCount = it.albumCount,
+                    albums = albums
+                )
+            }
+        }
+    }
+
+    BackHandler(enabled = navigationStack.size > 1) {
         when (activeSection) {
-            AppSection.AlbumDetail -> replaceWith(AppSection.Home)
+            AppSection.AlbumDetail,
+            AppSection.ArtistAlbums,
             AppSection.PlaybackDetail,
             AppSection.FavoriteCollection,
             AppSection.RecentAdded,
+            AppSection.AllAlbums,
+            AppSection.Artists,
             AppSection.Settings -> navigateBack()
             AppSection.Home -> Unit
         }
@@ -574,158 +809,203 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
             )
     ) {
         key(activeSection) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .verticalScroll(rememberScrollState())
-                    .padding(start = 16.dp, top = 16.dp, end = 16.dp, bottom = contentBottomPadding),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
-            ) {
-                if (activeSection == AppSection.Home || activeSection == AppSection.Settings) {
-                    TopNavigation(
-                        activeSection = activeSection,
-                        onSectionChange = { section ->
-                            when (section) {
-                                AppSection.Home -> replaceWith(AppSection.Home)
-                                AppSection.Settings -> {
-                                    if (activeSection != AppSection.Settings) {
-                                        navigateTo(AppSection.Settings)
+            if (activeSection == AppSection.AllAlbums) {
+                AllAlbumsSection(
+                    albums = if (albumSearchQuery.isBlank()) allAlbums else albumSearchResults,
+                    selectedAlbum = selectedAlbum,
+                    searchQuery = albumSearchQuery,
+                    isSearchLoading = isAlbumSearchLoading,
+                    bottomContentPadding = contentBottomPadding,
+                    onSearchQueryChange = { albumSearchQuery = it },
+                    onBack = ::navigateBack,
+                    onAlbumClick = ::openAlbumDetail,
+                )
+            } else {
+                if (activeSection == AppSection.Artists) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(start = 16.dp, top = 16.dp, end = 16.dp, bottom = contentBottomPadding),
+                    ) {
+                        ArtistsSection(
+                            artists = artists,
+                            presentation = artistPresentation,
+                            onPresentationChange = { artistPresentation = it },
+                            onGoHome = { switchPrimarySection(AppSection.Home) },
+                            onArtistClick = ::openArtistAlbums,
+                        )
+                    }
+                } else {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(rememberScrollState())
+                            .padding(start = 16.dp, top = 16.dp, end = 16.dp, bottom = contentBottomPadding),
+                        verticalArrangement = Arrangement.spacedBy(16.dp),
+                    ) {
+                        when (activeSection) {
+                            AppSection.Home -> HomeSection(
+                                connectionPreferences = connectionPreferences,
+                                allAlbums = allAlbums,
+                                favoriteAlbums = favoriteAlbums,
+                                recentAddedAlbums = recentAddedTopHundred,
+                                selectedAlbum = selectedAlbum,
+                                selectedSonosRoom = selectedSonosRoom,
+                                lastAlbumSyncEpochMillis = lastAlbumSyncEpochMillis,
+                                isLoading = isLoading,
+                                errorMessage = errorMessage,
+                                actionMessage = actionMessage,
+                                onRefreshFavorites = { scope.launch { refreshAlbums() } },
+                                onAlbumClick = ::openAlbumDetail,
+                                onOpenAllAlbums = {
+                                    albumSearchQuery = ""
+                                    navigateTo(AppSection.AllAlbums)
+                                },
+                                onOpenFavorites = { navigateTo(AppSection.FavoriteCollection) },
+                                onOpenRecentAdded = { navigateTo(AppSection.RecentAdded) },
+                            )
+                            AppSection.AlbumDetail -> AlbumDetailSection(
+                            trackResult = trackResult,
+                            selectedRoom = selectedSonosRoom,
+                            isPlaybackLoading = isPlaybackCommandLoading,
+                            isFavoriteLoading = isFavoriteMutationLoading,
+                            onReturnHome = ::navigateBack,
+                            onArtistClick = ::openArtistAlbumsByName,
+                            onToggleAlbumFavorite = ::toggleAlbumFavorite,
+                            onToggleTrackFavorite = ::toggleTrackFavorite,
+                            onPlayAlbum = { albumTrackResult: PlexAlbumTracksResult, room: SonosRoom ->
+                                startAlbumPlayback(albumTrackResult, room)
+                            },
+                            onPlayTrack = { album: PlexAlbum, track: PlexTrackStream, room: SonosRoom ->
+                                val currentTrackResult = trackResult
+                                val playlist = if (currentTrackResult?.album?.ratingKey == album.ratingKey) {
+                                    currentTrackResult.tracks
+                                } else {
+                                    listOf(track)
+                                }
+                                val trackIndex = playlist.indexOfFirst { it.ratingKey == track.ratingKey }.coerceAtLeast(0)
+                                startSingleTrackPlayback(album, playlist, trackIndex, room)
+                            },
+                        )
+                        AppSection.PlaybackDetail -> PlaybackDetailSection(
+                            state = miniPlayerState,
+                            hasLoadedVolume = hasLoadedSonosVolume && selectedSonosRoom?.coordinatorUuid == miniPlayerState?.room?.coordinatorUuid,
+                            isVolumeLoading = isVolumeLoading,
+                            isVolumeChanging = isVolumeChanging,
+                            volume = sonosVolume,
+                            isLoading = isPlaybackCommandLoading,
+                            onBack = ::navigateBack,
+                            onPrevious = {
+                                val state = miniPlayerState ?: return@PlaybackDetailSection
+                                val newIndex = (state.currentIndex - 1).coerceAtLeast(0)
+                                if (newIndex != state.currentIndex) {
+                                    val currentTrackResult = trackResult?.takeIf { it.album.ratingKey == state.album.ratingKey }
+                                    if (currentTrackResult != null) {
+                                        startAlbumPlayback(currentTrackResult, state.room, newIndex)
+                                    } else {
+                                        startSingleTrackPlayback(state.album, state.tracks, newIndex, state.room)
                                     }
                                 }
-                                else -> Unit
-                            }
-                        },
-                    )
-                }
-
-                when (activeSection) {
-                    AppSection.Home -> HomeSection(
-                        connectionPreferences = connectionPreferences,
-                        favoriteAlbums = favoriteAlbums,
-                        recentAddedAlbums = recentAddedTopHundred,
-                        selectedAlbum = selectedAlbum,
-                        selectedSonosRoom = selectedSonosRoom,
-                        isLoading = isLoading,
-                        errorMessage = errorMessage,
-                        actionMessage = actionMessage,
-                        onRefreshFavorites = { scope.launch { refreshAlbums() } },
-                        onAlbumClick = ::openAlbumDetail,
-                        onOpenFavorites = { navigateTo(AppSection.FavoriteCollection) },
-                        onOpenRecentAdded = { navigateTo(AppSection.RecentAdded) },
-                    )
-                    AppSection.AlbumDetail -> AlbumDetailSection(
-                        trackResult = trackResult,
-                        selectedRoom = selectedSonosRoom,
-                        isLoading = isPlaybackCommandLoading,
-                        onReturnHome = { replaceWith(AppSection.Home) },
-                        onPlayAlbum = { albumTrackResult, room ->
-                            startAlbumPlayback(albumTrackResult, room)
-                        },
-                        onPlayTrack = { album, track, room ->
-                            val currentTrackResult = trackResult
-                            val playlist = if (currentTrackResult?.album?.ratingKey == album.ratingKey) {
-                                currentTrackResult.tracks
-                            } else {
-                                listOf(track)
-                            }
-                            val trackIndex = playlist.indexOfFirst { it.ratingKey == track.ratingKey }.coerceAtLeast(0)
-                            startSingleTrackPlayback(album, playlist, trackIndex, room)
-                        },
-                    )
-                    AppSection.PlaybackDetail -> PlaybackDetailSection(
-                        state = miniPlayerState,
-                        hasLoadedVolume = hasLoadedSonosVolume && selectedSonosRoom?.coordinatorUuid == miniPlayerState?.room?.coordinatorUuid,
-                        isVolumeLoading = isVolumeLoading,
-                        isVolumeChanging = isVolumeChanging,
-                        volume = sonosVolume,
-                        isLoading = isPlaybackCommandLoading,
-                        onBack = ::navigateBack,
-                        onPrevious = {
-                            val state = miniPlayerState ?: return@PlaybackDetailSection
-                            val newIndex = (state.currentIndex - 1).coerceAtLeast(0)
-                            if (newIndex != state.currentIndex) {
-                                val currentTrackResult = trackResult?.takeIf { it.album.ratingKey == state.album.ratingKey }
-                                if (currentTrackResult != null) {
-                                    startAlbumPlayback(currentTrackResult, state.room, newIndex)
-                                } else {
-                                    startSingleTrackPlayback(state.album, state.tracks, newIndex, state.room)
+                            },
+                            onNext = {
+                                val state = miniPlayerState ?: return@PlaybackDetailSection
+                                val newIndex = (state.currentIndex + 1).coerceAtMost(state.tracks.lastIndex)
+                                if (newIndex != state.currentIndex) {
+                                    val currentTrackResult = trackResult?.takeIf { it.album.ratingKey == state.album.ratingKey }
+                                    if (currentTrackResult != null) {
+                                        startAlbumPlayback(currentTrackResult, state.room, newIndex)
+                                    } else {
+                                        startSingleTrackPlayback(state.album, state.tracks, newIndex, state.room)
+                                    }
                                 }
-                            }
-                        },
-                        onNext = {
-                            val state = miniPlayerState ?: return@PlaybackDetailSection
-                            val newIndex = (state.currentIndex + 1).coerceAtMost(state.tracks.lastIndex)
-                            if (newIndex != state.currentIndex) {
-                                val currentTrackResult = trackResult?.takeIf { it.album.ratingKey == state.album.ratingKey }
-                                if (currentTrackResult != null) {
-                                    startAlbumPlayback(currentTrackResult, state.room, newIndex)
-                                } else {
-                                    startSingleTrackPlayback(state.album, state.tracks, newIndex, state.room)
+                            },
+                            onVolumeChange = { state: MiniPlayerState, newValue: Float ->
+                                selectedSonosRoom = state.room
+                                applyVolumeChange(state.room, newValue)
+                            },
+                            onTogglePause = { state: MiniPlayerState ->
+                                isPlaybackCommandLoading = true
+                                scope.launch {
+                                    runCatching {
+                                        if (state.isPaused) sonosController.resume(state.room) else sonosController.pause(state.room)
+                                    }.onSuccess {
+                                        miniPlayerState = miniPlayerState?.copy(isPaused = !state.isPaused)
+                                        actionMessage = if (state.isPaused) "已继续播放" else "已暂停播放"
+                                    }.onFailure {
+                                        errorMessage = it.message ?: "未知错误"
+                                    }
+                                    isPlaybackCommandLoading = false
                                 }
-                            }
-                        },
-                        onVolumeChange = { state, newValue ->
-                            selectedSonosRoom = state.room
-                            applyVolumeChange(state.room, newValue)
-                        },
-                        onTogglePause = { state ->
-                            isPlaybackCommandLoading = true
-                            scope.launch {
-                                runCatching {
-                                    if (state.isPaused) sonosController.resume(state.room) else sonosController.pause(state.room)
-                                }.onSuccess {
-                                    miniPlayerState = miniPlayerState?.copy(isPaused = !state.isPaused)
-                                    actionMessage = if (state.isPaused) "已继续播放" else "已暂停播放"
-                                }.onFailure {
-                                    errorMessage = it.message ?: "未知错误"
-                                }
-                                isPlaybackCommandLoading = false
-                            }
-                        },
-                    )
-                    AppSection.FavoriteCollection -> AlbumCollectionSection(
-                        title = "收藏专辑",
-                        subtitle = "按最近播放顺序优先展示全部收藏专辑，点击封面可以继续进入专辑详情。",
-                        albums = favoriteAlbums,
-                        selectedAlbum = selectedAlbum,
-                        onBack = ::navigateBack,
-                        onAlbumClick = ::openAlbumDetail,
-                    )
-                    AppSection.RecentAdded -> AlbumCollectionSection(
-                        title = "最近添加的 100 张专辑",
-                        subtitle = "按 Plex 最近添加时间倒序展示，点击封面可直接进入专辑详情。",
-                        albums = recentAddedTopHundred,
-                        selectedAlbum = selectedAlbum,
-                        onBack = ::navigateBack,
-                        onAlbumClick = ::openAlbumDetail,
-                    )
-                    AppSection.Settings -> SettingsSection(
-                        rooms = sonosRooms,
-                        selectedRoom = selectedSonosRoom,
-                        isSonosLoading = isSonosLoading,
-                        discoveryAttempted = sonosDiscoveryAttempted,
-                        username = username,
-                        password = password,
-                        token = token,
-                        server = server,
-                        baseUrl = baseUrl,
-                        onDiscoverSonos = ::refreshSonosRooms,
-                        onSelectRoom = {
-                            selectedSonosRoom = it
-                            actionMessage = "已选择 Sonos 房间: ${it.roomName}"
-                            volumeSyncKey += 1
-                        },
-                        onUsernameChange = { username = it },
-                        onPasswordChange = { password = it },
-                        onTokenChange = { token = it },
-                        onServerChange = { server = it },
-                        onBaseUrlChange = { baseUrl = it },
-                        onSave = { saveSettings(refreshAfterSave = false) },
-                        onSaveAndRefresh = { saveSettings(refreshAfterSave = true) },
-                    )
+                            },
+                        )
+                        AppSection.ArtistAlbums -> ArtistAlbumsSection(
+                            artist = selectedArtist,
+                            selectedAlbum = selectedAlbum,
+                            onBack = ::navigateBack,
+                            onAlbumClick = ::openAlbumDetail,
+                        )
+                        AppSection.FavoriteCollection -> AlbumCollectionSection(
+                            title = "收藏专辑",
+                            subtitle = "按最近播放顺序优先展示全部收藏专辑，点击封面可以继续进入专辑详情。",
+                            albums = favoriteAlbums,
+                            selectedAlbum = selectedAlbum,
+                            onBack = ::navigateBack,
+                            onAlbumClick = ::openAlbumDetail,
+                        )
+                        AppSection.RecentAdded -> AlbumCollectionSection(
+                            title = "最近添加的 100 张专辑",
+                            subtitle = "按 Plex 最近添加时间倒序展示，点击封面可直接进入专辑详情。",
+                            albums = recentAddedTopHundred,
+                            selectedAlbum = selectedAlbum,
+                            onBack = ::navigateBack,
+                            onAlbumClick = ::openAlbumDetail,
+                        )
+                        AppSection.Settings -> SettingsSection(
+                            rooms = sonosRooms,
+                            selectedRoom = selectedSonosRoom,
+                            isSonosLoading = isSonosLoading,
+                            discoveryAttempted = sonosDiscoveryAttempted,
+                            username = username,
+                            password = password,
+                            token = token,
+                            server = server,
+                            baseUrl = baseUrl,
+                            onDiscoverSonos = ::refreshSonosRooms,
+                            onSelectRoom = {
+                                selectedSonosRoom = it
+                                actionMessage = "已选择 Sonos 房间: ${it.roomName}"
+                                volumeSyncKey += 1
+                            },
+                            onUsernameChange = { username = it },
+                            onPasswordChange = { password = it },
+                            onTokenChange = { token = it },
+                            onServerChange = { server = it },
+                            onBaseUrlChange = { baseUrl = it },
+                            onSave = { saveSettings(refreshAfterSave = false) },
+                            onSaveAndRefresh = { saveSettings(refreshAfterSave = true) },
+                        )
+                        AppSection.Artists -> Unit
+                        AppSection.AllAlbums -> Unit
+                    }
                 }
             }
         }
+
+        BottomNavigationBar(
+            primarySection = primarySection,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(horizontal = 16.dp, vertical = 12.dp)
+                .navigationBarsPadding(),
+            onSectionChange = { section: AppSection ->
+                when (section) {
+                    AppSection.Home,
+                    AppSection.Artists,
+                    AppSection.Settings -> switchPrimarySection(section)
+                    else -> Unit
+                }
+            },
+        )
 
         if (activeSection != AppSection.PlaybackDetail) {
             miniPlayerState?.let { state ->
@@ -733,8 +1013,12 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                 state = state,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .padding(horizontal = 16.dp, vertical = 12.dp)
-                    .navigationBarsPadding()
+                    .padding(
+                        start = 16.dp,
+                        end = 16.dp,
+                        top = 12.dp,
+                        bottom = bottomNavigationHeight + 12.dp,
+                    )
                     .onSizeChanged { miniPlayerHeightPx = it.height },
                 onArtworkClick = {
                     if (activeSection != AppSection.PlaybackDetail) {
@@ -760,19 +1044,23 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
         }
     }
 }
+}
 
 @Composable
 private fun HomeSection(
     connectionPreferences: PlexConnectionPreferences,
+    allAlbums: List<PlexAlbum>,
     favoriteAlbums: List<PlexAlbum>,
     recentAddedAlbums: List<PlexAlbum>,
     selectedAlbum: PlexAlbum?,
     selectedSonosRoom: SonosRoom?,
+    lastAlbumSyncEpochMillis: Long?,
     isLoading: Boolean,
     errorMessage: String?,
     actionMessage: String?,
     onRefreshFavorites: () -> Unit,
     onAlbumClick: (PlexAlbum) -> Unit,
+    onOpenAllAlbums: () -> Unit,
     onOpenFavorites: () -> Unit,
     onOpenRecentAdded: () -> Unit,
 ) {
@@ -794,6 +1082,7 @@ private fun HomeSection(
 
     HomeStatusCard(
         selectedRoom = selectedSonosRoom,
+        lastAlbumSyncEpochMillis = lastAlbumSyncEpochMillis,
         isLoading = isLoading,
         onRefresh = onRefreshFavorites,
     )
@@ -805,7 +1094,7 @@ private fun HomeSection(
         LoadingCard(message = "正在从 Plex 同步专辑")
     }
 
-    if (!connectionPreferences.hasCredentials()) {
+    if (!connectionPreferences.hasCredentials() && allAlbums.isEmpty()) {
         EmptyStateCard(
             title = "先在设置里填写 Plex 服务器",
             body = "首页现在只保留封面展示和播放链路，连接信息已移到设置页并支持持久化。",
@@ -818,12 +1107,20 @@ private fun HomeSection(
     if (!isLoading && favoriteAlbums.isEmpty() && errorMessage == null) {
         EmptyStateCard(
             title = "还没有检测到已收藏专辑",
-            body = "当前按 Plex 返回的 userRating 识别收藏专辑。你可以先在 Plex 里标记后再刷新首页。",
+            body = "当前按 Plex 返回的 userRating 识别收藏专辑。你也可以先打开任意专辑，在详情页直接点击收藏。",
             actionLabel = "重新获取",
             onAction = onRefreshFavorites,
         )
     }
 
+    if (allAlbums.isNotEmpty()) {
+        EntryActionCard(
+            title = "全部专辑",
+            body = "已同步 ${allAlbums.size} 张专辑",
+            actionLabel = "查看全部并搜索",
+            onAction = onOpenAllAlbums,
+        )
+    }
     if (favoriteAlbums.isNotEmpty()) {
         AlbumPreviewGridSection(
             title = "收藏专辑",
@@ -844,6 +1141,324 @@ private fun HomeSection(
             actionLabel = "查看前 100 张",
             onAction = onOpenRecentAdded,
             onAlbumClick = onAlbumClick,
+        )
+    }
+}
+
+@Composable
+private fun EntryActionCard(
+    title: String,
+    body: String,
+    actionLabel: String,
+    onAction: () -> Unit,
+) {
+    Surface(
+        shape = RoundedCornerShape(22.dp),
+        color = AppColors.Surface,
+        border = BorderStroke(1.dp, AppColors.Border),
+        shadowElevation = 4.dp,
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleLarge,
+                    color = AppColors.TextPrimary,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = body,
+                    color = AppColors.TextSecondary,
+                )
+            }
+            Spacer(modifier = Modifier.width(12.dp))
+            OutlinedButton(onClick = onAction) {
+                Text(actionLabel)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ArtistsSection(
+    artists: List<ArtistSummary>,
+    presentation: ArtistPresentation,
+    onPresentationChange: (ArtistPresentation) -> Unit,
+    onGoHome: () -> Unit,
+    onArtistClick: (ArtistSummary) -> Unit,
+) {
+    if (artists.isEmpty()) {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            EmptyStateCard(
+                title = "还没有可展示的歌手",
+                body = "先到首页同步 Plex 音乐库，之后这里会按专辑自动聚合出歌手。",
+                actionLabel = "去首页",
+                onAction = onGoHome,
+            )
+        }
+        return
+    }
+
+    when (presentation) {
+        ArtistPresentation.Covers -> {
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(2),
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                item(span = { GridItemSpan(2) }) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 2.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(
+                                text = "歌手",
+                                style = MaterialTheme.typography.headlineMedium,
+                                color = AppColors.TextPrimary,
+                                fontWeight = FontWeight.Bold,
+                            )
+                            Text(
+                                text = "按本地已同步专辑聚合，点击任一歌手进入他的专辑页。",
+                                color = AppColors.TextSecondary,
+                            )
+                        }
+                        ArtistPresentationToggle(
+                            presentation = presentation,
+                            onPresentationChange = onPresentationChange,
+                        )
+                    }
+                }
+                items(artists) { artist ->
+                    ArtistCoverCard(
+                        artist = artist,
+                        onClick = { onArtistClick(artist) },
+                    )
+                }
+            }
+        }
+        ArtistPresentation.List -> {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            text = "歌手",
+                            style = MaterialTheme.typography.headlineMedium,
+                            color = AppColors.TextPrimary,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Text(
+                            text = "按本地已同步专辑聚合，点击任一歌手进入他的专辑页。",
+                            color = AppColors.TextSecondary,
+                        )
+                    }
+                    ArtistPresentationToggle(
+                        presentation = presentation,
+                        onPresentationChange = onPresentationChange,
+                    )
+                }
+                ArtistList(
+                    artists = artists,
+                    onArtistClick = onArtistClick,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ArtistCoverCard(
+    artist: ArtistSummary,
+    onClick: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier.clickable(onClick = onClick),
+        shape = RoundedCornerShape(24.dp),
+        color = AppColors.Surface,
+        border = BorderStroke(1.dp, AppColors.Border),
+        shadowElevation = 4.dp,
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            if (artist.coverUrl != null) {
+                AsyncAlbumArtwork(
+                    imageUrl = artist.coverUrl,
+                    title = artist.name,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(1.05f)
+                        .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)),
+                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(1.05f)
+                        .background(AppColors.SurfaceMuted, RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Person,
+                        contentDescription = null,
+                        tint = AppColors.TextSecondary,
+                        modifier = Modifier.size(64.dp)
+                    )
+                }
+            }
+            Column(
+                modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 14.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    text = artist.name,
+                    color = AppColors.TextPrimary,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = "${artist.albumCount} 张专辑",
+                    color = AppColors.TextSecondary,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ArtistList(
+    artists: List<ArtistSummary>,
+    onArtistClick: (ArtistSummary) -> Unit,
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        artists.forEach { artist ->
+            Surface(
+                modifier = Modifier.clickable(onClick = { onArtistClick(artist) }),
+                shape = RoundedCornerShape(20.dp),
+                color = AppColors.Surface,
+                border = BorderStroke(1.dp, AppColors.Border),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    AsyncAlbumArtwork(
+                        imageUrl = artist.coverUrl,
+                        title = artist.name,
+                        modifier = Modifier
+                            .size(68.dp)
+                            .clip(RoundedCornerShape(18.dp)),
+                    )
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Text(
+                            text = artist.name,
+                            color = AppColors.TextPrimary,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            text = "${artist.albumCount} 张专辑",
+                            color = AppColors.TextSecondary,
+                        )
+                    }
+                    NavIconGraphic(
+                        icon = NavIcon.Artists,
+                        tint = AppColors.TextTertiary,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ArtistAlbumsSection(
+    artist: ArtistSummary?,
+    selectedAlbum: PlexAlbum?,
+    onBack: () -> Unit,
+    onAlbumClick: (PlexAlbum) -> Unit,
+) {
+    val currentArtist = artist
+    if (currentArtist == null) {
+        EmptyStateCard(
+            title = "歌手不存在或还未同步",
+            body = "先回到歌手页重新选择，或者先同步一次本地音乐库。",
+            actionLabel = "返回歌手页",
+            onAction = onBack,
+        )
+        return
+    }
+
+    val heroAlbum = currentArtist.albums.firstOrNull()
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        OutlinedButton(onClick = onBack) {
+            Text("返回歌手页")
+        }
+        heroAlbum?.let { album ->
+            AsyncAlbumArtwork(
+                imageUrl = currentArtist.coverUrl ?: album.thumbUrl,
+                title = currentArtist.name,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(1.25f)
+                    .clip(RoundedCornerShape(24.dp)),
+            )
+        }
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = currentArtist.name,
+                style = MaterialTheme.typography.headlineMedium,
+                color = AppColors.TextPrimary,
+                fontWeight = FontWeight.Bold,
+            )
+            Text(
+                text = "共 ${currentArtist.albumCount} 张专辑，点击封面进入专辑详情并继续播放。",
+                color = AppColors.TextSecondary,
+            )
+        }
+        AlbumGrid(
+            albums = currentArtist.albums,
+            columns = 2,
+            selectedAlbum = selectedAlbum,
+            onAlbumClick = onAlbumClick,
+            compact = false,
         )
     }
 }
@@ -964,6 +1579,94 @@ private fun AlbumCollectionSection(
 }
 
 @Composable
+private fun AllAlbumsSection(
+    albums: List<PlexAlbum>,
+    selectedAlbum: PlexAlbum?,
+    searchQuery: String,
+    isSearchLoading: Boolean,
+    bottomContentPadding: androidx.compose.ui.unit.Dp,
+    onSearchQueryChange: (String) -> Unit,
+    onBack: () -> Unit,
+    onAlbumClick: (PlexAlbum) -> Unit,
+) {
+    LazyVerticalGrid(
+        columns = GridCells.Fixed(2),
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 16.dp),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(
+            top = 16.dp,
+            bottom = bottomContentPadding,
+        ),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        item(span = { GridItemSpan(maxLineSpan) }) {
+            OutlinedButton(onClick = onBack) {
+                Text("返回首页")
+            }
+        }
+        item(span = { GridItemSpan(maxLineSpan) }) {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    text = "全部专辑",
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = AppColors.TextPrimary,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(
+                    text = if (searchQuery.isBlank()) {
+                        "当前展示本地已同步的全部 ${albums.size} 张专辑。"
+                    } else {
+                        "搜索 \"$searchQuery\" 命中 ${albums.size} 张专辑。"
+                    },
+                    color = AppColors.TextSecondary,
+                )
+            }
+        }
+        item(span = { GridItemSpan(maxLineSpan) }) {
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = onSearchQueryChange,
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("搜索专辑或艺人") },
+                singleLine = true,
+            )
+        }
+        if (isSearchLoading) {
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                LoadingCard(message = "正在查询本地专辑库")
+            }
+        } else if (albums.isEmpty()) {
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                EmptyStateCard(
+                    title = if (searchQuery.isBlank()) "本地还没有专辑" else "没有匹配结果",
+                    body = if (searchQuery.isBlank()) {
+                        "先回首页同步一次 Plex 音乐库，之后这里会显示全部专辑。"
+                    } else {
+                        "换个关键词试试，搜索会匹配专辑名和艺人名。"
+                    },
+                    actionLabel = "返回首页",
+                    onAction = onBack,
+                )
+            }
+        } else {
+            items(albums, key = { it.ratingKey }) { album ->
+                AlbumCoverCard(
+                    album = album,
+                    selected = selectedAlbum?.ratingKey == album.ratingKey,
+                    onClick = { onAlbumClick(album) },
+                    compact = false,
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun PlaybackDetailSection(
     state: MiniPlayerState?,
     hasLoadedVolume: Boolean,
@@ -1074,8 +1777,12 @@ private fun PlaybackDetailSection(
 private fun AlbumDetailSection(
     trackResult: PlexAlbumTracksResult?,
     selectedRoom: SonosRoom?,
-    isLoading: Boolean,
+    isPlaybackLoading: Boolean,
+    isFavoriteLoading: Boolean,
     onReturnHome: () -> Unit,
+    onArtistClick: (String?) -> Unit,
+    onToggleAlbumFavorite: (PlexAlbum) -> Unit,
+    onToggleTrackFavorite: (PlexTrackStream) -> Unit,
     onPlayAlbum: (PlexAlbumTracksResult, SonosRoom) -> Unit,
     onPlayTrack: (PlexAlbum, PlexTrackStream, SonosRoom) -> Unit,
 ) {
@@ -1107,40 +1814,61 @@ private fun AlbumDetailSection(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            val artistName = currentTrackResult.album.artistName ?: "未知艺人"
             Text(
                 currentTrackResult.album.title,
                 style = MaterialTheme.typography.headlineMedium,
                 color = AppColors.TextPrimary,
                 fontWeight = FontWeight.Bold,
             )
-            Text(
-                text = buildString {
-                    append(currentTrackResult.album.artistName ?: "未知艺人")
-                    currentTrackResult.album.year?.let {
-                        append(" · ")
-                        append(it)
-                    }
-                    append(" · ${currentTrackResult.tracks.size} 首")
-                },
-                color = AppColors.TextSecondary,
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = artistName,
+                    color = AppColors.Accent,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.clickable { onArtistClick(currentTrackResult.album.artistName) },
+                )
+                Text(
+                    text = buildString {
+                        currentTrackResult.album.year?.let {
+                            append("· ")
+                            append(it)
+                            append(' ')
+                        }
+                        append("· ${currentTrackResult.tracks.size} 首")
+                    },
+                    color = AppColors.TextSecondary,
+                )
+            }
             Text(
                 text = selectedRoom?.let { "当前将推送到 ${it.roomName}" } ?: "尚未选择 Sonos 房间，请先到设置页选择房间。",
                 color = AppColors.TextTertiary,
             )
-        }
-
-        if (selectedRoom != null) {
-            Button(
-                onClick = { onPlayAlbum(currentTrackResult, selectedRoom) },
-                enabled = !isLoading,
+            Row(
                 modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = AppColors.Accent,
-                    contentColor = AppColors.SurfaceStrong,
-                ),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("连续播放整张专辑")
+                FavoriteIconButton(
+                    isFavorite = currentTrackResult.album.isFavorite,
+                    isLoading = isFavoriteLoading,
+                    onClick = { onToggleAlbumFavorite(currentTrackResult.album) },
+                )
+                IconCircleButton(
+                    onClick = { selectedRoom?.let { onPlayAlbum(currentTrackResult, it) } },
+                    enabled = selectedRoom != null && !isPlaybackLoading,
+                    highlighted = true,
+                ) {
+                    PlayerIconGraphic(
+                        icon = PlayerIcon.Play,
+                        tint = if (selectedRoom != null) AppColors.TextPrimary else AppColors.TextTertiary,
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
             }
         }
 
@@ -1151,7 +1879,7 @@ private fun AlbumDetailSection(
             currentTrackResult.tracks.forEachIndexed { index, track ->
                 Surface(
                     modifier = Modifier.clickable(
-                        enabled = selectedRoom != null && !isLoading,
+                        enabled = selectedRoom != null && !isPlaybackLoading,
                     ) {
                         onPlayTrack(currentTrackResult.album, track, selectedRoom!!)
                     },
@@ -1175,17 +1903,29 @@ private fun AlbumDetailSection(
                                 Text(formatDuration(it), color = AppColors.TextTertiary)
                             }
                         }
-                        Spacer(modifier = Modifier.width(10.dp))
-                        if (selectedRoom != null) {
-                            Button(
-                                onClick = { onPlayTrack(currentTrackResult.album, track, selectedRoom) },
-                                enabled = !isLoading,
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = AppColors.AccentMuted,
-                                    contentColor = AppColors.TextPrimary,
-                                ),
+                        Column(
+                            horizontalAlignment = Alignment.End,
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                Text("播放")
+                                FavoriteIconButton(
+                                    isFavorite = track.isFavorite,
+                                    isLoading = isFavoriteLoading,
+                                    onClick = { onToggleTrackFavorite(track) },
+                                )
+                                IconCircleButton(
+                                    onClick = { selectedRoom?.let { onPlayTrack(currentTrackResult.album, track, it) } },
+                                    enabled = selectedRoom != null && !isPlaybackLoading,
+                                ) {
+                                    PlayerIconGraphic(
+                                        icon = PlayerIcon.Play,
+                                        tint = if (selectedRoom != null) AppColors.TextPrimary else AppColors.TextTertiary,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                }
                             }
                         }
                     }
@@ -1196,31 +1936,93 @@ private fun AlbumDetailSection(
 }
 
 @Composable
-private fun TopNavigation(
-    activeSection: AppSection,
+private fun FavoriteIconButton(
+    isFavorite: Boolean,
+    isLoading: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    IconCircleButton(
+        modifier = modifier,
+        onClick = onClick,
+        enabled = !isLoading,
+        highlighted = isFavorite,
+    ) {
+        FavoriteIconGraphic(
+            style = if (isFavorite) FavoriteIconStyle.Filled else FavoriteIconStyle.Outline,
+            tint = if (isLoading) {
+                AppColors.TextTertiary
+            } else if (isFavorite) {
+                AppColors.TextPrimary
+            } else {
+                AppColors.TextSecondary
+            },
+            modifier = Modifier.size(18.dp),
+        )
+    }
+}
+
+@Composable
+private fun IconCircleButton(
+    onClick: () -> Unit,
+    enabled: Boolean,
+    modifier: Modifier = Modifier,
+    highlighted: Boolean = false,
+    content: @Composable BoxScope.() -> Unit,
+) {
+    Surface(
+        modifier = modifier
+            .size(42.dp)
+            .clickable(enabled = enabled, onClick = onClick),
+        shape = CircleShape,
+        color = if (highlighted) AppColors.SurfaceStrong else AppColors.SurfaceMuted,
+        border = BorderStroke(
+            1.dp,
+            if (highlighted) AppColors.BorderStrong else AppColors.Border,
+        ),
+    ) {
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center,
+            content = content,
+        )
+    }
+}
+
+@Composable
+private fun BottomNavigationBar(
+    primarySection: AppSection,
+    modifier: Modifier = Modifier,
     onSectionChange: (AppSection) -> Unit,
 ) {
     Surface(
+        modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(24.dp),
-        color = AppColors.Surface,
-        border = BorderStroke(1.dp, AppColors.Border),
-        tonalElevation = 0.dp,
+        color = AppColors.SurfaceStrong,
+        border = BorderStroke(1.dp, AppColors.BorderStrong),
+        shadowElevation = 10.dp,
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(6.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                .padding(horizontal = 10.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            NavigationChip(
-                label = "首页",
-                selected = activeSection == AppSection.Home,
+            BottomNavButton(
+                icon = NavIcon.Home,
+                selected = primarySection == AppSection.Home,
                 onClick = { onSectionChange(AppSection.Home) },
                 modifier = Modifier.weight(1f),
             )
-            NavigationChip(
-                label = "设置",
-                selected = activeSection == AppSection.Settings,
+            BottomNavButton(
+                icon = NavIcon.Artists,
+                selected = primarySection == AppSection.Artists,
+                onClick = { onSectionChange(AppSection.Artists) },
+                modifier = Modifier.weight(1f),
+            )
+            BottomNavButton(
+                icon = NavIcon.Settings,
+                selected = primarySection == AppSection.Settings,
                 onClick = { onSectionChange(AppSection.Settings) },
                 modifier = Modifier.weight(1f),
             )
@@ -1229,8 +2031,8 @@ private fun TopNavigation(
 }
 
 @Composable
-private fun NavigationChip(
-    label: String,
+private fun BottomNavButton(
+    icon: NavIcon,
     selected: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
@@ -1240,16 +2042,59 @@ private fun NavigationChip(
     Surface(
         modifier = modifier.clickable(onClick = onClick),
         color = background,
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(20.dp),
         border = BorderStroke(1.dp, if (selected) Color.Transparent else AppColors.Border),
     ) {
-        Box(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(vertical = 12.dp),
-            contentAlignment = Alignment.Center,
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
         ) {
-            Text(text = label, color = contentColor, fontWeight = FontWeight.SemiBold)
+            NavIconGraphic(
+                icon = icon,
+                tint = contentColor,
+                modifier = Modifier.size(22.dp),
+            )
+            Spacer(modifier = Modifier.size(6.dp))
+            Box(
+                modifier = Modifier
+                    .size(width = 16.dp, height = 3.dp)
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(if (selected) contentColor.copy(alpha = 0.88f) else Color.Transparent)
+            )
+        }
+    }
+}
+
+@Composable
+private fun ArtistPresentationToggle(
+    presentation: ArtistPresentation,
+    onPresentationChange: (ArtistPresentation) -> Unit,
+) {
+    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        IconCircleButton(
+            onClick = { onPresentationChange(ArtistPresentation.Covers) },
+            enabled = presentation != ArtistPresentation.Covers,
+            highlighted = presentation == ArtistPresentation.Covers,
+        ) {
+            NavIconGraphic(
+                icon = NavIcon.Covers,
+                tint = if (presentation == ArtistPresentation.Covers) AppColors.SurfaceStrong else AppColors.TextPrimary,
+                modifier = Modifier.size(18.dp),
+            )
+        }
+        IconCircleButton(
+            onClick = { onPresentationChange(ArtistPresentation.List) },
+            enabled = presentation != ArtistPresentation.List,
+            highlighted = presentation == ArtistPresentation.List,
+        ) {
+            NavIconGraphic(
+                icon = NavIcon.List,
+                tint = if (presentation == ArtistPresentation.List) AppColors.SurfaceStrong else AppColors.TextPrimary,
+                modifier = Modifier.size(18.dp),
+            )
         }
     }
 }
@@ -1257,6 +2102,7 @@ private fun NavigationChip(
 @Composable
 private fun HomeStatusCard(
     selectedRoom: SonosRoom?,
+    lastAlbumSyncEpochMillis: Long?,
     isLoading: Boolean,
     onRefresh: () -> Unit,
 ) {
@@ -1285,6 +2131,11 @@ private fun HomeStatusCard(
                     text = selectedRoom?.roomName ?: "还没有选定 Sonos 房间",
                     color = AppColors.TextPrimary,
                     fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = formatSyncStatus(lastAlbumSyncEpochMillis),
+                    color = AppColors.TextSecondary,
+                    style = MaterialTheme.typography.bodySmall,
                 )
             }
             Button(
@@ -1462,36 +2313,29 @@ private fun AlbumGrid(
     compact: Boolean,
 ) {
     val spacing = if (compact) 10.dp else 14.dp
-    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-        val rows = (albums.size + columns - 1) / columns
-        val cellSize = (maxWidth - spacing * (columns - 1)) / columns
-        val gridHeight = if (rows > 0) {
-            val cardHeight = if (compact) {
-                cellSize
-            } else {
-                cellSize + 78.dp
-            }
-            (cardHeight * rows) + (spacing * (rows - 1))
-        } else {
-            0.dp
-        }
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(spacing),
+    ) {
+        albums.chunked(columns).forEach { rowAlbums ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(spacing),
+            ) {
+                rowAlbums.forEach { album ->
+                    Box(modifier = Modifier.weight(1f)) {
+                        AlbumCoverCard(
+                            album = album,
+                            selected = selectedAlbum?.ratingKey == album.ratingKey,
+                            onClick = { onAlbumClick(album) },
+                            compact = compact,
+                        )
+                    }
+                }
 
-        LazyVerticalGrid(
-            columns = GridCells.Fixed(columns),
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(gridHeight),
-            userScrollEnabled = false,
-            verticalArrangement = Arrangement.spacedBy(spacing),
-            horizontalArrangement = Arrangement.spacedBy(spacing),
-        ) {
-            items(albums, key = { it.ratingKey }) { album ->
-                AlbumCoverCard(
-                    album = album,
-                    selected = selectedAlbum?.ratingKey == album.ratingKey,
-                    onClick = { onAlbumClick(album) },
-                    compact = compact,
-                )
+                repeat(columns - rowAlbums.size) {
+                    Spacer(modifier = Modifier.weight(1f))
+                }
             }
         }
     }
@@ -1914,6 +2758,58 @@ private fun PlayerIconGraphic(
 }
 
 @Composable
+private fun NavIconGraphic(
+    icon: NavIcon,
+    tint: Color,
+    modifier: Modifier = Modifier,
+) {
+    val imageVector = when (icon) {
+        NavIcon.Home -> Icons.Filled.Home
+        NavIcon.Artists -> Icons.Filled.Person
+        NavIcon.Settings -> Icons.Filled.Settings
+        NavIcon.Covers -> Icons.Filled.GridView
+        NavIcon.List -> Icons.Filled.List
+    }
+
+    Icon(
+        imageVector = imageVector,
+        contentDescription = null,
+        tint = tint,
+        modifier = modifier
+    )
+}
+
+@Composable
+private fun FavoriteIconGraphic(
+    style: FavoriteIconStyle,
+    tint: Color,
+    modifier: Modifier = Modifier,
+) {
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+
+        val heart = Path().apply {
+            moveTo(w * 0.50f, h * 0.86f)
+            cubicTo(w * 0.18f, h * 0.62f, w * 0.02f, h * 0.38f, w * 0.20f, h * 0.20f)
+            cubicTo(w * 0.34f, h * 0.06f, w * 0.50f, h * 0.16f, w * 0.50f, h * 0.28f)
+            cubicTo(w * 0.50f, h * 0.16f, w * 0.66f, h * 0.06f, w * 0.80f, h * 0.20f)
+            cubicTo(w * 0.98f, h * 0.38f, w * 0.82f, h * 0.62f, w * 0.50f, h * 0.86f)
+            close()
+        }
+
+        when (style) {
+            FavoriteIconStyle.Filled -> drawPath(path = heart, color = tint)
+            FavoriteIconStyle.Outline -> drawPath(
+                path = heart,
+                color = tint,
+                style = androidx.compose.ui.graphics.drawscope.Stroke(width = size.minDimension * 0.10f),
+            )
+        }
+    }
+}
+
+@Composable
 private fun AsyncAlbumArtwork(
     imageUrl: String?,
     title: String,
@@ -1947,6 +2843,13 @@ private fun AsyncAlbumArtwork(
             .data(imageUrl)
             .memoryCacheKey(imageUrl)
             .diskCacheKey(imageUrl)
+            .listener(
+                onSuccess = { _, result ->
+                    if ((context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
+                        Log.d("AlbumArtwork", "Loaded $imageUrl from ${result.dataSource}")
+                    }
+                },
+            )
             .build(),
         imageLoader = imageLoader,
         contentDescription = title,
@@ -2028,6 +2931,13 @@ private suspend fun waitForTrackToFinish(
 private fun PlexConnectionPreferences.hasCredentials(): Boolean =
     token.isNotBlank() || (username.isNotBlank() && password.isNotBlank())
 
+private fun formatSyncStatus(epochMillis: Long?): String {
+    if (epochMillis == null) return "尚未同步"
+
+    val formatter = DateTimeFormatter.ofPattern("MM-dd HH:mm")
+    return "最近同步 ${formatter.format(Instant.ofEpochMilli(epochMillis).atZone(ZoneId.systemDefault()))}"
+}
+
 private fun formatDuration(durationMillis: Long): String {
     val totalSeconds = durationMillis / 1_000
     val minutes = totalSeconds / 60
@@ -2037,7 +2947,7 @@ private fun formatDuration(durationMillis: Long): String {
 
 @Preview(showBackground = true)
 @Composable
-fun GreetingPreview() {
+private fun GreetingPreview() {
     PlexToSonosPlayerTheme {
         PlexAlbumScreen()
     }

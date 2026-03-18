@@ -39,7 +39,7 @@ data class PlexAlbum(
     val section: PlexSection,
 ) {
     val isFavorite: Boolean
-        get() = userRating != null
+        get() = (userRating ?: 0f) > 0f
 }
 
 data class PlexTrackStream(
@@ -48,7 +48,11 @@ data class PlexTrackStream(
     val streamUrl: String,
     val partKey: String,
     val durationMillis: Long?,
+    val userRating: Float?,
 )
+
+val PlexTrackStream.isFavorite: Boolean
+    get() = (userRating ?: 0f) > 0f
 
 data class PlexAlbumResult(
     val serverName: String,
@@ -60,6 +64,17 @@ data class PlexAlbumsResult(
     val serverName: String,
     val sections: List<PlexSection>,
     val albums: List<PlexAlbum>,
+)
+
+data class PlexArtist(
+    val ratingKey: String,
+    val title: String,
+    val thumbUrl: String?,
+)
+
+data class PlexArtistsResult(
+    val serverName: String,
+    val artists: List<PlexArtist>,
 )
 
 data class PlexAlbumTracksResult(
@@ -104,6 +119,26 @@ class PlexClient(private val config: PlexAuthConfig) {
         )
     }
 
+    suspend fun fetchArtists(): PlexArtistsResult = withContext(Dispatchers.IO) {
+        val token = resolveToken()
+        val server = resolveServer(token)
+        val accessToken = server.accessToken.orEmpty().ifBlank { token }
+        val sections = listMusicSections(server, token)
+        if (sections.isEmpty()) {
+            error("服务器 '${server.name}' 上没有找到音乐库。")
+        }
+
+        val artists = sections
+            .flatMap { section -> listArtists(server, section, accessToken) }
+            .distinctBy { it.ratingKey }
+            .sortedBy { it.title.lowercase() }
+
+        PlexArtistsResult(
+            serverName = server.name,
+            artists = artists,
+        )
+    }
+
     suspend fun fetchFavoriteAlbums(): PlexAlbumsResult = withContext(Dispatchers.IO) {
         val albumsResult = fetchAlbums()
         albumsResult.copy(
@@ -129,6 +164,23 @@ class PlexClient(private val config: PlexAuthConfig) {
             serverName = server.name,
             album = album,
             tracks = listAlbumTracks(server, album, token),
+        )
+    }
+
+    suspend fun setFavorite(ratingKey: String, isFavorite: Boolean): Unit = withContext(Dispatchers.IO) {
+        val normalizedRatingKey = ratingKey.trim()
+        require(normalizedRatingKey.isNotEmpty()) { "缺少 Plex ratingKey。" }
+
+        val token = resolveToken()
+        val server = resolveServer(token)
+        request(
+            method = "PUT",
+            url = buildRateUrl(
+                serverUri = server.uri,
+                ratingKey = normalizedRatingKey,
+                rating = if (isFavorite) 10 else 0,
+            ),
+            headers = mapOf("X-Plex-Token" to server.accessToken.orEmpty().ifBlank { token }),
         )
     }
 
@@ -265,6 +317,34 @@ class PlexClient(private val config: PlexAuthConfig) {
         }
     }
 
+    private fun listArtists(server: PlexServer, section: PlexSection, token: String): List<PlexArtist> {
+        val response = request(
+            method = "GET",
+            url = "${server.uri}/library/sections/${section.key}/all?type=8",
+            headers = mapOf("X-Plex-Token" to server.accessToken.orEmpty().ifBlank { token }),
+        )
+        val root = parseXml(response.body)
+        val directories = root.getElementsByTagName("Directory")
+        return buildList {
+            for (index in 0 until directories.length) {
+                val directory = directories.item(index) as? Element ?: continue
+                val title = directory.getAttribute("title").trim()
+                val ratingKey = directory.getAttribute("ratingKey").trim()
+                if (title.isBlank() || ratingKey.isBlank()) continue
+                add(
+                    PlexArtist(
+                        ratingKey = ratingKey,
+                        title = title,
+                        thumbUrl = directory.getAttribute("thumb")
+                            .trim()
+                            .takeIf { it.isNotBlank() }
+                            ?.let { buildMediaUrl(server.uri, it, token) },
+                    )
+                )
+            }
+        }
+    }
+
     private fun listAlbumTracks(server: PlexServer, album: PlexAlbum, token: String): List<PlexTrackStream> {
         val accessToken = server.accessToken.orEmpty().ifBlank { token }
         val response = request(
@@ -292,6 +372,7 @@ class PlexClient(private val config: PlexAuthConfig) {
                         partKey = partKey,
                         streamUrl = buildStreamUrl(server.uri, partKey, accessToken),
                         durationMillis = durationMillis,
+                        userRating = track.getAttribute("userRating").trim().toFloatOrNull(),
                     )
                 )
             }
@@ -379,6 +460,9 @@ private fun buildMediaUrl(serverUri: String, mediaPath: String, token: String): 
     val separator = if (mediaPath.contains("?")) "&" else "?"
     return "${serverUri.trimEnd('/')}$mediaPath$separator${"X-Plex-Token"}=$token"
 }
+
+private fun buildRateUrl(serverUri: String, ratingKey: String, rating: Int): String =
+    "${serverUri.trimEnd('/')}/:/rate?identifier=com.plexapp.plugins.library&key=$ratingKey&rating=$rating"
 
 private fun Element.childText(tagName: String): String? {
     val nodes = getElementsByTagName(tagName)

@@ -5,7 +5,15 @@
       "Bash(git add:*)",
       "WebSearch",
       "WebFetch(domain:github.com)",
-      "Bash(./gradlew :app:lintDebug --console=plain)"
+      "Bash(./gradlew :app:lintDebug --console=plain)",
+      "Bash(adb logcat:*)",
+      "Bash(./gradlew assembleDebug)",
+      "Bash(./gradlew clean:*)",
+      "Bash(cd:*)",
+      "Bash(./gradlew --version)",
+      "Bash(grep -E \"\\\\.kt$\")",
+      "Bash(python3:*)",
+      "Bash(python -c \"f=open\\(''app/src/main/java/com/lux032/plextosonosplayer/MainActivity.kt'',''r'',encoding=''utf-8''\\);lines=f.readlines\\(\\);f.close\\(\\);d=0:*)"
     ]
   }
 }

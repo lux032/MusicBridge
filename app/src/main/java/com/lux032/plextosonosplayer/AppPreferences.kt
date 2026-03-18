@@ -54,6 +54,17 @@ class AppPreferences(context: Context) {
         }
     }
 
+    fun loadLastAlbumSyncEpochMillis(): Long? =
+        sharedPreferences
+            .getLong(KEY_LAST_ALBUM_SYNC_EPOCH_MILLIS, -1L)
+            .takeIf { it > 0L }
+
+    fun saveLastAlbumSyncEpochMillis(epochMillis: Long) {
+        sharedPreferences.edit {
+            putLong(KEY_LAST_ALBUM_SYNC_EPOCH_MILLIS, epochMillis)
+        }
+    }
+
     private companion object {
         const val KEY_USERNAME = "username"
         const val KEY_PASSWORD = "password"
@@ -61,6 +72,7 @@ class AppPreferences(context: Context) {
         const val KEY_SERVER = "server"
         const val KEY_BASE_URL = "base_url"
         const val KEY_RECENT_PLAYED_ALBUM_KEYS = "recent_played_album_keys"
+        const val KEY_LAST_ALBUM_SYNC_EPOCH_MILLIS = "last_album_sync_epoch_millis"
         const val RECENT_PLAYED_SEPARATOR = "|"
         const val MAX_RECENT_PLAYED = 100
     }
