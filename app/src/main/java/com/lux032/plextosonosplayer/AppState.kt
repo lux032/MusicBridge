@@ -14,6 +14,7 @@ import com.lux032.plextosonosplayer.plex.PlexAuthConfig
 import com.lux032.plextosonosplayer.plex.PlexClient
 import com.lux032.plextosonosplayer.plex.PlexTrackStream
 import com.lux032.plextosonosplayer.plex.isFavorite
+import com.lux032.plextosonosplayer.sonos.SonosPlaybackStatus
 import com.lux032.plextosonosplayer.sonos.SonosController
 import com.lux032.plextosonosplayer.sonos.SonosDiscovery
 import com.lux032.plextosonosplayer.sonos.SonosRoom
@@ -65,6 +66,7 @@ class AppState(
     var volumeSyncKey by mutableIntStateOf(0)
     var volumeChangeJob by mutableStateOf<Job?>(null)
     var albumPlaybackJob by mutableStateOf<Job?>(null)
+    var playbackReportingJob by mutableStateOf<Job?>(null)
     var miniPlayerState by mutableStateOf<MiniPlayerState?>(null)
     var recentPlayedAlbumKeys by mutableStateOf(appPreferences.loadRecentPlayedAlbumKeys())
     var artists by mutableStateOf<List<ArtistSummary>>(emptyList())
@@ -165,6 +167,7 @@ class AppState(
     ) {
         val targetTrack = tracks.getOrNull(trackIndex) ?: return
         albumPlaybackJob?.cancel()
+        playbackReportingJob?.cancel()
         appPreferences.markAlbumPlayed(album.ratingKey)
         recentPlayedAlbumKeys = appPreferences.loadRecentPlayedAlbumKeys()
         selectedSonosRoom = room
@@ -188,6 +191,11 @@ class AppState(
                     albumTitle = album.title,
                 )
             }.onSuccess {
+                startPlaybackReporting(
+                    room = room,
+                    tracks = tracks,
+                    initialTrackIndex = trackIndex,
+                )
                 actionMessage = "已将 ${targetTrack.title} 推送到 ${room.roomName}"
             }.onFailure {
                 errorMessage = it.message ?: "未知错误"
@@ -202,6 +210,7 @@ class AppState(
         startIndex: Int = 0,
     ) {
         albumPlaybackJob?.cancel()
+        playbackReportingJob?.cancel()
         appPreferences.markAlbumPlayed(albumTrackResult.album.ratingKey)
         recentPlayedAlbumKeys = appPreferences.loadRecentPlayedAlbumKeys()
         selectedSonosRoom = room
@@ -228,6 +237,11 @@ class AppState(
                         if (!didStartFirstTrack) {
                             didStartFirstTrack = true
                             isPlaybackCommandLoading = false
+                            startPlaybackReporting(
+                                room = room,
+                                tracks = albumTrackResult.tracks,
+                                initialTrackIndex = index,
+                            )
                         }
                         miniPlayerState = miniPlayerState?.copy(
                             currentIndex = index,
@@ -542,5 +556,209 @@ class AppState(
             }
             isPlaybackCommandLoading = false
         }
+    }
+
+    private fun startPlaybackReporting(
+        room: SonosRoom,
+        tracks: List<PlexTrackStream>,
+        initialTrackIndex: Int,
+    ) {
+        val normalizedInitialIndex = initialTrackIndex.coerceIn(0, tracks.lastIndex)
+        playbackReportingJob?.cancel()
+        playbackReportingJob = scope.launch {
+            val plexClient = client()
+            val scrobbledTrackKeys = mutableSetOf<String>()
+            var currentTrack = tracks.getOrNull(normalizedInitialIndex) ?: return@launch
+            var currentTrackTimeMillis = 0L
+            var currentTrackDurationMillis = currentTrack.durationMillis
+            var lastReportedState: String? = null
+            var lastTimelineReportAt = 0L
+            var stoppedPollCount = 0
+
+            reportTimelineSafely(
+                plexClient = plexClient,
+                track = currentTrack,
+                state = "playing",
+                timeMillis = 0L,
+                durationMillis = currentTrackDurationMillis,
+                continuing = false,
+            )
+            lastReportedState = "playing"
+            lastTimelineReportAt = System.currentTimeMillis()
+
+            while (true) {
+                delay(1_000)
+
+                val latestMiniPlayerState = miniPlayerState ?: break
+                if (latestMiniPlayerState.room.coordinatorUuid != room.coordinatorUuid) break
+
+                val status = runCatching { sonosController.getPlaybackStatus(room) }.getOrNull() ?: continue
+                val resolvedTrack = resolveActiveTrack(tracks, latestMiniPlayerState, status) ?: continue
+                val playbackState = status.toPlexPlaybackState()
+                val positionMillis = ((status.relTimeSeconds ?: 0) * 1_000L).coerceAtLeast(0L)
+                val durationMillis = resolvedTrack.durationMillis
+                    ?: status.trackDurationSeconds?.times(1_000L)
+
+                if (resolvedTrack.ratingKey != currentTrack.ratingKey) {
+                    reportStoppedTrackIfNeeded(
+                        plexClient = plexClient,
+                        track = currentTrack,
+                        timeMillis = currentTrackTimeMillis,
+                        durationMillis = currentTrackDurationMillis,
+                        continuing = true,
+                    )
+                    scrobbleIfNeeded(
+                        plexClient = plexClient,
+                        scrobbledTrackKeys = scrobbledTrackKeys,
+                        track = currentTrack,
+                        timeMillis = currentTrackTimeMillis,
+                        durationMillis = currentTrackDurationMillis,
+                    )
+
+                    currentTrack = resolvedTrack
+                    currentTrackTimeMillis = 0L
+                    currentTrackDurationMillis = durationMillis
+                    lastReportedState = null
+                    lastTimelineReportAt = 0L
+                    stoppedPollCount = 0
+                }
+
+                if (positionMillis > 0L || playbackState != "stopped") {
+                    currentTrackTimeMillis = positionMillis
+                }
+                if (durationMillis != null) {
+                    currentTrackDurationMillis = durationMillis
+                }
+
+                miniPlayerState = latestMiniPlayerState.copy(
+                    currentIndex = tracks.indexOfFirst { it.ratingKey == currentTrack.ratingKey }
+                        .takeIf { it >= 0 } ?: latestMiniPlayerState.currentIndex,
+                    isPaused = playbackState == "paused",
+                )
+
+                val now = System.currentTimeMillis()
+                val shouldReportTimeline = playbackState != lastReportedState ||
+                    now - lastTimelineReportAt >= 10_000L
+
+                if (shouldReportTimeline) {
+                    reportTimelineSafely(
+                        plexClient = plexClient,
+                        track = currentTrack,
+                        state = playbackState,
+                        timeMillis = currentTrackTimeMillis,
+                        durationMillis = currentTrackDurationMillis,
+                        continuing = false,
+                    )
+                    lastReportedState = playbackState
+                    lastTimelineReportAt = now
+                }
+
+                scrobbleIfNeeded(
+                    plexClient = plexClient,
+                    scrobbledTrackKeys = scrobbledTrackKeys,
+                    track = currentTrack,
+                    timeMillis = currentTrackTimeMillis,
+                    durationMillis = currentTrackDurationMillis,
+                )
+
+                if (playbackState == "stopped") {
+                    stoppedPollCount += 1
+                    if (stoppedPollCount >= 3) {
+                        reportStoppedTrackIfNeeded(
+                            plexClient = plexClient,
+                            track = currentTrack,
+                            timeMillis = currentTrackTimeMillis,
+                            durationMillis = currentTrackDurationMillis,
+                            continuing = false,
+                        )
+                        scrobbleIfNeeded(
+                            plexClient = plexClient,
+                            scrobbledTrackKeys = scrobbledTrackKeys,
+                            track = currentTrack,
+                            timeMillis = currentTrackTimeMillis,
+                            durationMillis = currentTrackDurationMillis,
+                        )
+                        break
+                    }
+                } else {
+                    stoppedPollCount = 0
+                }
+            }
+        }
+    }
+
+    private suspend fun reportTimelineSafely(
+        plexClient: PlexClient,
+        track: PlexTrackStream,
+        state: String,
+        timeMillis: Long,
+        durationMillis: Long?,
+        continuing: Boolean,
+    ) {
+        runCatching {
+            plexClient.reportTimeline(
+                ratingKey = track.ratingKey,
+                state = state,
+                timeMillis = timeMillis,
+                durationMillis = durationMillis,
+                continuing = continuing,
+            )
+        }
+    }
+
+    private suspend fun reportStoppedTrackIfNeeded(
+        plexClient: PlexClient,
+        track: PlexTrackStream,
+        timeMillis: Long,
+        durationMillis: Long?,
+        continuing: Boolean,
+    ) {
+        reportTimelineSafely(
+            plexClient = plexClient,
+            track = track,
+            state = "stopped",
+            timeMillis = timeMillis,
+            durationMillis = durationMillis,
+            continuing = continuing,
+        )
+    }
+
+    private suspend fun scrobbleIfNeeded(
+        plexClient: PlexClient,
+        scrobbledTrackKeys: MutableSet<String>,
+        track: PlexTrackStream,
+        timeMillis: Long,
+        durationMillis: Long?,
+    ) {
+        if (track.ratingKey in scrobbledTrackKeys) return
+
+        val effectiveDuration = durationMillis?.takeIf { it > 0L } ?: return
+        val scrobbleThreshold = (effectiveDuration * 0.9f).toLong()
+        if (timeMillis < scrobbleThreshold) return
+
+        runCatching {
+            plexClient.scrobble(track.ratingKey)
+        }.onSuccess {
+            scrobbledTrackKeys += track.ratingKey
+        }
+    }
+
+    private fun resolveActiveTrack(
+        tracks: List<PlexTrackStream>,
+        latestMiniPlayerState: MiniPlayerState,
+        status: SonosPlaybackStatus,
+    ): PlexTrackStream? {
+        val normalizedCurrentUri = status.currentTrackUri.orEmpty().substringBefore('?')
+        if (normalizedCurrentUri.isNotBlank()) {
+            tracks.firstOrNull { it.streamUrl.substringBefore('?') == normalizedCurrentUri }?.let { return it }
+        }
+        return tracks.getOrNull(latestMiniPlayerState.currentIndex)
+    }
+
+    private fun SonosPlaybackStatus.toPlexPlaybackState(): String = when {
+        transportState.equals("PLAYING", ignoreCase = true) -> "playing"
+        transportState.equals("PAUSED_PLAYBACK", ignoreCase = true) -> "paused"
+        transportState.equals("TRANSITIONING", ignoreCase = true) -> "buffering"
+        else -> "stopped"
     }
 }

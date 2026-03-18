@@ -8,6 +8,7 @@ import org.w3c.dom.Element
 import java.io.ByteArrayInputStream
 import java.io.InputStream
 import java.net.HttpURLConnection
+import java.net.URLEncoder
 import java.net.URL
 import java.nio.charset.StandardCharsets
 import java.util.UUID
@@ -88,6 +89,8 @@ class PlexClient(private val config: PlexAuthConfig) {
     private val appVersion = "0.1.0"
     private val product = "Android App"
     private val platform = "Android ${Build.VERSION.RELEASE ?: "Unknown"}"
+    private var cachedToken: String? = null
+    private var cachedServer: PlexServer? = null
 
     suspend fun fetchAlbumNames(): PlexAlbumResult = withContext(Dispatchers.IO) {
         val albumsResult = fetchAlbums()
@@ -171,8 +174,8 @@ class PlexClient(private val config: PlexAuthConfig) {
         val normalizedRatingKey = ratingKey.trim()
         require(normalizedRatingKey.isNotEmpty()) { "缺少 Plex ratingKey。" }
 
-        val token = resolveToken()
-        val server = resolveServer(token)
+        val token = resolvedToken()
+        val server = resolvedServer(token)
         request(
             method = "PUT",
             url = buildRateUrl(
@@ -183,6 +186,51 @@ class PlexClient(private val config: PlexAuthConfig) {
             headers = mapOf("X-Plex-Token" to server.accessToken.orEmpty().ifBlank { token }),
         )
     }
+
+    suspend fun reportTimeline(
+        ratingKey: String,
+        state: String,
+        timeMillis: Long,
+        durationMillis: Long?,
+        continuing: Boolean = false,
+    ): Unit = withContext(Dispatchers.IO) {
+        val normalizedRatingKey = ratingKey.trim()
+        require(normalizedRatingKey.isNotEmpty()) { "缺少 Plex ratingKey。" }
+
+        val token = resolvedToken()
+        val server = resolvedServer(token)
+        request(
+            method = "POST",
+            url = buildTimelineUrl(
+                serverUri = server.uri,
+                ratingKey = normalizedRatingKey,
+                state = state,
+                timeMillis = timeMillis.coerceAtLeast(0L),
+                durationMillis = durationMillis?.coerceAtLeast(0L),
+                continuing = continuing,
+            ),
+            headers = mapOf("X-Plex-Token" to server.accessToken.orEmpty().ifBlank { token }),
+        )
+    }
+
+    suspend fun scrobble(ratingKey: String): Unit = withContext(Dispatchers.IO) {
+        val normalizedRatingKey = ratingKey.trim()
+        require(normalizedRatingKey.isNotEmpty()) { "缺少 Plex ratingKey。" }
+
+        val token = resolvedToken()
+        val server = resolvedServer(token)
+        request(
+            method = "PUT",
+            url = buildScrobbleUrl(server.uri, normalizedRatingKey),
+            headers = mapOf("X-Plex-Token" to server.accessToken.orEmpty().ifBlank { token }),
+        )
+    }
+
+    private fun resolvedToken(): String =
+        cachedToken ?: resolveToken().also { cachedToken = it }
+
+    private fun resolvedServer(token: String): PlexServer =
+        cachedServer ?: resolveServer(token).also { cachedServer = it }
 
     private fun resolveToken(): String {
         config.token?.takeIf { it.isNotBlank() }?.let { return it }
@@ -464,6 +512,48 @@ private fun buildMediaUrl(serverUri: String, mediaPath: String, token: String): 
 private fun buildRateUrl(serverUri: String, ratingKey: String, rating: Int): String =
     "${serverUri.trimEnd('/')}/:/rate?identifier=com.plexapp.plugins.library&key=$ratingKey&rating=$rating"
 
+private fun buildTimelineUrl(
+    serverUri: String,
+    ratingKey: String,
+    state: String,
+    timeMillis: Long,
+    durationMillis: Long?,
+    continuing: Boolean,
+): String = buildPlexUrl(
+    serverUri = serverUri,
+    path = "/:/timeline",
+    queryParameters = listOfNotNull(
+        "containerKey" to "/playQueues/0",
+        "key" to "/library/metadata/$ratingKey",
+        "ratingKey" to ratingKey,
+        "identifier" to "com.plexapp.plugins.library",
+        "state" to state,
+        "time" to timeMillis.toString(),
+        durationMillis?.let { "duration" to it.toString() },
+        "continuing" to if (continuing) "1" else "0",
+    ),
+)
+
+private fun buildScrobbleUrl(serverUri: String, ratingKey: String): String = buildPlexUrl(
+    serverUri = serverUri,
+    path = "/:/scrobble",
+    queryParameters = listOf(
+        "identifier" to "com.plexapp.plugins.library",
+        "key" to ratingKey,
+    ),
+)
+
+private fun buildPlexUrl(
+    serverUri: String,
+    path: String,
+    queryParameters: List<Pair<String, String>>,
+): String {
+    val query = queryParameters.joinToString("&") { (key, value) ->
+        "${key.urlEncode()}=${value.urlEncode()}"
+    }
+    return "${serverUri.trimEnd('/')}$path?$query"
+}
+
 private fun Element.childText(tagName: String): String? {
     val nodes = getElementsByTagName(tagName)
     if (nodes.length == 0) return null
@@ -481,3 +571,6 @@ private fun Element.firstPartKey(): String? {
     }
     return null
 }
+
+private fun String.urlEncode(): String =
+    URLEncoder.encode(this, StandardCharsets.UTF_8.name())
