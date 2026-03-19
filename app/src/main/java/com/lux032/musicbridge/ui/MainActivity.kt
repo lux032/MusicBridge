@@ -209,6 +209,14 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
     val isMiniPlayerVisible = activeSection != AppSection.PlaybackDetail && state.miniPlayerState != null
     val overlayRoom = state.selectedSonosRoom
 
+    fun shouldPersistVerticalScroll(section: AppSection): Boolean =
+        when (section) {
+            AppSection.AlbumDetail,
+            AppSection.ArtistAlbums,
+            AppSection.PlaylistDetail -> false
+            else -> true
+        }
+
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -337,11 +345,17 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                     }
                 } else {
                     val scrollState = rememberScrollState(
-                        initial = state.getSavedScrollValue(currentSection)
+                        initial = if (shouldPersistVerticalScroll(currentSection)) {
+                            state.getSavedScrollValue(currentSection)
+                        } else {
+                            0
+                        }
                     )
                     DisposableEffect(Unit) {
                         onDispose {
-                            state.saveScrollValue(currentSection, scrollState.value)
+                            if (shouldPersistVerticalScroll(currentSection)) {
+                                state.saveScrollValue(currentSection, scrollState.value)
+                            }
                         }
                     }
                     Column(
