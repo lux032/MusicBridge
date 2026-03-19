@@ -210,6 +210,23 @@ class PlexClient(private val config: PlexAuthConfig) {
         )
     }
 
+    suspend fun fetchAllAlbumTracks(
+        albums: List<PlexAlbum>,
+        onProgress: (current: Int, total: Int) -> Unit = { _, _ -> },
+    ): Map<String, List<PlexTrackStream>> = withContext(Dispatchers.IO) {
+        val token = resolveToken()
+        val server = resolveServer(token)
+        val total = albums.size
+        val result = mutableMapOf<String, List<PlexTrackStream>>()
+        albums.forEachIndexed { index, album ->
+            runCatching {
+                result[album.ratingKey] = listAlbumTracks(server, album, token)
+            }
+            onProgress(index + 1, total)
+        }
+        result
+    }
+
     suspend fun fetchPlaylists(): PlexPlaylistsResult = withContext(Dispatchers.IO) {
         val token = resolveToken()
         val server = resolveServer(token)

@@ -1,6 +1,7 @@
 package com.lux032.musicbridge
 
 import com.lux032.musicbridge.plex.PlexAlbum
+import com.lux032.musicbridge.plex.PlexAlbumTracksResult
 import com.lux032.musicbridge.plex.PlexPlaylist
 import com.lux032.musicbridge.plex.PlexPlaylistTracksResult
 import com.lux032.musicbridge.plex.PlexSection
@@ -50,9 +51,10 @@ internal class AppStateLibraryCoordinator(
         }
         state.errorMessage = null
         state.actionMessage = null
-        runCatching {
+        val albumsResult = runCatching {
             state.client().fetchAlbums()
-        }.onSuccess {
+        }
+        albumsResult.onSuccess {
             state.allAlbums = it.albums
             withContext(Dispatchers.IO) {
                 state.albumLocalStore.replaceAllAlbums(it.albums)
@@ -66,7 +68,16 @@ internal class AppStateLibraryCoordinator(
                 state.selectedAlbum = null
                 state.trackResult = null
             }
-            state.actionMessage = "已同步 ${it.albums.size} 张专辑到本地"
+            state.actionMessage = "已同步 ${it.albums.size} 张专辑，正在同步曲目..."
+            val client = state.client()
+            val allTracks = client.fetchAllAlbumTracks(it.albums) { current, total ->
+                state.actionMessage = "正在同步曲目 $current/$total"
+            }
+            withContext(Dispatchers.IO) {
+                state.albumLocalStore.replaceAllAlbumTracks(allTracks)
+            }
+            val totalTrackCount = allTracks.values.sumOf { tracks -> tracks.size }
+            state.actionMessage = "已同步 ${it.albums.size} 张专辑、${totalTrackCount} 首曲目"
         }.onFailure {
             state.selectedAlbum = null
             state.trackResult = null
@@ -107,20 +118,28 @@ internal class AppStateLibraryCoordinator(
     }
 
     fun openAlbumDetail(album: PlexAlbum) {
-        state.isLoading = true
         state.errorMessage = null
         state.actionMessage = null
         state.selectedAlbum = album
         state.scope.launch {
-            runCatching {
-                state.client().fetchAlbumTrackStreams(album)
-            }.onSuccess {
-                state.trackResult = it
-                state.navigateTo(AppSection.AlbumDetail)
-            }.onFailure {
-                state.errorMessage = it.message ?: "未知错误"
+            val cachedTracks = withContext(Dispatchers.IO) {
+                state.albumLocalStore.getAlbumTracks(album.ratingKey)
             }
-            state.isLoading = false
+            if (cachedTracks.isNotEmpty()) {
+                state.trackResult = PlexAlbumTracksResult("", album, cachedTracks)
+                state.navigateTo(AppSection.AlbumDetail)
+            } else {
+                state.isLoading = true
+                runCatching {
+                    state.client().fetchAlbumTrackStreams(album)
+                }.onSuccess {
+                    state.trackResult = it
+                    state.navigateTo(AppSection.AlbumDetail)
+                }.onFailure {
+                    state.errorMessage = it.message ?: "未知错误"
+                }
+                state.isLoading = false
+            }
         }
     }
 
@@ -256,6 +275,10 @@ internal class AppStateLibraryCoordinator(
             } else {
                 state.albumLocalStore.deleteFavoriteTrack(updatedTrack.ratingKey)
             }
+            state.albumLocalStore.updateAlbumTrackFavoriteStatus(
+                updatedTrack.ratingKey,
+                updatedTrack.userRating,
+            )
         }
         state.miniPlayerState = state.miniPlayerState?.let { current ->
             if (current.tracks.none { it.ratingKey == updatedTrack.ratingKey }) {

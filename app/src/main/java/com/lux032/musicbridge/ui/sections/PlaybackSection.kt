@@ -1025,6 +1025,8 @@ internal suspend fun playAlbumSequentially(
         }
         onTrackChanged(index, track, startPositionMillis)
 
+        delay(2_000)
+
         waitForTrackToFinish(
             sonosController = sonosController,
             room = room,

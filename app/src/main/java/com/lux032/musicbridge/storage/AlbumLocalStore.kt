@@ -201,6 +201,56 @@ class AlbumLocalStore(context: Context) {
         )
     }
 
+    fun getAlbumTracks(albumRatingKey: String): List<PlexTrackStream> =
+        helper.readableDatabase.query(
+            AlbumDatabaseHelper.TABLE_ALBUM_TRACKS,
+            null,
+            "${AlbumDatabaseHelper.COLUMN_TRACK_ALBUM_RATING_KEY} = ?",
+            arrayOf(albumRatingKey),
+            null,
+            null,
+            null,
+        ).use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) {
+                    add(cursor.toTrack())
+                }
+            }
+        }
+
+    fun replaceAllAlbumTracks(albumTracks: Map<String, List<PlexTrackStream>>) {
+        val database = helper.writableDatabase
+        database.beginTransaction()
+        try {
+            database.delete(AlbumDatabaseHelper.TABLE_ALBUM_TRACKS, null, null)
+            albumTracks.values.forEach { tracks ->
+                tracks.forEach { track ->
+                    database.insertOrThrow(
+                        AlbumDatabaseHelper.TABLE_ALBUM_TRACKS,
+                        null,
+                        track.toContentValues(),
+                    )
+                }
+            }
+            database.setTransactionSuccessful()
+        } finally {
+            database.endTransaction()
+        }
+    }
+
+    fun updateAlbumTrackFavoriteStatus(ratingKey: String, userRating: Float?) {
+        val values = ContentValues().apply {
+            if (userRating != null) put(AlbumDatabaseHelper.COLUMN_TRACK_USER_RATING, userRating)
+            else putNull(AlbumDatabaseHelper.COLUMN_TRACK_USER_RATING)
+        }
+        helper.writableDatabase.update(
+            AlbumDatabaseHelper.TABLE_ALBUM_TRACKS,
+            values,
+            "${AlbumDatabaseHelper.COLUMN_TRACK_RATING_KEY} = ?",
+            arrayOf(ratingKey),
+        )
+    }
+
     private fun android.database.Cursor.toAlbum(): PlexAlbum {
         fun string(name: String): String = getString(getColumnIndexOrThrow(name))
         fun nullableString(name: String): String? = getString(getColumnIndexOrThrow(name))
@@ -290,6 +340,7 @@ private class AlbumDatabaseHelper(context: Context) :
     override fun onCreate(db: SQLiteDatabase) {
         createAlbumsTable(db)
         createTracksTable(db)
+        createAlbumTracksTable(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -299,14 +350,18 @@ private class AlbumDatabaseHelper(context: Context) :
             db.execSQL("DROP TABLE IF EXISTS $TABLE_TRACKS")
             createTracksTable(db)
         }
+        if (oldVersion < 4) {
+            createAlbumTracksTable(db)
+        }
     }
 
     companion object {
         private const val DATABASE_NAME = "plex_album_cache.db"
-        private const val DATABASE_VERSION = 3
+        private const val DATABASE_VERSION = 4
 
         const val TABLE_ALBUMS = "albums"
         const val TABLE_TRACKS = "tracks"
+        const val TABLE_ALBUM_TRACKS = "album_tracks"
         const val COLUMN_RATING_KEY = "rating_key"
         const val COLUMN_TITLE = "title"
         const val COLUMN_ARTIST_NAME = "artist_name"
@@ -378,6 +433,28 @@ private class AlbumDatabaseHelper(context: Context) :
         )
         db.execSQL(
             "CREATE INDEX IF NOT EXISTS index_tracks_user_rating ON $TABLE_TRACKS($COLUMN_TRACK_USER_RATING)"
+        )
+    }
+
+    private fun createAlbumTracksTable(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS $TABLE_ALBUM_TRACKS (
+                $COLUMN_TRACK_RATING_KEY TEXT PRIMARY KEY,
+                $COLUMN_TRACK_TITLE TEXT NOT NULL,
+                $COLUMN_TRACK_STREAM_URL TEXT NOT NULL,
+                $COLUMN_TRACK_PART_KEY TEXT NOT NULL,
+                $COLUMN_TRACK_DURATION_MILLIS INTEGER,
+                $COLUMN_TRACK_USER_RATING REAL,
+                $COLUMN_TRACK_ALBUM_RATING_KEY TEXT,
+                $COLUMN_TRACK_ALBUM_TITLE TEXT,
+                $COLUMN_TRACK_ARTIST_NAME TEXT,
+                $COLUMN_TRACK_THUMB_URL TEXT
+            )
+            """.trimIndent()
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS index_album_tracks_album_key ON $TABLE_ALBUM_TRACKS($COLUMN_TRACK_ALBUM_RATING_KEY)"
         )
     }
 }
