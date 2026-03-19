@@ -72,10 +72,10 @@ internal fun HomeSection(
             }
     }
 
-    HomeStatusCard(
-        selectedRoom = selectedSonosRoom,
-        lastAlbumSyncEpochMillis = lastAlbumSyncEpochMillis,
-    )
+//    HomeStatusCard(
+//        selectedRoom = selectedSonosRoom,
+//        lastAlbumSyncEpochMillis = lastAlbumSyncEpochMillis,
+//    )
 
     errorMessage?.let { MessageCard(label = Strings.error, message = it, tone = MessageTone.Error) }
 

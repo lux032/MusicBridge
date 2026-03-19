@@ -10,6 +10,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.LazyItemScope
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -205,128 +206,129 @@ internal fun PlaylistDetailSection(
         return
     }
 
-    Column(
+    LazyColumn(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        OutlinedButton(onClick = onBack) {
-            Text(Strings.backToPlaylists)
+        item {
+            OutlinedButton(onClick = onBack) {
+                Text(Strings.backToPlaylists)
+            }
         }
 
-        AsyncAlbumArtwork(
-            imageUrl = currentResult.playlist.thumbUrl,
-            title = currentResult.playlist.title,
-            modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(1.3f)
-                .clip(RoundedCornerShape(16.dp)),
-        )
+        item {
+            AsyncAlbumArtwork(
+                imageUrl = currentResult.playlist.thumbUrl,
+                title = currentResult.playlist.title,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(1.3f)
+                    .clip(RoundedCornerShape(16.dp)),
+            )
+        }
 
-        Column(
-            modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text(
-                currentResult.playlist.title,
-                style = MaterialTheme.typography.headlineMedium,
-                color = AppColors.TextPrimary,
-                fontWeight = FontWeight.Bold,
-            )
-            Text(
-                text = Strings.tracks(currentResult.tracks.size),
-                color = AppColors.TextSecondary,
-                style = MaterialTheme.typography.bodyMedium,
-            )
-            Text(
-                text = selectedRoom?.let { Strings.willPushTo(it.roomName) } ?: Strings.noRoomSelectedDesc,
-                color = AppColors.TextTertiary,
-            )
-            Row(
+        item {
+            Column(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalAlignment = Alignment.CenterVertically,
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                IconCircleButton(
-                    onClick = { selectedRoom?.let { onPlayPlaylist(currentResult, it) } },
-                    enabled = selectedRoom != null && !isPlaybackLoading,
-                    highlighted = true,
+                Text(
+                    currentResult.playlist.title,
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = AppColors.TextPrimary,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(
+                    text = Strings.tracks(currentResult.tracks.size),
+                    color = AppColors.TextSecondary,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Text(
+                    text = selectedRoom?.let { Strings.willPushTo(it.roomName) } ?: Strings.noRoomSelectedDesc,
+                    color = AppColors.TextTertiary,
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    PlayerIconGraphic(
-                        icon = PlayerIcon.Play,
-                        tint = if (selectedRoom != null) AppColors.TextPrimary else AppColors.TextTertiary,
-                        modifier = Modifier.size(22.dp),
-                    )
-                }
-                IconCircleButton(
-                    onClick = { selectedRoom?.let { onShufflePlaylist(currentResult, it) } },
-                    enabled = selectedRoom != null && !isPlaybackLoading,
-                    highlighted = false,
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Shuffle,
-                        contentDescription = Strings.shuffle,
-                        tint = if (selectedRoom != null) AppColors.TextPrimary else AppColors.TextTertiary,
-                        modifier = Modifier.size(22.dp),
-                    )
+                    IconCircleButton(
+                        onClick = { selectedRoom?.let { onPlayPlaylist(currentResult, it) } },
+                        enabled = selectedRoom != null && !isPlaybackLoading,
+                        highlighted = true,
+                    ) {
+                        PlayerIconGraphic(
+                            icon = PlayerIcon.Play,
+                            tint = if (selectedRoom != null) AppColors.TextPrimary else AppColors.TextTertiary,
+                            modifier = Modifier.size(22.dp),
+                        )
+                    }
+                    IconCircleButton(
+                        onClick = { selectedRoom?.let { onShufflePlaylist(currentResult, it) } },
+                        enabled = selectedRoom != null && !isPlaybackLoading,
+                        highlighted = false,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Shuffle,
+                            contentDescription = Strings.shuffle,
+                            tint = if (selectedRoom != null) AppColors.TextPrimary else AppColors.TextTertiary,
+                            modifier = Modifier.size(22.dp),
+                        )
+                    }
                 }
             }
         }
 
-        Column(
-            modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            currentResult.tracks.forEachIndexed { index, track ->
-                Surface(
-                    modifier = Modifier
-                        .clickable(
-                            enabled = selectedRoom != null && !isPlaybackLoading,
-                        ) {
-                            onPlayTrack(currentResult.playlist, track, selectedRoom!!, index)
-                        },
-                    shape = RoundedCornerShape(12.dp),
-                    color = AppColors.Surface,
-                    border = BorderStroke(1.dp, AppColors.Border),
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 14.dp, vertical = 12.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
+        itemsIndexed(currentResult.tracks, key = { index, track -> track.ratingKey ?: index }) { index, track ->
+            Surface(
+                modifier = Modifier
+                    .clickable(
+                        enabled = selectedRoom != null && !isPlaybackLoading,
                     ) {
-                        Column(
-                            modifier = Modifier.weight(1f),
-                            verticalArrangement = Arrangement.spacedBy(3.dp),
-                        ) {
-                            Text("${index + 1}. ${track.title}", color = AppColors.TextPrimary, fontWeight = FontWeight.Medium)
-                            track.durationMillis?.let {
-                                Text(formatDuration(it), color = AppColors.TextTertiary)
-                            }
+                        onPlayTrack(currentResult.playlist, track, selectedRoom!!, index)
+                    },
+                shape = RoundedCornerShape(12.dp),
+                color = AppColors.Surface,
+                border = BorderStroke(1.dp, AppColors.Border),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(3.dp),
+                    ) {
+                        Text("${index + 1}. ${track.title}", color = AppColors.TextPrimary, fontWeight = FontWeight.Medium)
+                        track.durationMillis?.let {
+                            Text(formatDuration(it), color = AppColors.TextTertiary)
                         }
-                        Column(
-                            horizontalAlignment = Alignment.End,
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                    }
+                    Column(
+                        horizontalAlignment = Alignment.End,
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
+                            FavoriteIconButton(
+                                isFavorite = track.isFavorite,
+                                isLoading = isFavoriteLoading,
+                                onClick = { onToggleTrackFavorite(track) },
+                            )
+                            IconCircleButton(
+                                onClick = { selectedRoom?.let { onPlayTrack(currentResult.playlist, track, it, index) } },
+                                enabled = selectedRoom != null && !isPlaybackLoading,
                             ) {
-                                FavoriteIconButton(
-                                    isFavorite = track.isFavorite,
-                                    isLoading = isFavoriteLoading,
-                                    onClick = { onToggleTrackFavorite(track) },
+                                PlayerIconGraphic(
+                                    icon = PlayerIcon.Play,
+                                    tint = if (selectedRoom != null) AppColors.TextPrimary else AppColors.TextTertiary,
+                                    modifier = Modifier.size(16.dp),
                                 )
-                                IconCircleButton(
-                                    onClick = { selectedRoom?.let { onPlayTrack(currentResult.playlist, track, it, index) } },
-                                    enabled = selectedRoom != null && !isPlaybackLoading,
-                                ) {
-                                    PlayerIconGraphic(
-                                        icon = PlayerIcon.Play,
-                                        tint = if (selectedRoom != null) AppColors.TextPrimary else AppColors.TextTertiary,
-                                        modifier = Modifier.size(16.dp),
-                                    )
-                                }
                             }
                         }
                     }

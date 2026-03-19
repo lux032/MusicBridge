@@ -1049,6 +1049,7 @@ internal suspend fun waitForTrackToFinish(
 ) {
     val expectedDurationSeconds = expectedDurationMillis?.div(1_000)?.toInt()
     var stableProgressSeen = false
+    var stoppedNoProgressCount = 0
 
     while (true) {
         delay(1_000)
@@ -1066,10 +1067,18 @@ internal suspend fun waitForTrackToFinish(
 
         if (relTimeSeconds != null && relTimeSeconds > 0) {
             stableProgressSeen = true
+            stoppedNoProgressCount = 0
         }
 
         if (status.transportState.equals("STOPPED", ignoreCase = true) && stableProgressSeen) {
             return
+        }
+
+        if (status.transportState.equals("STOPPED", ignoreCase = true) && !stableProgressSeen) {
+            stoppedNoProgressCount += 1
+            if (stoppedNoProgressCount >= 5) {
+                return
+            }
         }
 
         if (relTimeSeconds != null && trackDurationSeconds != null && relTimeSeconds >= trackDurationSeconds - 1) {

@@ -220,6 +220,7 @@ internal class AppStatePlaybackCoordinator(
         state.isPlaybackCommandLoading = true
         state.albumPlaybackJob = state.scope.launch {
             runCatching {
+                var didStartFirstTrack = false
                 playAlbumSequentially(
                     sonosController = state.sonosController,
                     room = room,
@@ -235,6 +236,11 @@ internal class AppStatePlaybackCoordinator(
                         }
                     },
                     onTrackChanged = { index, track, positionMillis ->
+                        if (!didStartFirstTrack) {
+                            didStartFirstTrack = true
+                            state.isPlaybackCommandLoading = false
+                            startPlaybackReporting(room, tracks, index, positionMillis)
+                        }
                         state.miniPlayerState = state.miniPlayerState?.copy(
                             album = resolveAlbumForTrack(track, fakeAlbum),
                             currentIndex = index,
@@ -245,8 +251,8 @@ internal class AppStatePlaybackCoordinator(
                 )
             }.onFailure {
                 state.errorMessage = it.message ?: "播放失败"
+                state.isPlaybackCommandLoading = false
             }
-            state.isPlaybackCommandLoading = false
         }
     }
 
@@ -453,6 +459,15 @@ internal class AppStatePlaybackCoordinator(
                             timeMillis = currentTrackTimeMillis,
                             durationMillis = currentTrackDurationMillis,
                         )
+                        // Try to advance to next track instead of stopping
+                        val currentIndex = tracks.indexOfFirst { it.ratingKey == currentTrack.ratingKey }
+                            .takeIf { it >= 0 } ?: break
+                        val nextIndex = resolveNextPlaybackIndex(tracks.size, currentIndex)
+                        if (nextIndex == null || nextIndex == currentIndex) break
+                        val nextTrack = tracks.getOrNull(nextIndex) ?: break
+                        state.scope.launch {
+                            playQueueIndex(nextIndex, 0L, room)
+                        }
                         break
                     }
                 } else {
