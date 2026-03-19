@@ -4,6 +4,7 @@ import android.util.Log
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.basicMarquee
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -161,6 +162,40 @@ internal fun PlaybackDetailSection(
                     },
                     valueRange = 0f..clampedDuration.toFloat(),
                     enabled = !isLoading,
+                    colors = SliderDefaults.colors(
+                        thumbColor = AppColors.Accent,
+                        activeTrackColor = AppColors.Accent,
+                        inactiveTrackColor = AppColors.SurfaceMuted,
+                        disabledThumbColor = AppColors.TextTertiary,
+                        disabledActiveTrackColor = AppColors.TextTertiary,
+                        disabledInactiveTrackColor = AppColors.SurfaceMuted,
+                    ),
+                    thumb = {
+                        Box(
+                            modifier = Modifier
+                                .size(14.dp)
+                                .background(AppColors.Accent, CircleShape),
+                        )
+                    },
+                    track = { sliderState ->
+                        val fraction = if (sliderState.valueRange.endInclusive - sliderState.valueRange.start == 0f) 0f
+                            else (sliderState.value - sliderState.valueRange.start) / (sliderState.valueRange.endInclusive - sliderState.valueRange.start)
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(4.dp)
+                                .clip(RoundedCornerShape(2.dp))
+                                .background(AppColors.SurfaceMuted),
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth(fraction)
+                                    .height(4.dp)
+                                    .clip(RoundedCornerShape(2.dp))
+                                    .background(AppColors.Accent),
+                            )
+                        }
+                    },
                 )
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -225,6 +260,7 @@ internal fun PlaybackDetailSection(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
                     .padding(horizontal = 16.dp, vertical = 8.dp)
                     .padding(bottom = 24.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),

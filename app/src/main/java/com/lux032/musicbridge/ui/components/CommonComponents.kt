@@ -487,6 +487,7 @@ internal fun FavoriteIconGraphic(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun GlobalVolumeOverlay(
     room: SonosRoom,
@@ -538,6 +539,40 @@ internal fun GlobalVolumeOverlay(
                 onValueChange = onVolumeChange,
                 valueRange = 0f..100f,
                 enabled = hasLoadedVolume && !isVolumeLoading,
+                colors = SliderDefaults.colors(
+                    thumbColor = AppColors.Accent,
+                    activeTrackColor = AppColors.Accent,
+                    inactiveTrackColor = AppColors.SurfaceMuted,
+                    disabledThumbColor = AppColors.TextTertiary,
+                    disabledActiveTrackColor = AppColors.TextTertiary,
+                    disabledInactiveTrackColor = AppColors.SurfaceMuted,
+                ),
+                thumb = {
+                    Box(
+                        modifier = Modifier
+                            .size(14.dp)
+                            .background(AppColors.Accent, CircleShape),
+                    )
+                },
+                track = { sliderState ->
+                    val fraction = if (sliderState.valueRange.endInclusive - sliderState.valueRange.start == 0f) 0f
+                        else (sliderState.value - sliderState.valueRange.start) / (sliderState.valueRange.endInclusive - sliderState.valueRange.start)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(4.dp)
+                            .clip(RoundedCornerShape(2.dp))
+                            .background(AppColors.SurfaceMuted),
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth(fraction)
+                                .height(4.dp)
+                                .clip(RoundedCornerShape(2.dp))
+                                .background(AppColors.Accent),
+                        )
+                    }
+                },
             )
         }
     }
@@ -558,7 +593,6 @@ internal fun AsyncAlbumArtwork(
             model = ImageRequest.Builder(context)
                 .data(imageUrl)
                 .crossfade(200)
-                .size(coil3.size.Size(512, 512))
                 .build(),
             contentDescription = title,
             imageLoader = imageLoader,
