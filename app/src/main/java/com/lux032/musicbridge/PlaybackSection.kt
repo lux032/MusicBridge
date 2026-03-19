@@ -5,6 +5,13 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.material3.ripple
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.foundation.lazy.items
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.rememberScrollState
@@ -430,9 +437,24 @@ private fun PlaybackActionBar(
             modifier = Modifier.weight(1f),
             contentAlignment = Alignment.Center,
         ) {
+            val interactionSource = remember { MutableInteractionSource() }
+            val isPressed by interactionSource.collectIsPressedAsState()
+            val scale by animateFloatAsState(
+                targetValue = if (isPressed) 0.85f else 1f,
+                label = "favorite_scale",
+            )
             Column(
                 modifier = Modifier
-                    .clickable(enabled = !isFavoriteLoading, onClick = onToggleTrackFavorite)
+                    .clickable(
+                        enabled = !isFavoriteLoading,
+                        interactionSource = interactionSource,
+                        indication = ripple(bounded = true),
+                        onClick = onToggleTrackFavorite,
+                    )
+                    .graphicsLayer {
+                        scaleX = scale
+                        scaleY = scale
+                    }
                     .padding(horizontal = 12.dp, vertical = 8.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -462,9 +484,27 @@ private fun PlaybackActionButton(
     isSelected: Boolean,
     onClick: () -> Unit,
 ) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed) 0.85f else 1f,
+        label = "action_button_scale",
+    )
+    val animatedTint by animateColorAsState(
+        targetValue = if (isSelected) AppColors.Accent else AppColors.TextSecondary,
+        label = "action_button_tint",
+    )
     Column(
         modifier = modifier
-            .clickable(onClick = onClick)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = ripple(bounded = true),
+                onClick = onClick,
+            )
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
             .padding(horizontal = 12.dp, vertical = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -472,7 +512,7 @@ private fun PlaybackActionButton(
         Icon(
             imageVector = icon,
             contentDescription = contentDescription,
-            tint = if (isSelected) AppColors.Accent else AppColors.TextSecondary,
+            tint = animatedTint,
             modifier = Modifier.size(24.dp),
         )
     }
@@ -585,11 +625,12 @@ internal fun AlbumDetailSection(
         ) {
             currentTrackResult.tracks.forEachIndexed { index, track ->
                 Surface(
-                    modifier = Modifier.clickable(
-                        enabled = selectedRoom != null && !isPlaybackLoading,
-                    ) {
-                        onPlayTrack(currentTrackResult.album, track, selectedRoom!!)
-                    },
+                    modifier = Modifier
+                        .clickable(
+                            enabled = selectedRoom != null && !isPlaybackLoading,
+                        ) {
+                            onPlayTrack(currentTrackResult.album, track, selectedRoom!!)
+                        },
                     shape = RoundedCornerShape(12.dp),
                     color = AppColors.Surface,
                     border = BorderStroke(1.dp, AppColors.Border),
@@ -668,7 +709,11 @@ internal fun BottomMiniPlayer(
             Box(
                 modifier = Modifier
                     .clip(RoundedCornerShape(14.dp))
-                    .clickable(onClick = onArtworkClick),
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = ripple(bounded = true),
+                        onClick = onArtworkClick,
+                    ),
             ) {
                 AsyncAlbumArtwork(
                     imageUrl = displayAlbum.thumbUrl,
@@ -710,11 +755,26 @@ internal fun PlayerControlButton(
     val borderColor = if (highlighted) Color.Transparent else AppColors.Border
     val buttonSize = sizeOverride ?: if (highlighted) 64.dp else 52.dp
     val iconSize = iconSizeOverride ?: if (highlighted) 26.dp else 22.dp
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed) 0.9f else 1f,
+        label = "button_scale",
+    )
 
     Surface(
         modifier = Modifier
             .size(buttonSize)
-            .clickable(enabled = enabled, onClick = onClick),
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
+            .clickable(
+                enabled = enabled,
+                interactionSource = interactionSource,
+                indication = ripple(bounded = true),
+                onClick = onClick,
+            ),
         shape = CircleShape,
         color = containerColor,
         border = BorderStroke(1.dp, borderColor.copy(alpha = if (enabled) 1f else 0.35f)),
@@ -776,11 +836,12 @@ internal fun TrackSection(
             }
             currentTrackResult.tracks.forEachIndexed { index, track ->
                 Surface(
-                    modifier = Modifier.clickable(
-                        enabled = selectedRoom != null && !isLoading,
-                    ) {
-                        onPlayTrack(currentTrackResult.album, track, selectedRoom!!)
-                    },
+                    modifier = Modifier
+                        .clickable(
+                            enabled = selectedRoom != null && !isLoading,
+                        ) {
+                            onPlayTrack(currentTrackResult.album, track, selectedRoom!!)
+                        },
                     shape = RoundedCornerShape(18.dp),
                     color = AppColors.SurfaceAlt,
                     border = BorderStroke(1.dp, AppColors.Border),

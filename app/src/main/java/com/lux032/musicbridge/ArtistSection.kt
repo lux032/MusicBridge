@@ -4,10 +4,16 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.material3.ripple
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.LazyItemScope
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -116,10 +122,12 @@ internal fun ArtistsSection(
                             items = group.items,
                             key = { artist -> "artist-${artist.name}" },
                         ) { artist ->
-                            ArtistCoverCard(
-                                artist = artist,
-                                onClick = { onArtistClick(artist) },
-                            )
+                            Box(modifier = Modifier.animateItem()) {
+                                ArtistCoverCard(
+                                    artist = artist,
+                                    onClick = { onArtistClick(artist) },
+                                )
+                            }
                         }
                     }
                 }
@@ -185,10 +193,12 @@ internal fun ArtistsSection(
                             items = group.items,
                             key = { artist -> "artist-list-${artist.name}" },
                         ) { artist ->
-                            ArtistListRow(
-                                artist = artist,
-                                onClick = { onArtistClick(artist) },
-                            )
+                            Box(modifier = Modifier.animateItem()) {
+                                ArtistListRow(
+                                    artist = artist,
+                                    onClick = { onArtistClick(artist) },
+                                )
+                            }
                         }
                     }
                 }
@@ -214,8 +224,23 @@ internal fun ArtistCoverCard(
     artist: ArtistSummary,
     onClick: () -> Unit,
 ) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed) 0.95f else 1f,
+        label = "artist_card_scale",
+    )
     Surface(
-        modifier = Modifier.clickable(onClick = onClick),
+        modifier = Modifier
+            .clickable(
+                interactionSource = interactionSource,
+                indication = ripple(bounded = true),
+                onClick = onClick,
+            )
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            },
         shape = RoundedCornerShape(24.dp),
         color = AppColors.Surface,
         border = BorderStroke(1.dp, AppColors.Border),
@@ -272,8 +297,23 @@ internal fun ArtistListRow(
     artist: ArtistSummary,
     onClick: () -> Unit,
 ) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed) 0.97f else 1f,
+        label = "artist_list_scale",
+    )
     Surface(
-        modifier = Modifier.clickable(onClick = onClick),
+        modifier = Modifier
+            .clickable(
+                interactionSource = interactionSource,
+                indication = ripple(bounded = true),
+                onClick = onClick,
+            )
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            },
         shape = RoundedCornerShape(20.dp),
         color = AppColors.Surface,
         border = BorderStroke(1.dp, AppColors.Border),

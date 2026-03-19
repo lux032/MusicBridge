@@ -186,6 +186,10 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
             AppSection.Home -> Unit
         }
     }
+    
+    val isBottomBarVisible = activeSection != AppSection.PlaybackDetail
+    val isMiniPlayerVisible = activeSection != AppSection.PlaybackDetail && state.miniPlayerState != null
+    val overlayRoom = state.selectedSonosRoom
 
     Box(
         modifier = modifier
@@ -396,7 +400,7 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
             }
         }
 
-        if (activeSection != AppSection.PlaybackDetail) {
+        if (isBottomBarVisible) {
             BottomNavigationBar(
                 primarySection = state.primarySection,
                 modifier = Modifier
@@ -413,7 +417,7 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
             )
         }
 
-        if (activeSection != AppSection.PlaybackDetail) {
+        if (isMiniPlayerVisible) {
             state.miniPlayerState?.let { playerState ->
                 BottomMiniPlayer(
                     state = playerState,
@@ -436,7 +440,6 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
             }
         }
 
-        val overlayRoom = state.selectedSonosRoom
         if (isVolumeOverlayVisible && overlayRoom != null) {
             GlobalVolumeOverlay(
                 room = overlayRoom,
@@ -457,4 +460,3 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
     }
 }
 }
-

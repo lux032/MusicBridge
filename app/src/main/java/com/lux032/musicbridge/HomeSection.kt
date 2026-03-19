@@ -3,6 +3,11 @@ package com.lux032.musicbridge
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.material3.ripple
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -571,12 +576,14 @@ internal fun AllAlbumsSection(
                         items = group.items,
                         key = { album -> album.ratingKey },
                     ) { album ->
-                        AlbumCoverCard(
-                            album = album,
-                            selected = selectedAlbum?.ratingKey == album.ratingKey,
-                            onClick = { onAlbumClick(album) },
-                            compact = false,
-                        )
+                        Box(modifier = Modifier.animateItem()) {
+                            AlbumCoverCard(
+                                album = album,
+                                selected = selectedAlbum?.ratingKey == album.ratingKey,
+                                onClick = { onAlbumClick(album) },
+                                compact = false,
+                            )
+                        }
                     }
                 }
             }
@@ -636,8 +643,19 @@ internal fun SonosSettingsCard(
             }
 
             rooms.forEach { room ->
+                val interactionSource = remember { MutableInteractionSource() }
+                val isPressed by interactionSource.collectIsPressedAsState()
+                val scale by animateFloatAsState(
+                    targetValue = if (isPressed) 0.97f else 1f,
+                    label = "room_scale",
+                )
                 Surface(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .graphicsLayer {
+                            scaleX = scale
+                            scaleY = scale
+                        },
                     shape = RoundedCornerShape(18.dp),
                     color = if (room.coordinatorUuid == selectedRoom?.coordinatorUuid) AppColors.SurfaceMuted else AppColors.SurfaceAlt,
                     border = BorderStroke(1.dp, if (room.coordinatorUuid == selectedRoom?.coordinatorUuid) AppColors.BorderStrong else AppColors.Border),
@@ -645,7 +663,11 @@ internal fun SonosSettingsCard(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable { onSelectRoom(room) }
+                            .clickable(
+                                interactionSource = interactionSource,
+                                indication = ripple(bounded = true),
+                                onClick = { onSelectRoom(room) },
+                            )
                             .padding(14.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically,

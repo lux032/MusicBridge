@@ -4,6 +4,13 @@ import android.content.Context
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.material3.ripple
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -63,10 +70,25 @@ internal fun IconCircleButton(
     highlighted: Boolean = false,
     content: @Composable BoxScope.() -> Unit,
 ) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed) 0.9f else 1f,
+        label = "icon_button_scale",
+    )
     Surface(
         modifier = modifier
             .size(42.dp)
-            .clickable(enabled = enabled, onClick = onClick),
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
+            .clickable(
+                enabled = enabled,
+                interactionSource = interactionSource,
+                indication = ripple(bounded = true),
+                onClick = onClick,
+            ),
         shape = CircleShape,
         color = if (highlighted) AppColors.SurfaceStrong else AppColors.SurfaceMuted,
         border = BorderStroke(
@@ -152,20 +174,38 @@ internal fun BottomNavButton(
         AppSection.Settings -> Strings.settings
         else -> ""
     }
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed) 0.9f else 1f,
+        label = "nav_button_scale",
+    )
+    val animatedTint by animateColorAsState(
+        targetValue = if (isSelected) AppColors.Accent else AppColors.TextSecondary,
+        label = "nav_tint",
+    )
     Column(
         modifier = Modifier
-            .clickable(onClick = onClick)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = ripple(bounded = true),
+                onClick = onClick,
+            )
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
             .padding(horizontal = 12.dp, vertical = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         NavIconGraphic(
             icon = icon,
-            tint = if (isSelected) AppColors.Accent else AppColors.TextSecondary,
+            tint = animatedTint,
         )
         Text(
             text = label,
-            color = if (isSelected) AppColors.Accent else AppColors.TextSecondary,
+            color = animatedTint,
             style = MaterialTheme.typography.labelSmall,
         )
     }
@@ -289,8 +329,20 @@ internal fun AlbumCoverCard(
     onClick: () -> Unit,
     compact: Boolean = false,
 ) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+
     Surface(
-        modifier = Modifier.clickable(onClick = onClick),
+        modifier = Modifier
+            .clickable(
+                interactionSource = interactionSource,
+                indication = ripple(bounded = true),
+                onClick = onClick,
+            )
+            .graphicsLayer {
+                scaleX = if (isPressed) 0.95f else 1f
+                scaleY = if (isPressed) 0.95f else 1f
+            },
         shape = RoundedCornerShape(if (compact) 18.dp else 16.dp),
         color = if (compact) Color.Transparent else Color.Transparent,
         border = BorderStroke(0.dp, Color.Transparent),
@@ -408,19 +460,27 @@ internal fun FavoriteIconGraphic(
     modifier: Modifier = Modifier,
 ) {
     val size = 24.dp
+    val animatedSize by animateDpAsState(
+        targetValue = if (isFavorite) 26.dp else 24.dp,
+        label = "favorite_size",
+    )
+    val animatedTint by animateColorAsState(
+        targetValue = if (isFavorite) AppColors.Accent else AppColors.TextSecondary,
+        label = "favorite_tint",
+    )
     if (isFavorite) {
         Icon(
             imageVector = Icons.Filled.Favorite,
             contentDescription = Strings.favorited,
-            tint = tint,
-            modifier = modifier.size(size),
+            tint = animatedTint,
+            modifier = modifier.size(animatedSize),
         )
     } else {
         Icon(
             imageVector = Icons.Outlined.FavoriteBorder,
             contentDescription = Strings.notFavorited,
-            tint = tint,
-            modifier = modifier.size(size),
+            tint = animatedTint,
+            modifier = modifier.size(animatedSize),
         )
     }
 }

@@ -2,9 +2,15 @@ package com.lux032.musicbridge
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.material3.ripple
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.LazyItemScope
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Shuffle
@@ -55,7 +61,7 @@ internal fun PlaylistsSection(
                 )
             }
         } else {
-            items(playlists) { playlist ->
+            items(playlists, key = { it.ratingKey }) { playlist ->
                 PlaylistCard(playlist = playlist, onClick = { onPlaylistClick(playlist) })
             }
         }
@@ -66,8 +72,23 @@ internal fun PlaylistsSection(
 private fun FavoriteTracksCard(
     onClick: () -> Unit,
 ) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed) 0.97f else 1f,
+        label = "favorite_tracks_scale",
+    )
     Surface(
-        modifier = Modifier.clickable(onClick = onClick),
+        modifier = Modifier
+            .clickable(
+                interactionSource = interactionSource,
+                indication = ripple(bounded = true),
+                onClick = onClick,
+            )
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            },
         shape = RoundedCornerShape(20.dp),
         color = AppColors.SurfaceStrong,
         border = BorderStroke(1.dp, AppColors.BorderStrong),
@@ -106,8 +127,23 @@ private fun PlaylistCard(
     playlist: PlexPlaylist,
     onClick: () -> Unit,
 ) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed) 0.97f else 1f,
+        label = "playlist_scale",
+    )
     Surface(
-        modifier = Modifier.clickable(onClick = onClick),
+        modifier = Modifier
+            .clickable(
+                interactionSource = interactionSource,
+                indication = ripple(bounded = true),
+                onClick = onClick,
+            )
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            },
         shape = RoundedCornerShape(20.dp),
         color = AppColors.Surface,
         border = BorderStroke(1.dp, AppColors.Border),
@@ -242,11 +278,12 @@ internal fun PlaylistDetailSection(
         ) {
             currentResult.tracks.forEachIndexed { index, track ->
                 Surface(
-                    modifier = Modifier.clickable(
-                        enabled = selectedRoom != null && !isPlaybackLoading,
-                    ) {
-                        onPlayTrack(currentResult.playlist, track, selectedRoom!!, index)
-                    },
+                    modifier = Modifier
+                        .clickable(
+                            enabled = selectedRoom != null && !isPlaybackLoading,
+                        ) {
+                            onPlayTrack(currentResult.playlist, track, selectedRoom!!, index)
+                        },
                     shape = RoundedCornerShape(12.dp),
                     color = AppColors.Surface,
                     border = BorderStroke(1.dp, AppColors.Border),
