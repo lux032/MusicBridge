@@ -738,18 +738,18 @@ internal fun BottomMiniPlayer(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = ripple(bounded = true),
+                    onClick = onArtworkClick,
+                )
                 .padding(horizontal = 14.dp, vertical = 12.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(14.dp))
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = ripple(bounded = true),
-                        onClick = onArtworkClick,
-                    ),
+                    .clip(RoundedCornerShape(14.dp)),
             ) {
                 AsyncAlbumArtwork(
                     imageUrl = displayAlbum.thumbUrl,
