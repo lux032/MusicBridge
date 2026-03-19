@@ -110,7 +110,7 @@ private const val FAVORITE_TRACK_RATING = 10
 private const val PAGED_CONTAINER_SIZE = 200
 
 class PlexClient(private val config: PlexAuthConfig) {
-    private val appName = "PlexToSonosPlayer"
+    private val appName = "MusicBridge"
     private val appVersion = "0.1.0"
     private val product = "Android App"
     private val platform = "Android ${Build.VERSION.RELEASE ?: "Unknown"}"
