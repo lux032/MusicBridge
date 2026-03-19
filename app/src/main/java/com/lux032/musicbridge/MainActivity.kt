@@ -140,8 +140,8 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
     }
 
     LaunchedEffect(state.connectionPreferences) {
-        state.loadArtists()
-        state.loadPlaylists()
+        launch { state.loadArtists() }
+        launch { state.loadPlaylists() }
     }
 
     DisposableEffect(activity, state.selectedSonosRoom, state.sonosVolume, state.hasLoadedSonosVolume) {

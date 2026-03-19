@@ -38,6 +38,8 @@ import com.lux032.musicbridge.sonos.SonosRoom
 import com.lux032.musicbridge.plex.PlexAlbum
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
+import coil3.request.crossfade
+import androidx.compose.ui.graphics.painter.ColorPainter
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -555,11 +557,15 @@ internal fun AsyncAlbumArtwork(
         AsyncImage(
             model = ImageRequest.Builder(context)
                 .data(imageUrl)
+                .crossfade(200)
+                .size(coil3.size.Size(512, 512))
                 .build(),
             contentDescription = title,
             imageLoader = imageLoader,
             modifier = modifier,
             contentScale = contentScale,
+            placeholder = ColorPainter(AppColors.SurfaceMuted),
+            error = ColorPainter(AppColors.SurfaceMuted),
         )
     } else {
         Box(

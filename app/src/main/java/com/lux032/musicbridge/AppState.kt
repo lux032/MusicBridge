@@ -747,10 +747,24 @@ class AppState(
     }
 
     suspend fun loadArtists() {
+        // Show cached artists immediately, then refresh from network
+        val cachedArtists = withContext(Dispatchers.IO) {
+            albumLocalStore.getArtistSummaries()
+        }
+        if (cachedArtists.isNotEmpty()) {
+            artists = cachedArtists.map { info ->
+                ArtistSummary(
+                    name = info.name,
+                    coverUrl = info.coverUrl,
+                    albumCount = info.albumCount,
+                )
+            }
+        }
+
         if (connectionPreferences.token.isNullOrBlank()) return
         try {
             val plexArtists = client().fetchArtists().artists
-            val artistInfoMap = albumLocalStore.getArtistSummaries().associateBy { it.name }
+            val artistInfoMap = cachedArtists.associateBy { it.name }
             artists = plexArtists.map { plexArtist ->
                 val info = artistInfoMap[plexArtist.title]
                 ArtistSummary(
@@ -759,14 +773,8 @@ class AppState(
                     albumCount = info?.albumCount ?: 0,
                 )
             }.filter { it.albumCount > 0 }
-        } catch (e: Exception) {
-            artists = albumLocalStore.getArtistSummaries().map { info ->
-                ArtistSummary(
-                    name = info.name,
-                    coverUrl = info.coverUrl,
-                    albumCount = info.albumCount,
-                )
-            }
+        } catch (_: Exception) {
+            // Already showing cached data, no need to update on failure
         }
     }
 

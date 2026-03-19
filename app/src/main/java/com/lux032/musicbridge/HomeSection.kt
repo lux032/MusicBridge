@@ -67,6 +67,7 @@ internal fun HomeSection(
                 imageLoader.enqueue(
                     ImageRequest.Builder(context)
                         .data(imageUrl)
+                        .size(coil3.size.Size(512, 512))
                         .build()
                 )
             }
