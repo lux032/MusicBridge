@@ -482,6 +482,7 @@ internal fun AllAlbumsSection(
     searchQuery: String,
     isSearchLoading: Boolean,
     bottomContentPadding: androidx.compose.ui.unit.Dp,
+    gridState: androidx.compose.foundation.lazy.grid.LazyGridState = rememberLazyGridState(),
     onSearchQueryChange: (String) -> Unit,
     onBack: () -> Unit,
     onAlbumClick: (PlexAlbum) -> Unit,
@@ -489,7 +490,6 @@ internal fun AllAlbumsSection(
     val albumGroups = remember(albums) {
         buildIndexedGroups(albums) { it.title }
     }
-    val gridState = rememberLazyGridState()
     val scope = rememberCoroutineScope()
     val jumpTargets = remember(albumGroups) {
         buildGridJumpTargets(

@@ -26,6 +26,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.key
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -201,19 +203,55 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
             )
     ) {
         key(activeSection) {
-            if (activeSection == AppSection.AllAlbums) {
+            val currentSection = activeSection
+
+            if (currentSection == AppSection.AllAlbums) {
+                val savedPos = state.getSavedLazyScrollPosition(AppSection.AllAlbums)
+                val allAlbumsGridState = rememberLazyGridState(
+                    initialFirstVisibleItemIndex = savedPos.index,
+                    initialFirstVisibleItemScrollOffset = savedPos.offset,
+                )
+                DisposableEffect(Unit) {
+                    onDispose {
+                        state.saveLazyScrollPosition(
+                            AppSection.AllAlbums,
+                            allAlbumsGridState.firstVisibleItemIndex,
+                            allAlbumsGridState.firstVisibleItemScrollOffset,
+                        )
+                    }
+                }
                 AllAlbumsSection(
                     albums = if (state.albumSearchQuery.isBlank()) state.allAlbums else state.albumSearchResults,
                     selectedAlbum = state.selectedAlbum,
                     searchQuery = state.albumSearchQuery,
                     isSearchLoading = state.isAlbumSearchLoading,
                     bottomContentPadding = contentBottomPadding,
+                    gridState = allAlbumsGridState,
                     onSearchQueryChange = { state.albumSearchQuery = it },
                     onBack = state::navigateBack,
                     onAlbumClick = state::openAlbumDetail,
                 )
             } else {
-                if (activeSection == AppSection.Artists) {
+                if (currentSection == AppSection.Artists) {
+                    val savedPos = state.getSavedLazyScrollPosition(AppSection.Artists)
+                    val artistsGridState = rememberLazyGridState(
+                        initialFirstVisibleItemIndex = savedPos.index,
+                        initialFirstVisibleItemScrollOffset = savedPos.offset,
+                    )
+                    val artistsListState = rememberLazyListState(
+                        initialFirstVisibleItemIndex = savedPos.index,
+                        initialFirstVisibleItemScrollOffset = savedPos.offset,
+                    )
+                    DisposableEffect(Unit) {
+                        onDispose {
+                            val (index, offset) = if (state.artistPresentation == ArtistPresentation.Covers) {
+                                artistsGridState.firstVisibleItemIndex to artistsGridState.firstVisibleItemScrollOffset
+                            } else {
+                                artistsListState.firstVisibleItemIndex to artistsListState.firstVisibleItemScrollOffset
+                            }
+                            state.saveLazyScrollPosition(AppSection.Artists, index, offset)
+                        }
+                    }
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
@@ -222,6 +260,8 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                         ArtistsSection(
                             artists = state.artists,
                             presentation = state.artistPresentation,
+                            gridState = artistsGridState,
+                            listState = artistsListState,
                             onPresentationChange = { state.artistPresentation = it },
                             onGoHome = { state.switchPrimarySection(AppSection.Home) },
                             onArtistClick = state::openArtistAlbums,
@@ -241,10 +281,18 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                         )
                     }
                 } else {
+                    val scrollState = rememberScrollState(
+                        initial = state.getSavedScrollValue(currentSection)
+                    )
+                    DisposableEffect(Unit) {
+                        onDispose {
+                            state.saveScrollValue(currentSection, scrollState.value)
+                        }
+                    }
                     Column(
                         modifier = Modifier
                             .fillMaxSize()
-                            .verticalScroll(rememberScrollState())
+                            .verticalScroll(scrollState)
                             .padding(start = 16.dp, top = 16.dp, end = 16.dp, bottom = contentBottomPadding),
                         verticalArrangement = Arrangement.spacedBy(16.dp),
                     ) {

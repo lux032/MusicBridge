@@ -84,6 +84,25 @@ class AppState(
     val activeSection: AppSection
         get() = navigationStack.lastOrNull() ?: AppSection.Home
 
+    // Scroll position preservation across navigation
+    data class SavedScrollPosition(val index: Int = 0, val offset: Int = 0)
+
+    private val _savedScrollValues = mutableMapOf<AppSection, Int>()
+    private val _savedLazyPositions = mutableMapOf<AppSection, SavedScrollPosition>()
+
+    fun saveScrollValue(section: AppSection, value: Int) {
+        _savedScrollValues[section] = value
+    }
+
+    fun getSavedScrollValue(section: AppSection): Int = _savedScrollValues[section] ?: 0
+
+    fun saveLazyScrollPosition(section: AppSection, index: Int, offset: Int) {
+        _savedLazyPositions[section] = SavedScrollPosition(index, offset)
+    }
+
+    fun getSavedLazyScrollPosition(section: AppSection): SavedScrollPosition =
+        _savedLazyPositions[section] ?: SavedScrollPosition()
+
     val favoriteAlbums: List<PlexAlbum>
         get() = allAlbums
             .filter(PlexAlbum::isFavorite)
