@@ -101,7 +101,7 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
     val activity = context as? MainActivity
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
-    val state = remember(context, scope) { AppState(context, scope) }
+    val state = remember(context) { AppState(context) }
 
     var username by rememberSaveable { mutableStateOf(state.connectionPreferences.username) }
     var password by rememberSaveable { mutableStateOf(state.connectionPreferences.password) }

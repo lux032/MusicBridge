@@ -19,14 +19,17 @@ import com.lux032.musicbridge.plex.isFavorite
 import com.lux032.musicbridge.sonos.SonosController
 import com.lux032.musicbridge.sonos.SonosRoom
 import com.lux032.musicbridge.storage.AlbumLocalStore
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 
 @Stable
 class AppState(
-    internal val context: Context,
-    internal val scope: CoroutineScope,
+    context: Context,
 ) {
+    internal val context: Context = context.applicationContext
+    internal val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     internal val appPreferences = AppPreferences(context)
     internal val albumLocalStore = AlbumLocalStore(context)
     internal val sonosController = SonosController()

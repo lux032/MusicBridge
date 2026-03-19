@@ -41,6 +41,13 @@ internal class AppStatePlaybackCoordinator(
             currentPositionMillis = initialPositionMillis.coerceAtLeast(0L),
             durationMillis = targetTrack.durationMillis,
         )
+        PlaybackForegroundService.start(
+            context = state.context,
+            title = targetTrack.title,
+            subtitle = "正在推送到 ${room.roomName}",
+            isPaused = false,
+            artworkUrl = targetTrack.thumbUrl,
+        )
         state.isPlaybackCommandLoading = true
         state.errorMessage = null
         state.actionMessage = null
@@ -86,6 +93,15 @@ internal class AppStatePlaybackCoordinator(
             currentPositionMillis = initialPositionMillis.coerceAtLeast(0L),
             durationMillis = albumTrackResult.tracks.getOrNull(startIndex)?.durationMillis,
         )
+        albumTrackResult.tracks.getOrNull(startIndex)?.let { initialTrack ->
+            PlaybackForegroundService.start(
+                context = state.context,
+                title = initialTrack.title,
+                subtitle = "正在推送到 ${room.roomName}",
+                isPaused = false,
+                artworkUrl = initialTrack.thumbUrl,
+            )
+        }
         state.isPlaybackCommandLoading = true
         state.errorMessage = null
         state.actionMessage = null
@@ -218,6 +234,15 @@ internal class AppStatePlaybackCoordinator(
             room = room,
             isPaused = false,
         )
+        tracks.firstOrNull()?.let { initialTrack ->
+            PlaybackForegroundService.start(
+                context = state.context,
+                title = initialTrack.title,
+                subtitle = "正在推送到 ${room.roomName}",
+                isPaused = false,
+                artworkUrl = initialTrack.thumbUrl,
+            )
+        }
         state.isPlaybackCommandLoading = true
         state.albumPlaybackJob = state.scope.launch {
             runCatching {
