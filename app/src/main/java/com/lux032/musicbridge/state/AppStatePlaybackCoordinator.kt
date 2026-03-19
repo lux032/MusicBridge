@@ -6,6 +6,7 @@ import com.lux032.musicbridge.plex.PlexClient
 import com.lux032.musicbridge.plex.PlexPlaylistTracksResult
 import com.lux032.musicbridge.plex.PlexSection
 import com.lux032.musicbridge.plex.PlexTrackStream
+import com.lux032.musicbridge.service.PlaybackForegroundService
 import com.lux032.musicbridge.sonos.SonosDiscovery
 import com.lux032.musicbridge.sonos.SonosPlaybackStatus
 import com.lux032.musicbridge.sonos.SonosRoom
@@ -346,9 +347,31 @@ internal class AppStatePlaybackCoordinator(
         val normalizedInitialIndex = initialTrackIndex.coerceIn(0, tracks.lastIndex)
         state.playbackReportingJob?.cancel()
         state.playbackReportingJob = state.scope.launch {
+            val initialTrack = tracks.getOrNull(normalizedInitialIndex) ?: return@launch
+            PlaybackForegroundService.onPlaybackAction = { action ->
+                val playerState = state.miniPlayerState
+                if (playerState != null) {
+                    when (action) {
+                        PlaybackForegroundService.PlaybackAction.Previous -> {
+                            if (playerState.currentIndex > 0) playQueueIndex(playerState.currentIndex - 1, 0L, playerState.room)
+                        }
+                        PlaybackForegroundService.PlaybackAction.TogglePause -> togglePause(playerState)
+                        PlaybackForegroundService.PlaybackAction.Next -> {
+                            if (playerState.currentIndex < playerState.tracks.lastIndex) playQueueIndex(playerState.currentIndex + 1, 0L, playerState.room)
+                        }
+                    }
+                }
+            }
+            PlaybackForegroundService.start(
+                context = state.context,
+                title = initialTrack.title,
+                subtitle = "正在推送到 ${room.roomName}",
+                artworkUrl = initialTrack.thumbUrl,
+            )
+            try {
             val plexClient = state.client()
             val scrobbledTrackKeys = mutableSetOf<String>()
-            var currentTrack = tracks.getOrNull(normalizedInitialIndex) ?: return@launch
+            var currentTrack = initialTrack
             var currentTrackTimeMillis = initialPositionMillis.coerceAtLeast(0L)
             var currentTrackDurationMillis = currentTrack.durationMillis
             var lastReportedState: String? = null
@@ -417,6 +440,13 @@ internal class AppStatePlaybackCoordinator(
                     durationMillis = currentTrackDurationMillis,
                 )
 
+                PlaybackForegroundService.updateIfRunning(
+                    title = currentTrack.title,
+                    subtitle = currentTrack.artistName ?: room.roomName,
+                    isPaused = playbackState == "paused",
+                    artworkUrl = currentTrack.thumbUrl,
+                )
+
                 val now = System.currentTimeMillis()
                 val shouldReportTimeline = playbackState != lastReportedState ||
                     now - lastTimelineReportAt >= 10_000L
@@ -473,6 +503,10 @@ internal class AppStatePlaybackCoordinator(
                 } else {
                     stoppedPollCount = 0
                 }
+            }
+            } finally {
+                PlaybackForegroundService.onPlaybackAction = null
+                PlaybackForegroundService.stop(state.context)
             }
         }
     }
