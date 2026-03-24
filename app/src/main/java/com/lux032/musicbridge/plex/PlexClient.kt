@@ -5,6 +5,7 @@ import android.util.Base64
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.w3c.dom.Element
+import org.json.JSONObject
 import java.io.ByteArrayInputStream
 import java.io.InputStream
 import java.net.HttpURLConnection
@@ -108,6 +109,7 @@ data class PlexPlaylistTracksResult(
 
 private const val FAVORITE_TRACK_RATING = 10
 private const val PAGED_CONTAINER_SIZE = 200
+private const val FAVORITE_TRACKS_CONTAINER_SIZE = 1000
 
 class PlexClient(private val config: PlexAuthConfig) {
     private val appName = "MusicBridge"
@@ -178,15 +180,19 @@ class PlexClient(private val config: PlexAuthConfig) {
         val token = resolveToken()
         val server = resolveServer(token)
         val accessToken = server.accessToken.orEmpty().ifBlank { token }
-        val sections = listMusicSections(server, token)
-        if (sections.isEmpty()) {
-            emptyList()
-        } else {
-            sections
-                .flatMap { section -> listFavoriteTracks(server, section, accessToken) }
-                .distinctBy(PlexTrackStream::ratingKey)
-                .sortedBy { it.title.lowercase() }
-        }
+        runCatching {
+            listFavoriteTracksGlobal(server, accessToken)
+        }.recoverCatching {
+            val sections = listMusicSections(server, token)
+            if (sections.isEmpty()) {
+                emptyList()
+            } else {
+                sections
+                    .flatMap { section -> listFavoriteTracksBySection(server, section, accessToken) }
+            }
+        }.getOrThrow()
+            .distinctBy(PlexTrackStream::ratingKey)
+            .sortedBy { it.title.lowercase() }
     }
 
     suspend fun fetchAlbumTrackStreams(albumTitle: String): PlexAlbumTracksResult = withContext(Dispatchers.IO) {
@@ -547,7 +553,42 @@ class PlexClient(private val config: PlexAuthConfig) {
         }
     }
 
-    private fun listFavoriteTracks(server: PlexServer, section: PlexSection, token: String): List<PlexTrackStream> {
+    private fun listFavoriteTracksGlobal(server: PlexServer, token: String): List<PlexTrackStream> {
+        val tracks = mutableListOf<PlexTrackStream>()
+        var containerStart = 0
+
+        while (true) {
+            val response = request(
+                method = "GET",
+                url = buildPlexUrl(
+                    serverUri = server.uri,
+                    path = "/library/all",
+                    queryParameters = listOf(
+                        "type" to "10",
+                        "userRating" to FAVORITE_TRACK_RATING.toString(),
+                        "X-Plex-Container-Start" to containerStart.toString(),
+                        "X-Plex-Container-Size" to FAVORITE_TRACKS_CONTAINER_SIZE.toString(),
+                    ),
+                ),
+                headers = mapOf("X-Plex-Token" to token),
+                accept = "application/json",
+            )
+            val pageTracks = parseFavoriteTracksJson(response.body, server.uri, token)
+            if (pageTracks.isEmpty()) {
+                break
+            }
+
+            tracks += pageTracks
+            if (pageTracks.size < FAVORITE_TRACKS_CONTAINER_SIZE) {
+                break
+            }
+            containerStart += pageTracks.size
+        }
+
+        return tracks
+    }
+
+    private fun listFavoriteTracksBySection(server: PlexServer, section: PlexSection, token: String): List<PlexTrackStream> {
         val tracks = mutableListOf<PlexTrackStream>()
         var containerStart = 0
 
@@ -582,14 +623,19 @@ class PlexClient(private val config: PlexAuthConfig) {
         return tracks
     }
 
-    private fun request(method: String, url: String, headers: Map<String, String>): HttpResponse {
+    private fun request(
+        method: String,
+        url: String,
+        headers: Map<String, String>,
+        accept: String = "application/xml",
+    ): HttpResponse {
         val connection = (URL(url).openConnection() as HttpURLConnection).apply {
             requestMethod = method
             instanceFollowRedirects = true
             connectTimeout = 15000
             readTimeout = 30000
             doInput = true
-            setRequestProperty("Accept", "application/xml")
+            setRequestProperty("Accept", accept)
             defaultHeaders().plus(headers).forEach { (name, value) ->
                 setRequestProperty(name, value)
             }
@@ -763,6 +809,69 @@ private fun org.w3c.dom.NodeList.toTrackStreams(serverUri: String, token: String
                 )
             )
         }
+    }
+
+private fun parseFavoriteTracksJson(body: String, serverUri: String, token: String): List<PlexTrackStream> {
+    val metadata = JSONObject(body)
+        .optJSONObject("MediaContainer")
+        ?.optJSONArray("Metadata")
+        ?: return emptyList()
+
+    return buildList {
+        for (index in 0 until metadata.length()) {
+            val track = metadata.optJSONObject(index) ?: continue
+            val title = track.optString("title").trim()
+            val ratingKey = track.optString("ratingKey").trim()
+            if (title.isBlank() || ratingKey.isBlank()) {
+                continue
+            }
+
+            val media = track.optJSONArray("Media")?.optJSONObject(0) ?: continue
+            val part = media.optJSONArray("Part")?.optJSONObject(0) ?: continue
+            val partKey = part.optString("key").trim()
+            if (partKey.isBlank()) {
+                continue
+            }
+
+            add(
+                PlexTrackStream(
+                    ratingKey = ratingKey,
+                    title = title,
+                    streamUrl = buildStreamUrl(serverUri, partKey, token),
+                    partKey = partKey,
+                    durationMillis = track.optLongOrNull("duration"),
+                    userRating = track.optFloatOrNull("userRating"),
+                    albumRatingKey = track.optString("parentRatingKey").trim().ifBlank { null },
+                    albumTitle = track.optString("parentTitle").trim().ifBlank { null },
+                    artistName = track.optString("grandparentTitle").trim().ifBlank { null },
+                    thumbUrl = track.optTrackThumbUrl(serverUri, token),
+                )
+            )
+        }
+    }
+}
+
+private fun JSONObject.optTrackThumbUrl(serverUri: String, token: String): String? {
+    val mediaPath = optString("thumb")
+        .trim()
+        .ifBlank { optString("parentThumb").trim() }
+        .ifBlank { null }
+        ?: return null
+    return buildMediaUrl(serverUri, mediaPath, token)
+}
+
+private fun JSONObject.optLongOrNull(name: String): Long? =
+    when (val value = opt(name)) {
+        is Number -> value.toLong()
+        is String -> value.trim().toLongOrNull()
+        else -> null
+    }
+
+private fun JSONObject.optFloatOrNull(name: String): Float? =
+    when (val value = opt(name)) {
+        is Number -> value.toFloat()
+        is String -> value.trim().toFloatOrNull()
+        else -> null
     }
 
 private fun String.urlEncode(): String =
