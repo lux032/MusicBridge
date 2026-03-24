@@ -17,10 +17,19 @@ import android.os.IBinder
 import android.os.PowerManager
 import com.lux032.musicbridge.MainActivity
 import com.lux032.musicbridge.R
+import com.lux032.musicbridge.SleepTimerState
+import com.lux032.musicbridge.sonos.SonosController
+import com.lux032.musicbridge.sonos.SonosRoom
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.net.URL
 
@@ -34,6 +43,9 @@ class PlaybackForegroundService : Service() {
     private var currentArtwork: Bitmap? = null
     private var currentArtworkUrl: String? = null
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val sonosController = SonosController()
+    private var sleepTimerJob: Job? = null
+    private var sleepTimerRoom: SonosRoom? = null
 
     private val mediaActionReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -68,11 +80,23 @@ class PlaybackForegroundService : Service() {
                 stopSelf()
                 return START_NOT_STICKY
             }
+            ACTION_SET_SLEEP_TIMER -> handleSetSleepTimer(intent)
+            ACTION_CANCEL_SLEEP_TIMER -> cancelSleepTimer()
         }
-        currentTitle = intent?.getStringExtra(EXTRA_TITLE) ?: currentTitle
-        currentSubtitle = intent?.getStringExtra(EXTRA_SUBTITLE) ?: currentSubtitle
-        currentIsPaused = intent?.getBooleanExtra(EXTRA_IS_PAUSED, false) ?: false
-        val artworkUrl = intent?.getStringExtra(EXTRA_ARTWORK_URL)
+        if (intent?.hasExtra(EXTRA_TITLE) == true) {
+            currentTitle = intent.getStringExtra(EXTRA_TITLE) ?: currentTitle
+        }
+        if (intent?.hasExtra(EXTRA_SUBTITLE) == true) {
+            currentSubtitle = intent.getStringExtra(EXTRA_SUBTITLE) ?: currentSubtitle
+        }
+        if (intent?.hasExtra(EXTRA_IS_PAUSED) == true) {
+            currentIsPaused = intent.getBooleanExtra(EXTRA_IS_PAUSED, currentIsPaused)
+        }
+        val artworkUrl = if (intent?.hasExtra(EXTRA_ARTWORK_URL) == true) {
+            intent.getStringExtra(EXTRA_ARTWORK_URL)
+        } else {
+            null
+        }
         startForeground(NOTIFICATION_ID, buildNotification())
         if (artworkUrl != null && artworkUrl != currentArtworkUrl) {
             currentArtworkUrl = artworkUrl
@@ -84,6 +108,7 @@ class PlaybackForegroundService : Service() {
     override fun onDestroy() {
         instance = null
         unregisterReceiver(mediaActionReceiver)
+        cancelSleepTimer()
         serviceScope.cancel()
         releaseWifiLock()
         releaseWakeLock()
@@ -102,6 +127,62 @@ class PlaybackForegroundService : Service() {
             loadArtworkAsync(artworkUrl)
         }
         manager.notify(NOTIFICATION_ID, buildNotification())
+    }
+
+    private fun handleSetSleepTimer(intent: Intent) {
+        val durationMillis = intent.getLongExtra(EXTRA_SLEEP_TIMER_DURATION_MILLIS, 0L)
+            .coerceAtLeast(0L)
+        val room = intent.toSonosRoom() ?: return
+        if (durationMillis <= 0L) {
+            cancelSleepTimer()
+            return
+        }
+        startSleepTimer(durationMillis, room)
+    }
+
+    private fun startSleepTimer(durationMillis: Long, room: SonosRoom) {
+        sleepTimerJob?.cancel()
+        sleepTimerRoom = room
+        val endEpochMillis = System.currentTimeMillis() + durationMillis
+        updateSleepTimerState(endEpochMillis, durationMillis)
+        sleepTimerJob = serviceScope.launch {
+            while (isActive) {
+                val remainingMillis = (endEpochMillis - System.currentTimeMillis()).coerceAtLeast(0L)
+                updateSleepTimerState(endEpochMillis, remainingMillis)
+                if (remainingMillis <= 0L) {
+                    handleSleepTimerFinished(room)
+                    return@launch
+                }
+                delay(1_000L)
+            }
+        }
+    }
+
+    private suspend fun handleSleepTimerFinished(room: SonosRoom) {
+        sleepTimerJob = null
+        sleepTimerRoom = null
+        updateSleepTimerState()
+        onSleepTimerExpired?.invoke()
+        runCatching { sonosController.pause(room) }
+        runCatching { sonosController.stop(room) }
+        stopSelf()
+    }
+
+    private fun cancelSleepTimer() {
+        sleepTimerJob?.cancel()
+        sleepTimerJob = null
+        sleepTimerRoom = null
+        updateSleepTimerState()
+    }
+
+    private fun updateSleepTimerState(
+        endEpochMillis: Long? = null,
+        remainingMillis: Long = 0L,
+    ) {
+        _sleepTimerState.value = SleepTimerState(
+            endEpochMillis = endEpochMillis?.takeIf { remainingMillis > 0L },
+            remainingMillis = remainingMillis.coerceAtLeast(0L),
+        )
     }
 
     private fun loadArtworkAsync(url: String) {
@@ -210,21 +291,35 @@ class PlaybackForegroundService : Service() {
     enum class PlaybackAction { Previous, TogglePause, Next }
 
     companion object {
+        const val ROOM_SEPARATOR = "\u001F"
         private const val CHANNEL_ID = "musicbridge_playback"
         private const val NOTIFICATION_ID = 1
         const val ACTION_STOP = "com.lux032.musicbridge.STOP_PLAYBACK"
         const val ACTION_PREVIOUS = "com.lux032.musicbridge.ACTION_PREVIOUS"
         const val ACTION_TOGGLE_PAUSE = "com.lux032.musicbridge.ACTION_TOGGLE_PAUSE"
         const val ACTION_NEXT = "com.lux032.musicbridge.ACTION_NEXT"
+        const val ACTION_SET_SLEEP_TIMER = "com.lux032.musicbridge.ACTION_SET_SLEEP_TIMER"
+        const val ACTION_CANCEL_SLEEP_TIMER = "com.lux032.musicbridge.ACTION_CANCEL_SLEEP_TIMER"
         const val EXTRA_TITLE = "extra_title"
         const val EXTRA_SUBTITLE = "extra_subtitle"
         const val EXTRA_IS_PAUSED = "extra_is_paused"
         const val EXTRA_ARTWORK_URL = "extra_artwork_url"
+        const val EXTRA_SLEEP_TIMER_DURATION_MILLIS = "extra_sleep_timer_duration_millis"
+        const val EXTRA_ROOM_NAME = "extra_room_name"
+        const val EXTRA_ROOM_UUID = "extra_room_uuid"
+        const val EXTRA_ROOM_BASE_URL = "extra_room_base_url"
+        const val EXTRA_ROOM_MEMBER_COUNT = "extra_room_member_count"
+        const val EXTRA_ROOM_RAW_COORDINATOR_NAME = "extra_room_raw_coordinator_name"
+        const val EXTRA_ROOM_MEMBER_BASE_URLS = "extra_room_member_base_urls"
+
+        private val _sleepTimerState = MutableStateFlow(SleepTimerState())
+        val sleepTimerState: StateFlow<SleepTimerState> = _sleepTimerState.asStateFlow()
 
         var instance: PlaybackForegroundService? = null
             private set
 
         var onPlaybackAction: ((PlaybackAction) -> Unit)? = null
+        var onSleepTimerExpired: (() -> Unit)? = null
 
         fun start(context: Context, title: String, subtitle: String, isPaused: Boolean = false, artworkUrl: String? = null) {
             val intent = Intent(context, PlaybackForegroundService::class.java).apply {
@@ -247,5 +342,60 @@ class PlaybackForegroundService : Service() {
         fun updateIfRunning(title: String, subtitle: String, isPaused: Boolean, artworkUrl: String?) {
             instance?.updateNotification(title, subtitle, isPaused, artworkUrl)
         }
+
+        fun setSleepTimer(context: Context, room: SonosRoom, durationMillis: Long) {
+            val intent = Intent(context, PlaybackForegroundService::class.java).apply {
+                action = ACTION_SET_SLEEP_TIMER
+                putExtra(EXTRA_SLEEP_TIMER_DURATION_MILLIS, durationMillis.coerceAtLeast(0L))
+                putRoom(room)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+        }
+
+        fun cancelSleepTimer(context: Context) {
+            val intent = Intent(context, PlaybackForegroundService::class.java).apply {
+                action = ACTION_CANCEL_SLEEP_TIMER
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+        }
+
+        private fun Intent.putRoom(room: SonosRoom) {
+            putExtra(EXTRA_ROOM_NAME, room.roomName)
+            putExtra(EXTRA_ROOM_UUID, room.coordinatorUuid)
+            putExtra(EXTRA_ROOM_BASE_URL, room.coordinatorBaseUrl)
+            putExtra(EXTRA_ROOM_MEMBER_COUNT, room.memberCount)
+            putExtra(EXTRA_ROOM_RAW_COORDINATOR_NAME, room.rawCoordinatorName)
+            putExtra(EXTRA_ROOM_MEMBER_BASE_URLS, room.memberBaseUrls.joinToString(ROOM_SEPARATOR))
+        }
     }
+}
+
+private fun Intent.toSonosRoom(): SonosRoom? {
+    val roomName = getStringExtra(PlaybackForegroundService.EXTRA_ROOM_NAME).orEmpty()
+    val coordinatorUuid = getStringExtra(PlaybackForegroundService.EXTRA_ROOM_UUID).orEmpty()
+    val coordinatorBaseUrl = getStringExtra(PlaybackForegroundService.EXTRA_ROOM_BASE_URL).orEmpty()
+    if (roomName.isBlank() || coordinatorUuid.isBlank() || coordinatorBaseUrl.isBlank()) {
+        return null
+    }
+    return SonosRoom(
+        roomName = roomName,
+        coordinatorUuid = coordinatorUuid,
+        coordinatorBaseUrl = coordinatorBaseUrl,
+        memberCount = getIntExtra(PlaybackForegroundService.EXTRA_ROOM_MEMBER_COUNT, 1).coerceAtLeast(1),
+        rawCoordinatorName = getStringExtra(PlaybackForegroundService.EXTRA_ROOM_RAW_COORDINATOR_NAME).orEmpty()
+            .ifBlank { roomName },
+        memberBaseUrls = getStringExtra(PlaybackForegroundService.EXTRA_ROOM_MEMBER_BASE_URLS)
+            .orEmpty()
+            .split(PlaybackForegroundService.ROOM_SEPARATOR)
+            .map(String::trim)
+            .filter(String::isNotBlank),
+    )
 }

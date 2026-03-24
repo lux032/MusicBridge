@@ -304,6 +304,15 @@ class SonosController {
         )
     }
 
+    suspend fun stop(room: SonosRoom) = withContext(Dispatchers.IO) {
+        soapRequest(
+            controlUrl = "${room.coordinatorBaseUrl}/MediaRenderer/AVTransport/Control",
+            serviceType = "urn:schemas-upnp-org:service:AVTransport:1",
+            action = "Stop",
+            innerXml = """<InstanceID>0</InstanceID>""",
+        )
+    }
+
     suspend fun seek(room: SonosRoom, positionSeconds: Int) = withContext(Dispatchers.IO) {
         soapRequest(
             controlUrl = "${room.coordinatorBaseUrl}/MediaRenderer/AVTransport/Control",

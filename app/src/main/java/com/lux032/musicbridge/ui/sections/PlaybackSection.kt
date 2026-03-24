@@ -1,16 +1,19 @@
 package com.lux032.musicbridge
 
-import android.util.Log
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.basicMarquee
+import androidx.compose.foundation.border
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.material3.ripple
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.layout.*
@@ -28,6 +31,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -41,6 +45,9 @@ import com.lux032.musicbridge.plex.isFavorite
 import com.lux032.musicbridge.sonos.SonosController
 import com.lux032.musicbridge.sonos.SonosRoom
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.map
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -48,6 +55,7 @@ internal fun PlaybackDetailSection(
     state: MiniPlayerState?,
     rooms: List<SonosRoom>,
     playbackMode: PlaybackMode,
+    sleepTimerState: SleepTimerState,
     isLoading: Boolean,
     isFavoriteLoading: Boolean,
     onBack: () -> Unit,
@@ -61,6 +69,8 @@ internal fun PlaybackDetailSection(
     onSelectTrack: (Int) -> Unit,
     onSelectPlaybackMode: (PlaybackMode) -> Unit,
     onSelectRoom: (SonosRoom) -> Unit,
+    onStartSleepTimer: (Int, Int) -> Unit,
+    onCancelSleepTimer: () -> Unit,
 ) {
     val currentState = state
     val currentTrack = currentState?.tracks?.getOrNull(currentState.currentIndex)
@@ -83,6 +93,10 @@ internal fun PlaybackDetailSection(
     var isPlaylistSheetVisible by remember { mutableStateOf(false) }
     var isModeDialogVisible by remember { mutableStateOf(false) }
     var isRoomDialogVisible by remember { mutableStateOf(false) }
+    var isSleepTimerDialogVisible by remember { mutableStateOf(false) }
+    var sleepTimerHours by remember { mutableIntStateOf(0) }
+    var sleepTimerMinutes by remember { mutableIntStateOf(30) }
+    var sleepTimerInputError by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(currentState.currentPositionMillis, currentTrack.ratingKey, isSeeking) {
         if (!isSeeking) {
@@ -141,6 +155,7 @@ internal fun PlaybackDetailSection(
                 text = "${currentState.room.roomName} · ${currentState.currentIndex + 1}/${currentState.tracks.size}",
                 color = AppColors.TextTertiary,
                 style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.clickable { isRoomDialogVisible = true },
             )
         }
         trackDurationMillis?.let { durationMillis ->
@@ -243,13 +258,35 @@ internal fun PlaybackDetailSection(
         PlaybackActionBar(
             currentTrack = currentTrack,
             playbackMode = playbackMode,
+            sleepTimerState = sleepTimerState,
             isFavoriteLoading = isFavoriteLoading,
             modifier = Modifier.fillMaxWidth(),
             onShowPlaylist = { isPlaylistSheetVisible = true },
             onShowModePicker = { isModeDialogVisible = true },
             onToggleTrackFavorite = { onToggleTrackFavorite(currentTrack) },
+            onShowSleepTimer = {
+                val remainingMillis = sleepTimerState.remainingMillis
+                val totalMinutes = ((remainingMillis + 59_999L) / 60_000L).toInt()
+                if (sleepTimerState.isActive && totalMinutes > 0) {
+                    sleepTimerHours = totalMinutes / 60
+                    sleepTimerMinutes = totalMinutes % 60
+                } else {
+                    sleepTimerHours = 0
+                    sleepTimerMinutes = 30
+                }
+                sleepTimerInputError = null
+                isSleepTimerDialogVisible = true
+            },
             onShowRoomPicker = { isRoomDialogVisible = true },
         )
+        if (sleepTimerState.isActive) {
+            Text(
+                text = Strings.sleepTimerRemaining(formatSleepTimerCountdown(sleepTimerState.remainingMillis)),
+                color = AppColors.Accent,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
     }
 
     if (isPlaylistSheetVisible) {
@@ -432,31 +469,113 @@ internal fun PlaybackDetailSection(
             },
         )
     }
+
+    if (isSleepTimerDialogVisible) {
+        AlertDialog(
+            onDismissRequest = { isSleepTimerDialogVisible = false },
+            title = {
+                Text(
+                    text = Strings.sleepTimerDialogTitle,
+                    color = AppColors.TextPrimary,
+                    fontWeight = FontWeight.Bold,
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        text = Strings.sleepTimerDesc,
+                        color = AppColors.TextSecondary,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        WheelPickerField(
+                            label = Strings.sleepTimerHours,
+                            value = sleepTimerHours,
+                            range = 0..23,
+                            onValueChange = {
+                                sleepTimerHours = it
+                                sleepTimerInputError = null
+                            },
+                        )
+                        WheelPickerField(
+                            label = Strings.sleepTimerMinutes,
+                            value = sleepTimerMinutes,
+                            range = 0..59,
+                            formatter = { "%02d".format(it) },
+                            onValueChange = {
+                                sleepTimerMinutes = it
+                                sleepTimerInputError = null
+                            },
+                        )
+                    }
+                    sleepTimerInputError?.let { message ->
+                        Text(
+                            text = message,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        if (sleepTimerHours <= 0 && sleepTimerMinutes <= 0) {
+                            sleepTimerInputError = Strings.sleepTimerInvalidDuration
+                        } else {
+                            onStartSleepTimer(sleepTimerHours, sleepTimerMinutes)
+                            isSleepTimerDialogVisible = false
+                        }
+                    },
+                ) {
+                    Text(Strings.sleepTimerConfirm)
+                }
+            },
+            dismissButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (sleepTimerState.isActive) {
+                        TextButton(
+                            onClick = {
+                                onCancelSleepTimer()
+                                isSleepTimerDialogVisible = false
+                            },
+                        ) {
+                            Text(Strings.cancelSleepTimer)
+                        }
+                    }
+                    TextButton(onClick = { isSleepTimerDialogVisible = false }) {
+                        Text(Strings.back)
+                    }
+                }
+            },
+        )
+    }
 }
 
 @Composable
 private fun PlaybackActionBar(
     currentTrack: PlexTrackStream,
     playbackMode: PlaybackMode,
+    sleepTimerState: SleepTimerState,
     isFavoriteLoading: Boolean,
     modifier: Modifier = Modifier,
     onShowPlaylist: () -> Unit,
     onShowModePicker: () -> Unit,
     onToggleTrackFavorite: () -> Unit,
+    onShowSleepTimer: () -> Unit,
     onShowRoomPicker: () -> Unit,
 ) {
+    val actionIconSize = 36.dp
+    val actionSlotHeight = 56.dp
     Row(
-        modifier = modifier.padding(vertical = 0.dp),
-        horizontalArrangement = Arrangement.SpaceEvenly,
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(0.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        PlaybackActionButton(
-            icon = Icons.Filled.QueueMusic,
-            contentDescription = Strings.playlistLabel,
-            modifier = Modifier.weight(1f),
-            isSelected = false,
-            onClick = onShowPlaylist,
-        )
         PlaybackActionButton(
             icon = when (playbackMode) {
                 PlaybackMode.Sequential -> Icons.Filled.ArrowForward
@@ -467,10 +586,14 @@ private fun PlaybackActionBar(
             contentDescription = playbackMode.label,
             modifier = Modifier.weight(1f),
             isSelected = playbackMode != PlaybackMode.Sequential,
+            iconSize = actionIconSize,
+            slotHeight = actionSlotHeight,
             onClick = onShowModePicker,
         )
         Box(
-            modifier = Modifier.weight(1f),
+            modifier = Modifier
+                .weight(1f)
+                .height(actionSlotHeight),
             contentAlignment = Alignment.Center,
         ) {
             val interactionSource = remember { MutableInteractionSource() }
@@ -491,22 +614,44 @@ private fun PlaybackActionBar(
                         scaleX = scale
                         scaleY = scale
                     }
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                    .fillMaxWidth()
+                    .height(actionSlotHeight),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 FavoriteIconGraphic(
                     isFavorite = currentTrack.isFavorite,
                     tint = if (currentTrack.isFavorite) AppColors.Accent else AppColors.TextSecondary,
-                    modifier = Modifier.size(24.dp),
+                    baseSize = actionIconSize,
+                    selectedSize = 38.dp,
                 )
             }
         }
+        PlaybackActionButton(
+            icon = Icons.Filled.QueueMusic,
+            contentDescription = Strings.playlistLabel,
+            modifier = Modifier.weight(1f),
+            isSelected = false,
+            iconSize = actionIconSize,
+            slotHeight = actionSlotHeight,
+            onClick = onShowPlaylist,
+        )
+        PlaybackActionButton(
+            icon = Icons.Filled.Bedtime,
+            contentDescription = Strings.sleepTimer,
+            modifier = Modifier.weight(1f),
+            isSelected = sleepTimerState.isActive,
+            iconSize = actionIconSize,
+            slotHeight = actionSlotHeight,
+            onClick = onShowSleepTimer,
+        )
         PlaybackActionButton(
             icon = Icons.Filled.Speaker,
             contentDescription = Strings.castRoom,
             modifier = Modifier.weight(1f),
             isSelected = false,
+            iconSize = actionIconSize,
+            slotHeight = actionSlotHeight,
             onClick = onShowRoomPicker,
         )
     }
@@ -518,6 +663,8 @@ private fun PlaybackActionButton(
     contentDescription: String,
     modifier: Modifier = Modifier,
     isSelected: Boolean,
+    iconSize: androidx.compose.ui.unit.Dp = 30.dp,
+    slotHeight: androidx.compose.ui.unit.Dp = 48.dp,
     onClick: () -> Unit,
 ) {
     val interactionSource = remember { MutableInteractionSource() }
@@ -541,15 +688,16 @@ private fun PlaybackActionButton(
                 scaleX = scale
                 scaleY = scale
             }
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            .fillMaxWidth()
+            .height(slotHeight),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(4.dp),
+        verticalArrangement = Arrangement.Center,
     ) {
         Icon(
             imageVector = icon,
             contentDescription = contentDescription,
             tint = animatedTint,
-            modifier = Modifier.size(24.dp),
+            modifier = Modifier.size(iconSize),
         )
     }
 }
@@ -717,6 +865,119 @@ internal fun AlbumDetailSection(
             }
         }
     }
+}
+
+@Composable
+private fun WheelPickerField(
+    label: String,
+    value: Int,
+    range: IntRange,
+    modifier: Modifier = Modifier,
+    formatter: (Int) -> String = { it.toString() },
+    onValueChange: (Int) -> Unit,
+) {
+    val values = remember(range) { range.toList() }
+    val itemHeight = 44.dp
+    val visibleItemCount = 5
+    val contentPadding = itemHeight * ((visibleItemCount - 1) / 2)
+    val density = LocalDensity.current
+    val itemHeightPx = remember(density) { with(density) { itemHeight.roundToPx() } }
+    val initialIndex = (value.coerceIn(range.first, range.last) - range.first)
+    val listState = rememberLazyListState(initialFirstVisibleItemIndex = initialIndex)
+    val flingBehavior = rememberSnapFlingBehavior(lazyListState = listState)
+
+    LaunchedEffect(value, range) {
+        val targetIndex = value.coerceIn(range.first, range.last) - range.first
+        val currentCenteredIndex = centeredWheelIndex(
+            firstVisibleItemIndex = listState.firstVisibleItemIndex,
+            firstVisibleItemScrollOffset = listState.firstVisibleItemScrollOffset,
+            itemHeightPx = itemHeightPx,
+            maxIndex = values.lastIndex,
+        )
+        if (currentCenteredIndex != targetIndex) {
+            listState.scrollToItem(targetIndex)
+        }
+    }
+
+    LaunchedEffect(listState, itemHeightPx, values) {
+        snapshotFlow { listState.isScrollInProgress }
+            .filter { isScrolling -> !isScrolling }
+            .map {
+                centeredWheelIndex(
+                    firstVisibleItemIndex = listState.firstVisibleItemIndex,
+                    firstVisibleItemScrollOffset = listState.firstVisibleItemScrollOffset,
+                    itemHeightPx = itemHeightPx,
+                    maxIndex = values.lastIndex,
+                )
+            }
+            .distinctUntilChanged()
+            .collect { centeredIndex ->
+                values.getOrNull(centeredIndex)?.let(onValueChange)
+            }
+    }
+
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            text = label,
+            color = AppColors.TextSecondary,
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        Box(
+            modifier = Modifier
+                .width(88.dp)
+                .height(itemHeight * visibleItemCount)
+                .clip(RoundedCornerShape(18.dp))
+                .background(AppColors.SurfaceAlt),
+            contentAlignment = Alignment.Center,
+        ) {
+            LazyColumn(
+                state = listState,
+                flingBehavior = flingBehavior,
+                modifier = Modifier.fillMaxSize(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                contentPadding = PaddingValues(vertical = contentPadding),
+            ) {
+                items(values) { item ->
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(itemHeight),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = formatter(item),
+                            color = Color.White,
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                }
+            }
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(itemHeight)
+                    .padding(horizontal = 8.dp)
+                    .border(BorderStroke(1.dp, Color.White.copy(alpha = 0.95f)), RoundedCornerShape(12.dp))
+            )
+        }
+    }
+}
+
+private fun centeredWheelIndex(
+    firstVisibleItemIndex: Int,
+    firstVisibleItemScrollOffset: Int,
+    itemHeightPx: Int,
+    maxIndex: Int,
+): Int {
+    if (itemHeightPx <= 0) return firstVisibleItemIndex.coerceIn(0, maxIndex)
+    val shouldAdvance = firstVisibleItemScrollOffset >= itemHeightPx / 2
+    val rawIndex = firstVisibleItemIndex + if (shouldAdvance) 1 else 0
+    return rawIndex.coerceIn(0, maxIndex)
 }
 
 @Composable
@@ -1086,6 +1347,18 @@ internal suspend fun waitForTrackToFinish(
         if (relTimeSeconds != null && trackDurationSeconds != null && relTimeSeconds >= trackDurationSeconds - 1) {
             return
         }
+    }
+}
+
+private fun formatSleepTimerCountdown(remainingMillis: Long): String {
+    val totalSeconds = (remainingMillis / 1_000L).coerceAtLeast(0L)
+    val hours = totalSeconds / 3_600L
+    val minutes = (totalSeconds % 3_600L) / 60L
+    val seconds = totalSeconds % 60L
+    return if (hours > 0L) {
+        "%d:%02d:%02d".format(hours, minutes, seconds)
+    } else {
+        "%02d:%02d".format(minutes, seconds)
     }
 }
 

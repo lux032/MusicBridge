@@ -17,6 +17,19 @@ import kotlin.random.Random
 internal class AppStatePlaybackCoordinator(
     private val state: AppState,
 ) {
+    init {
+        PlaybackForegroundService.onSleepTimerExpired = {
+            state.albumPlaybackJob?.cancel()
+            state.playbackReportingJob?.cancel()
+            state.scope.launch {
+                state.isPlaybackCommandLoading = false
+                state.errorMessage = null
+                state.miniPlayerState = null
+                state.actionMessage = Strings.sleepTimerFinished
+            }
+        }
+    }
+
     fun startSingleTrackPlayback(
         album: PlexAlbum,
         tracks: List<PlexTrackStream>,
@@ -32,6 +45,7 @@ internal class AppStatePlaybackCoordinator(
         state.recentPlayedAlbumKeys = state.appPreferences.loadRecentPlayedAlbumKeys()
         state.selectedSonosRoom = room
         state.volumeSyncKey += 1
+        syncSleepTimerRoom(room)
         state.miniPlayerState = MiniPlayerState(
             album = displayAlbum,
             tracks = tracks,
@@ -84,6 +98,7 @@ internal class AppStatePlaybackCoordinator(
         state.recentPlayedAlbumKeys = state.appPreferences.loadRecentPlayedAlbumKeys()
         state.selectedSonosRoom = room
         state.volumeSyncKey += 1
+        syncSleepTimerRoom(room)
         state.miniPlayerState = MiniPlayerState(
             album = albumTrackResult.album,
             tracks = albumTrackResult.tracks,
@@ -214,6 +229,7 @@ internal class AppStatePlaybackCoordinator(
         state.playbackReportingJob?.cancel()
         state.selectedSonosRoom = room
         state.volumeSyncKey += 1
+        syncSleepTimerRoom(room)
         val tracks = if (shuffle) playlistResult.tracks.shuffled() else playlistResult.tracks
         val fakeAlbum = PlexAlbum(
             ratingKey = playlistResult.playlist.ratingKey,
@@ -361,6 +377,30 @@ internal class AppStatePlaybackCoordinator(
             }
             state.isPlaybackCommandLoading = false
         }
+    }
+
+    fun startSleepTimer(hours: Int, minutes: Int, room: SonosRoom) {
+        val safeHours = hours.coerceIn(0, 23)
+        val safeMinutes = minutes.coerceIn(0, 59)
+        val totalMinutes = (safeHours * 60) + safeMinutes
+        if (totalMinutes <= 0) {
+            state.errorMessage = Strings.sleepTimerInvalidDuration
+            return
+        }
+        val durationMillis = totalMinutes * 60_000L
+        PlaybackForegroundService.setSleepTimer(
+            context = state.context,
+            room = room,
+            durationMillis = durationMillis,
+        )
+        state.errorMessage = null
+        state.actionMessage = "${Strings.sleepTimer} ${Strings.sleepTimerRemaining(formatSleepTimer(durationMillis))}"
+    }
+
+    fun cancelSleepTimer() {
+        PlaybackForegroundService.cancelSleepTimer(state.context)
+        state.errorMessage = null
+        state.actionMessage = "${Strings.sleepTimer} ${Strings.sleepTimerOff}"
     }
 
     private fun startPlaybackReporting(
@@ -604,6 +644,16 @@ internal class AppStatePlaybackCoordinator(
         return tracks.getOrNull(latestMiniPlayerState.currentIndex)
     }
 
+    private fun syncSleepTimerRoom(room: SonosRoom) {
+        val timerState = PlaybackForegroundService.sleepTimerState.value
+        if (!timerState.isActive) return
+        PlaybackForegroundService.setSleepTimer(
+            context = state.context,
+            room = room,
+            durationMillis = timerState.remainingMillis,
+        )
+    }
+
     private fun resolveNextPlaybackIndex(trackCount: Int, currentIndex: Int): Int? {
         if (trackCount <= 0) return null
         val safeCurrentIndex = currentIndex.coerceIn(0, trackCount - 1)
@@ -652,5 +702,16 @@ internal class AppStatePlaybackCoordinator(
             lastViewedAtEpochSeconds = fallback?.lastViewedAtEpochSeconds,
             section = fallback?.section ?: PlexSection("", "", ""),
         )
+    }
+}
+
+private fun formatSleepTimer(durationMillis: Long): String {
+    val totalMinutes = (durationMillis / 60_000L).coerceAtLeast(0L)
+    val hours = totalMinutes / 60L
+    val minutes = totalMinutes % 60L
+    return if (hours > 0L) {
+        "%d:%02d".format(hours, minutes)
+    } else {
+        "%d".format(minutes.coerceAtLeast(1L))
     }
 }

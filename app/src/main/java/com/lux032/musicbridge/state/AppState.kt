@@ -16,6 +16,7 @@ import com.lux032.musicbridge.plex.PlexPlaylist
 import com.lux032.musicbridge.plex.PlexPlaylistTracksResult
 import com.lux032.musicbridge.plex.PlexTrackStream
 import com.lux032.musicbridge.plex.isFavorite
+import com.lux032.musicbridge.service.PlaybackForegroundService
 import com.lux032.musicbridge.sonos.SonosController
 import com.lux032.musicbridge.sonos.SonosRoom
 import com.lux032.musicbridge.storage.AlbumLocalStore
@@ -255,4 +256,12 @@ class AppState(
 
     fun seekPlayback(state: MiniPlayerState, positionMillis: Long) =
         playbackCoordinator.seekPlayback(state, positionMillis)
+
+    val sleepTimerState
+        get() = PlaybackForegroundService.sleepTimerState
+
+    fun startSleepTimer(hours: Int, minutes: Int, room: SonosRoom) =
+        playbackCoordinator.startSleepTimer(hours, minutes, room)
+
+    fun cancelSleepTimer() = playbackCoordinator.cancelSleepTimer()
 }

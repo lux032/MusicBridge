@@ -24,6 +24,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -111,6 +112,7 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
     var miniPlayerHeightPx by remember { mutableIntStateOf(0) }
     var isVolumeOverlayVisible by remember { mutableStateOf(false) }
     var volumeOverlayNonce by remember { mutableIntStateOf(0) }
+    val sleepTimerState by state.sleepTimerState.collectAsState()
 
     val activeSection = state.activeSection
     val bottomNavigationHeight = 84.dp
@@ -343,6 +345,51 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                             },
                         )
                     }
+                } else if (activeSection == AppSection.PlaybackDetail) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(start = 16.dp, top = 16.dp, end = 16.dp, bottom = contentBottomPadding),
+                    ) {
+                        PlaybackDetailSection(
+                            state = state.miniPlayerState,
+                            rooms = state.sonosRooms,
+                            playbackMode = state.playbackMode,
+                            sleepTimerState = sleepTimerState,
+                            isLoading = state.isPlaybackCommandLoading,
+                            isFavoriteLoading = state.isFavoriteMutationLoading,
+                            onBack = state::navigateBack,
+                            onPrevious = {
+                                val playerState = state.miniPlayerState ?: return@PlaybackDetailSection
+                                val newIndex = (playerState.currentIndex - 1).coerceAtLeast(0)
+                                if (newIndex != playerState.currentIndex) {
+                                    state.playQueueIndex(newIndex, room = playerState.room)
+                                }
+                            },
+                            onNext = {
+                                val playerState = state.miniPlayerState ?: return@PlaybackDetailSection
+                                val newIndex = (playerState.currentIndex + 1).coerceAtMost(playerState.tracks.lastIndex)
+                                if (newIndex != playerState.currentIndex) {
+                                    state.playQueueIndex(newIndex, room = playerState.room)
+                                }
+                            },
+                            onTogglePause = state::togglePause,
+                            onSeek = state::seekPlayback,
+                            onAlbumClick = state::openAlbumDetail,
+                            onArtistClick = state::openArtistAlbumsByName,
+                            onToggleTrackFavorite = state::toggleTrackFavorite,
+                            onSelectTrack = { index -> state.playQueueIndex(index) },
+                            onSelectPlaybackMode = state::updatePlaybackMode,
+                            onSelectRoom = state::switchPlaybackRoom,
+                            onStartSleepTimer = { hours, minutes ->
+                                val room = state.miniPlayerState?.room ?: state.selectedSonosRoom
+                                if (room != null) {
+                                    state.startSleepTimer(hours, minutes, room)
+                                }
+                            },
+                            onCancelSleepTimer = state::cancelSleepTimer,
+                        )
+                    }
                 } else {
                     val scrollState = rememberScrollState(
                         initial = if (shouldPersistVerticalScroll(currentSection)) {
@@ -410,36 +457,7 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                                     }
                                 },
                             )
-                            AppSection.PlaybackDetail -> PlaybackDetailSection(
-                                state = state.miniPlayerState,
-                                rooms = state.sonosRooms,
-                                playbackMode = state.playbackMode,
-                                isLoading = state.isPlaybackCommandLoading,
-                                isFavoriteLoading = state.isFavoriteMutationLoading,
-                                onBack = state::navigateBack,
-                                onPrevious = {
-                                    val playerState = state.miniPlayerState ?: return@PlaybackDetailSection
-                                    val newIndex = (playerState.currentIndex - 1).coerceAtLeast(0)
-                                    if (newIndex != playerState.currentIndex) {
-                                        state.playQueueIndex(newIndex, room = playerState.room)
-                                    }
-                                },
-                                onNext = {
-                                    val playerState = state.miniPlayerState ?: return@PlaybackDetailSection
-                                    val newIndex = (playerState.currentIndex + 1).coerceAtMost(playerState.tracks.lastIndex)
-                                    if (newIndex != playerState.currentIndex) {
-                                        state.playQueueIndex(newIndex, room = playerState.room)
-                                    }
-                                },
-                                onTogglePause = state::togglePause,
-                                onSeek = state::seekPlayback,
-                                onAlbumClick = state::openAlbumDetail,
-                                onArtistClick = state::openArtistAlbumsByName,
-                                onToggleTrackFavorite = state::toggleTrackFavorite,
-                                onSelectTrack = { index -> state.playQueueIndex(index) },
-                                onSelectPlaybackMode = state::updatePlaybackMode,
-                                onSelectRoom = state::switchPlaybackRoom,
-                            )
+                            AppSection.PlaybackDetail -> Unit
                             AppSection.ArtistAlbums -> ArtistAlbumsSection(
                                 artist = state.selectedArtist,
                                 selectedAlbum = state.selectedAlbum,

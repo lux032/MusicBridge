@@ -460,10 +460,11 @@ internal fun FavoriteIconGraphic(
     isFavorite: Boolean,
     tint: Color = AppColors.TextPrimary,
     modifier: Modifier = Modifier,
+    baseSize: androidx.compose.ui.unit.Dp = 24.dp,
+    selectedSize: androidx.compose.ui.unit.Dp = 26.dp,
 ) {
-    val size = 24.dp
     val animatedSize by animateDpAsState(
-        targetValue = if (isFavorite) 26.dp else 24.dp,
+        targetValue = if (isFavorite) selectedSize else baseSize,
         label = "favorite_size",
     )
     val animatedTint by animateColorAsState(

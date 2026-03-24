@@ -33,6 +33,14 @@ data class MiniPlayerState(
     val durationMillis: Long? = null,
 )
 
+data class SleepTimerState(
+    val endEpochMillis: Long? = null,
+    val remainingMillis: Long = 0L,
+) {
+    val isActive: Boolean
+        get() = endEpochMillis != null && remainingMillis > 0L
+}
+
 enum class PlaybackMode {
     Sequential,
     RepeatAll,
