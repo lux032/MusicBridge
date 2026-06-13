@@ -40,6 +40,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.lux032.musicbridge.plex.PlexAlbum
+import com.lux032.musicbridge.sonos.SonosRoom
 import kotlinx.coroutines.launch
 
 @Composable
@@ -445,8 +446,11 @@ internal fun BoxScope.VerticalIndexBar(
 internal fun ArtistAlbumsSection(
     artist: ArtistSummary?,
     selectedAlbum: PlexAlbum?,
+    selectedRoom: SonosRoom?,
+    isPlaybackLoading: Boolean,
     onBack: () -> Unit,
     onAlbumClick: (PlexAlbum) -> Unit,
+    onShuffleArtist: (ArtistSummary, SonosRoom) -> Unit,
 ) {
     val currentArtist = artist
     if (currentArtist == null) {
@@ -491,6 +495,23 @@ internal fun ArtistAlbumsSection(
             Text(
                 text = Strings.artistAlbumsDesc(currentArtist.albumCount),
                 color = AppColors.TextSecondary,
+            )
+            Button(
+                onClick = { selectedRoom?.let { onShuffleArtist(currentArtist, it) } },
+                enabled = selectedRoom != null && currentArtist.albums.isNotEmpty() && !isPlaybackLoading,
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Shuffle,
+                    contentDescription = Strings.shuffleArtist,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(Strings.shuffleArtist)
+            }
+            Text(
+                text = selectedRoom?.let { Strings.willPushTo(it.roomName) } ?: Strings.noRoomSelectedDesc,
+                color = AppColors.TextTertiary,
+                style = MaterialTheme.typography.bodySmall,
             )
         }
         AlbumGrid(

@@ -461,8 +461,11 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                             AppSection.ArtistAlbums -> ArtistAlbumsSection(
                                 artist = state.selectedArtist,
                                 selectedAlbum = state.selectedAlbum,
+                                selectedRoom = state.selectedSonosRoom,
+                                isPlaybackLoading = state.isPlaybackCommandLoading,
                                 onBack = state::navigateBack,
                                 onAlbumClick = state::openAlbumDetail,
+                                onShuffleArtist = state::shuffleArtist,
                             )
                             AppSection.FavoriteCollection -> AlbumCollectionSection(
                                 title = Strings.favoriteAlbumsCollection,

@@ -7,6 +7,7 @@ import com.lux032.musicbridge.plex.PlexPlaylistTracksResult
 import com.lux032.musicbridge.plex.PlexSection
 import com.lux032.musicbridge.plex.PlexTrackStream
 import com.lux032.musicbridge.plex.isFavorite
+import com.lux032.musicbridge.sonos.SonosRoom
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -153,6 +154,48 @@ internal class AppStateLibraryCoordinator(
         val normalizedName = artistName?.trim().orEmpty().ifBlank { "未知艺人" }
         state.selectedArtistName = normalizedName
         state.navigateTo(AppSection.ArtistAlbums)
+    }
+
+    fun shuffleArtist(artist: ArtistSummary, room: SonosRoom) {
+        if (state.isPlaybackCommandLoading || artist.albums.isEmpty()) return
+
+        state.isPlaybackCommandLoading = true
+        state.errorMessage = null
+        state.actionMessage = "正在整理 ${artist.name} 的歌曲..."
+        state.scope.launch {
+            runCatching {
+                val tracks = artist.albums.flatMap { album ->
+                    val cachedTracks = withContext(Dispatchers.IO) {
+                        state.albumLocalStore.getAlbumTracks(album.ratingKey)
+                    }
+                    cachedTracks.ifEmpty {
+                        runCatching {
+                            state.client().fetchAlbumTrackStreams(album).tracks
+                        }.getOrDefault(emptyList())
+                    }
+                }
+                    .distinctBy(PlexTrackStream::ratingKey)
+                    .shuffled()
+
+                check(tracks.isNotEmpty()) { "未找到 ${artist.name} 的可播放歌曲" }
+                PlexPlaylistTracksResult(
+                    serverName = "",
+                    playlist = PlexPlaylist(
+                        ratingKey = "artist:${artist.name}",
+                        title = artist.name,
+                        thumbUrl = artist.coverUrl,
+                        leafCount = tracks.size,
+                    ),
+                    tracks = tracks,
+                )
+            }.onSuccess { result ->
+                state.startPlaylistPlayback(result, room, shuffle = false)
+                state.actionMessage = "正在随机播放 ${artist.name} 的 ${result.tracks.size} 首歌曲"
+            }.onFailure {
+                state.errorMessage = it.message ?: "加载歌手歌曲失败"
+                state.isPlaybackCommandLoading = false
+            }
+        }
     }
 
     fun loadPlaylists() {

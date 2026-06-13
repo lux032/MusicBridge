@@ -332,7 +332,10 @@ internal class AppStatePlaybackCoordinator(
         val playerState = state.miniPlayerState ?: return
         val targetRoom = room ?: playerState.room
         val targetIndex = index.coerceIn(0, playerState.tracks.lastIndex)
-        val currentTrackResult = state.trackResult?.takeIf { it.album.ratingKey == playerState.album.ratingKey }
+        val currentTrackResult = state.trackResult?.takeIf { result ->
+            result.album.ratingKey == playerState.album.ratingKey &&
+                result.tracks.map(PlexTrackStream::ratingKey) == playerState.tracks.map(PlexTrackStream::ratingKey)
+        }
         if (currentTrackResult != null) {
             startAlbumPlayback(currentTrackResult, targetRoom, targetIndex, positionMillis)
         } else {

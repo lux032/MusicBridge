@@ -198,6 +198,8 @@ class AppState(
 
     fun openArtistAlbumsByName(artistName: String?) = libraryCoordinator.openArtistAlbumsByName(artistName)
 
+    fun shuffleArtist(artist: ArtistSummary, room: SonosRoom) = libraryCoordinator.shuffleArtist(artist, room)
+
     fun loadPlaylists() = libraryCoordinator.loadPlaylists()
 
     fun loadFavoriteTracks() = libraryCoordinator.loadFavoriteTracks()

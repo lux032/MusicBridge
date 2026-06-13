@@ -84,6 +84,7 @@ object Strings {
     val artistNotFoundDesc get() = if (isZhCN) "先回到歌手页重新选择，或者先同步一次本地音乐库。" else "Go back to the artists page and select again, or sync your local music library first."
     val backToArtists get() = if (isZhCN) "返回歌手页" else "Back to Artists"
     val artistAlbumsDesc get() = if (isZhCN) { count: Int -> "共 $count 张专辑，点击封面进入专辑详情并继续播放。" } else { count: Int -> "Total $count albums. Tap cover to view details and continue playback." }
+    val shuffleArtist get() = if (isZhCN) "随机播放该歌手" else "Shuffle Artist"
     val volume get() = if (isZhCN) "音量" else "Volume"
     val loadingVolume get() = if (isZhCN) { room: String -> "正在读取 $room 的音量" } else { room: String -> "Loading volume for $room" }
     val home get() = if (isZhCN) "首页" else "Home"
