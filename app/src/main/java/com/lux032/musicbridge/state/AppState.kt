@@ -2,6 +2,7 @@ package com.lux032.musicbridge
 
 import android.content.Context
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -88,8 +89,11 @@ class AppState(
     private val savedScrollValues = mutableMapOf<AppSection, Int>()
     private val savedLazyPositions = mutableMapOf<AppSection, SavedScrollPosition>()
 
-    val favoriteAlbums: List<PlexAlbum>
-        get() = allAlbums
+    // Derived collections are wrapped in derivedStateOf so the filter/sort runs only
+    // when their snapshot inputs (allAlbums / recentPlayedAlbumKeys) actually change,
+    // instead of re-sorting the whole library on every recomposition that reads them.
+    val favoriteAlbums: List<PlexAlbum> by derivedStateOf {
+        allAlbums
             .filter(PlexAlbum::isFavorite)
             .sortedWith(
                 compareBy<PlexAlbum> { album ->
@@ -98,9 +102,10 @@ class AppState(
                     .thenByDescending { it.lastViewedAtEpochSeconds ?: 0L }
                     .thenBy { it.title.lowercase() }
             )
+    }
 
-    val recentPlayedAlbums: List<PlexAlbum>
-        get() = allAlbums
+    val recentPlayedAlbums: List<PlexAlbum> by derivedStateOf {
+        allAlbums
             .filter { album ->
                 album.ratingKey in recentPlayedAlbumKeys || (album.lastViewedAtEpochSeconds ?: 0L) > 0L
             }
@@ -111,16 +116,21 @@ class AppState(
                     .thenByDescending { it.lastViewedAtEpochSeconds ?: 0L }
                     .thenBy { it.title.lowercase() }
             )
+    }
 
-    val recentAddedAlbums: List<PlexAlbum>
-        get() = allAlbums
+    val recentAddedAlbums: List<PlexAlbum> by derivedStateOf {
+        allAlbums
             .sortedWith(
                 compareByDescending<PlexAlbum> { it.addedAtEpochSeconds ?: 0L }
                     .thenBy { it.title.lowercase() }
             )
+    }
 
-    val selectedArtist: ArtistSummary?
-        get() = selectedArtistName?.let { selectedName ->
+    // Reads selectedArtistName + artists (snapshot state); re-queries the local store
+    // only when either changes. A library sync rebuilds `artists`, which keeps the
+    // cached album list in step with the underlying database.
+    val selectedArtist: ArtistSummary? by derivedStateOf {
+        selectedArtistName?.let { selectedName ->
             val albums = albumLocalStore.getAlbumsByArtist(selectedName)
             val summary = artists.firstOrNull { it.name == selectedName }
             summary?.let {
@@ -132,6 +142,7 @@ class AppState(
                 )
             }
         }
+    }
 
     fun saveScrollValue(section: AppSection, value: Int) {
         savedScrollValues[section] = value
