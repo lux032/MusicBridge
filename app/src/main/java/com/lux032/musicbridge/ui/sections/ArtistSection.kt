@@ -451,6 +451,8 @@ internal fun ArtistAlbumsSection(
     selectedAlbum: PlexAlbum?,
     selectedRoom: SonosRoom?,
     isPlaybackLoading: Boolean,
+    bottomContentPadding: androidx.compose.ui.unit.Dp,
+    gridState: LazyGridState = rememberLazyGridState(),
     onBack: () -> Unit,
     onAlbumClick: (PlexAlbum) -> Unit,
     onShuffleArtist: (ArtistSummary, SonosRoom) -> Unit,
@@ -468,62 +470,77 @@ internal fun ArtistAlbumsSection(
 
     val heroAlbum = currentArtist.albums.firstOrNull()
 
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+    LazyVerticalGrid(
+        state = gridState,
+        columns = GridCells.Fixed(2),
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(bottom = bottomContentPadding),
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        OutlinedButton(onClick = onBack) {
-            Text(Strings.backToArtists)
-        }
-        heroAlbum?.let { album ->
-            AsyncAlbumArtwork(
-                imageUrl = currentArtist.coverUrl ?: album.thumbUrl,
-                title = currentArtist.name,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(1.25f)
-                    .clip(RoundedCornerShape(24.dp)),
-            )
-        }
-        Column(
-            modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text(
-                text = currentArtist.name,
-                style = MaterialTheme.typography.headlineMedium,
-                color = AppColors.TextPrimary,
-                fontWeight = FontWeight.Bold,
-            )
-            Text(
-                text = Strings.artistAlbumsDesc(currentArtist.albumCount),
-                color = AppColors.TextSecondary,
-            )
-            Button(
-                onClick = { selectedRoom?.let { onShuffleArtist(currentArtist, it) } },
-                enabled = selectedRoom != null && currentArtist.albums.isNotEmpty() && !isPlaybackLoading,
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.Shuffle,
-                    contentDescription = Strings.shuffleArtist,
-                    modifier = Modifier.size(18.dp),
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(Strings.shuffleArtist)
+        item(span = { GridItemSpan(maxLineSpan) }, contentType = "back") {
+            OutlinedButton(onClick = onBack) {
+                Text(Strings.backToArtists)
             }
-            Text(
-                text = selectedRoom?.let { Strings.willPushTo(it.roomName) } ?: Strings.noRoomSelectedDesc,
-                color = AppColors.TextTertiary,
-                style = MaterialTheme.typography.bodySmall,
+        }
+        if (heroAlbum != null) {
+            item(span = { GridItemSpan(maxLineSpan) }, contentType = "hero") {
+                AsyncAlbumArtwork(
+                    imageUrl = currentArtist.coverUrl ?: heroAlbum.thumbUrl,
+                    title = currentArtist.name,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(1.25f)
+                        .clip(RoundedCornerShape(24.dp)),
+                )
+            }
+        }
+        item(span = { GridItemSpan(maxLineSpan) }, contentType = "header") {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    text = currentArtist.name,
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = AppColors.TextPrimary,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(
+                    text = Strings.artistAlbumsDesc(currentArtist.albumCount),
+                    color = AppColors.TextSecondary,
+                )
+                Button(
+                    onClick = { selectedRoom?.let { onShuffleArtist(currentArtist, it) } },
+                    enabled = selectedRoom != null && currentArtist.albums.isNotEmpty() && !isPlaybackLoading,
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Shuffle,
+                        contentDescription = Strings.shuffleArtist,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(Strings.shuffleArtist)
+                }
+                Text(
+                    text = selectedRoom?.let { Strings.willPushTo(it.roomName) } ?: Strings.noRoomSelectedDesc,
+                    color = AppColors.TextTertiary,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
+        items(
+            items = currentArtist.albums,
+            key = { it.ratingKey },
+            contentType = { "album" },
+        ) { album ->
+            AlbumCoverCard(
+                album = album,
+                selected = selectedAlbum?.ratingKey == album.ratingKey,
+                onClick = { onAlbumClick(album) },
+                compact = false,
             )
         }
-        AlbumGrid(
-            albums = currentArtist.albums,
-            columns = 2,
-            selectedAlbum = selectedAlbum,
-            onAlbumClick = onAlbumClick,
-            compact = false,
-        )
     }
 }
 

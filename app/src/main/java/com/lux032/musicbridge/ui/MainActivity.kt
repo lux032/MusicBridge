@@ -215,6 +215,8 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
         when (section) {
             AppSection.AlbumDetail,
             AppSection.ArtistAlbums,
+            AppSection.FavoriteCollection,
+            AppSection.RecentAdded,
             AppSection.PlaylistDetail -> false
             else -> true
         }
@@ -390,6 +392,100 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                             onCancelSleepTimer = state::cancelSleepTimer,
                         )
                     }
+                } else if (activeSection == AppSection.ArtistAlbums) {
+                    val savedPos = state.getSavedLazyScrollPosition(AppSection.ArtistAlbums)
+                    val artistAlbumsGridState = rememberLazyGridState(
+                        initialFirstVisibleItemIndex = savedPos.index,
+                        initialFirstVisibleItemScrollOffset = savedPos.offset,
+                    )
+                    DisposableEffect(Unit) {
+                        onDispose {
+                            state.saveLazyScrollPosition(
+                                AppSection.ArtistAlbums,
+                                artistAlbumsGridState.firstVisibleItemIndex,
+                                artistAlbumsGridState.firstVisibleItemScrollOffset,
+                            )
+                        }
+                    }
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(start = 16.dp, top = 16.dp, end = 16.dp),
+                    ) {
+                        ArtistAlbumsSection(
+                            artist = state.selectedArtist,
+                            selectedAlbum = state.selectedAlbum,
+                            selectedRoom = state.selectedSonosRoom,
+                            isPlaybackLoading = state.isPlaybackCommandLoading,
+                            bottomContentPadding = contentBottomPadding,
+                            gridState = artistAlbumsGridState,
+                            onBack = state::navigateBack,
+                            onAlbumClick = state::openAlbumDetail,
+                            onShuffleArtist = state::shuffleArtist,
+                        )
+                    }
+                } else if (activeSection == AppSection.FavoriteCollection) {
+                    val savedPos = state.getSavedLazyScrollPosition(AppSection.FavoriteCollection)
+                    val favoriteGridState = rememberLazyGridState(
+                        initialFirstVisibleItemIndex = savedPos.index,
+                        initialFirstVisibleItemScrollOffset = savedPos.offset,
+                    )
+                    DisposableEffect(Unit) {
+                        onDispose {
+                            state.saveLazyScrollPosition(
+                                AppSection.FavoriteCollection,
+                                favoriteGridState.firstVisibleItemIndex,
+                                favoriteGridState.firstVisibleItemScrollOffset,
+                            )
+                        }
+                    }
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(start = 16.dp, top = 16.dp, end = 16.dp),
+                    ) {
+                        AlbumCollectionSection(
+                            title = Strings.favoriteAlbumsCollection,
+                            subtitle = Strings.favoriteAlbumsCollectionDesc,
+                            albums = state.favoriteAlbums,
+                            selectedAlbum = state.selectedAlbum,
+                            bottomContentPadding = contentBottomPadding,
+                            gridState = favoriteGridState,
+                            onBack = state::navigateBack,
+                            onAlbumClick = state::openAlbumDetail,
+                        )
+                    }
+                } else if (activeSection == AppSection.RecentAdded) {
+                    val savedPos = state.getSavedLazyScrollPosition(AppSection.RecentAdded)
+                    val recentAddedGridState = rememberLazyGridState(
+                        initialFirstVisibleItemIndex = savedPos.index,
+                        initialFirstVisibleItemScrollOffset = savedPos.offset,
+                    )
+                    DisposableEffect(Unit) {
+                        onDispose {
+                            state.saveLazyScrollPosition(
+                                AppSection.RecentAdded,
+                                recentAddedGridState.firstVisibleItemIndex,
+                                recentAddedGridState.firstVisibleItemScrollOffset,
+                            )
+                        }
+                    }
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(start = 16.dp, top = 16.dp, end = 16.dp),
+                    ) {
+                        AlbumCollectionSection(
+                            title = Strings.recentAdded100,
+                            subtitle = Strings.recentAdded100Desc,
+                            albums = state.recentAddedAlbums.take(100),
+                            selectedAlbum = state.selectedAlbum,
+                            bottomContentPadding = contentBottomPadding,
+                            gridState = recentAddedGridState,
+                            onBack = state::navigateBack,
+                            onAlbumClick = state::openAlbumDetail,
+                        )
+                    }
                 } else {
                     val scrollState = rememberScrollState(
                         initial = if (shouldPersistVerticalScroll(currentSection)) {
@@ -458,31 +554,9 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                                 },
                             )
                             AppSection.PlaybackDetail -> Unit
-                            AppSection.ArtistAlbums -> ArtistAlbumsSection(
-                                artist = state.selectedArtist,
-                                selectedAlbum = state.selectedAlbum,
-                                selectedRoom = state.selectedSonosRoom,
-                                isPlaybackLoading = state.isPlaybackCommandLoading,
-                                onBack = state::navigateBack,
-                                onAlbumClick = state::openAlbumDetail,
-                                onShuffleArtist = state::shuffleArtist,
-                            )
-                            AppSection.FavoriteCollection -> AlbumCollectionSection(
-                                title = Strings.favoriteAlbumsCollection,
-                                subtitle = Strings.favoriteAlbumsCollectionDesc,
-                                albums = state.favoriteAlbums,
-                                selectedAlbum = state.selectedAlbum,
-                                onBack = state::navigateBack,
-                                onAlbumClick = state::openAlbumDetail,
-                            )
-                            AppSection.RecentAdded -> AlbumCollectionSection(
-                                title = Strings.recentAdded100,
-                                subtitle = Strings.recentAdded100Desc,
-                                albums = state.recentAddedAlbums.take(100),
-                                selectedAlbum = state.selectedAlbum,
-                                onBack = state::navigateBack,
-                                onAlbumClick = state::openAlbumDetail,
-                            )
+                            AppSection.ArtistAlbums -> Unit
+                            AppSection.FavoriteCollection -> Unit
+                            AppSection.RecentAdded -> Unit
                             AppSection.Settings -> SettingsSection(
                                 rooms = state.sonosRooms,
                                 selectedRoom = state.selectedSonosRoom,

@@ -13,6 +13,7 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
@@ -414,6 +415,8 @@ internal fun AlbumCollectionSection(
     subtitle: String,
     albums: List<PlexAlbum>,
     selectedAlbum: PlexAlbum?,
+    bottomContentPadding: androidx.compose.ui.unit.Dp,
+    gridState: LazyGridState = rememberLazyGridState(),
     onBack: () -> Unit,
     onAlbumClick: (PlexAlbum) -> Unit,
 ) {
@@ -428,49 +431,64 @@ internal fun AlbumCollectionSection(
         return
     }
 
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+    LazyVerticalGrid(
+        state = gridState,
+        columns = GridCells.Fixed(2),
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(bottom = bottomContentPadding),
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        OutlinedButton(onClick = onBack) {
-            Text(Strings.backToHome)
-        }
-        AsyncAlbumArtwork(
-            imageUrl = heroAlbum.thumbUrl,
-            title = heroAlbum.title,
-            modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(1.25f)
-                .clip(RoundedCornerShape(16.dp)),
-        )
-        Column(
-            modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.headlineMedium,
-                color = AppColors.TextPrimary,
-                fontWeight = FontWeight.Bold,
-            )
-            Text(
-                text = "$subtitle ${Strings.totalAlbums(albums.size)}",
-                color = AppColors.TextSecondary,
-            )
-            selectedAlbum?.let {
-                Text(
-                    text = Strings.currentHighlight(it.title),
-                    color = AppColors.TextTertiary,
-                )
+        item(span = { GridItemSpan(maxLineSpan) }, contentType = "back") {
+            OutlinedButton(onClick = onBack) {
+                Text(Strings.backToHome)
             }
         }
-        AlbumGrid(
-            albums = albums,
-            columns = 2,
-            selectedAlbum = selectedAlbum,
-            onAlbumClick = onAlbumClick,
-            compact = false,
-        )
+        item(span = { GridItemSpan(maxLineSpan) }, contentType = "hero") {
+            AsyncAlbumArtwork(
+                imageUrl = heroAlbum.thumbUrl,
+                title = heroAlbum.title,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(1.25f)
+                    .clip(RoundedCornerShape(16.dp)),
+            )
+        }
+        item(span = { GridItemSpan(maxLineSpan) }, contentType = "header") {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = AppColors.TextPrimary,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(
+                    text = "$subtitle ${Strings.totalAlbums(albums.size)}",
+                    color = AppColors.TextSecondary,
+                )
+                selectedAlbum?.let {
+                    Text(
+                        text = Strings.currentHighlight(it.title),
+                        color = AppColors.TextTertiary,
+                    )
+                }
+            }
+        }
+        items(
+            items = albums,
+            key = { it.ratingKey },
+            contentType = { "album" },
+        ) { album ->
+            AlbumCoverCard(
+                album = album,
+                selected = selectedAlbum?.ratingKey == album.ratingKey,
+                onClick = { onAlbumClick(album) },
+                compact = false,
+            )
+        }
     }
 }
 
