@@ -10,6 +10,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.SystemBarStyle
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.compose.foundation.background
@@ -59,7 +60,12 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         Strings.init(this)
         requestNotificationPermissionIfNeeded()
-        enableEdgeToEdge()
+        // App is always dark, so force light system-bar icons (transparent bars) regardless of
+        // the device's light/dark setting — otherwise dark icons can be invisible on our background.
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+        )
         setContent {
             PlexToSonosPlayerTheme {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
