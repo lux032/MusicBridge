@@ -62,7 +62,7 @@ internal fun PlaylistsSection(
                 )
             }
         } else {
-            items(playlists, key = { it.ratingKey }) { playlist ->
+            items(playlists, key = { it.ratingKey }, contentType = { "playlist" }) { playlist ->
                 PlaylistCard(playlist = playlist, onClick = { onPlaylistClick(playlist) })
             }
         }
@@ -75,7 +75,7 @@ private fun FavoriteTracksCard(
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
-    val scale by animateFloatAsState(
+    val scale = animateFloatAsState(
         targetValue = if (isPressed) 0.97f else 1f,
         label = "favorite_tracks_scale",
     )
@@ -87,8 +87,8 @@ private fun FavoriteTracksCard(
                 onClick = onClick,
             )
             .graphicsLayer {
-                scaleX = scale
-                scaleY = scale
+                scaleX = scale.value
+                scaleY = scale.value
             },
         shape = RoundedCornerShape(20.dp),
         color = AppColors.SurfaceStrong,
@@ -130,7 +130,7 @@ private fun PlaylistCard(
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
-    val scale by animateFloatAsState(
+    val scale = animateFloatAsState(
         targetValue = if (isPressed) 0.97f else 1f,
         label = "playlist_scale",
     )
@@ -142,8 +142,8 @@ private fun PlaylistCard(
                 onClick = onClick,
             )
             .graphicsLayer {
-                scaleX = scale
-                scaleY = scale
+                scaleX = scale.value
+                scaleY = scale.value
             },
         shape = RoundedCornerShape(20.dp),
         color = AppColors.Surface,
@@ -279,7 +279,11 @@ internal fun PlaylistDetailSection(
             }
         }
 
-        itemsIndexed(currentResult.tracks, key = { index, track -> track.ratingKey ?: index }) { index, track ->
+        itemsIndexed(
+            currentResult.tracks,
+            key = { index, track -> track.ratingKey ?: index },
+            contentType = { _, _ -> "track" },
+        ) { index, track ->
             Surface(
                 modifier = Modifier
                     .clickable(

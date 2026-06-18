@@ -590,11 +590,14 @@ internal fun AsyncAlbumArtwork(
     val imageLoader = remember(context) { AlbumArtworkImageLoader.get(context) }
 
     if (imageUrl != null) {
-        AsyncImage(
-            model = ImageRequest.Builder(context)
+        val imageRequest = remember(imageUrl, context) {
+            ImageRequest.Builder(context)
                 .data(imageUrl)
                 .crossfade(200)
-                .build(),
+                .build()
+        }
+        AsyncImage(
+            model = imageRequest,
             contentDescription = title,
             imageLoader = imageLoader,
             modifier = modifier,

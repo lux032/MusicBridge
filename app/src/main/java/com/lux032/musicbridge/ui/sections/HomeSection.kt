@@ -569,12 +569,14 @@ internal fun AllAlbumsSection(
                     item(
                         key = "album-header-${group.label}",
                         span = { GridItemSpan(maxLineSpan) },
+                        contentType = "header",
                     ) {
                         IndexSectionHeader(label = group.label)
                     }
                     items(
                         items = group.items,
                         key = { album -> album.ratingKey },
+                        contentType = { "album" },
                     ) { album ->
                         Box(modifier = Modifier.animateItem()) {
                             AlbumCoverCard(

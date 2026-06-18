@@ -91,7 +91,7 @@ internal fun ArtistsSection(
                     horizontalArrangement = Arrangement.spacedBy(14.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
-                    item(span = { GridItemSpan(2) }) {
+                    item(span = { GridItemSpan(2) }, contentType = "section-title") {
                         Row(
                             modifier = Modifier.fillMaxWidth().padding(bottom = 2.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -119,12 +119,14 @@ internal fun ArtistsSection(
                         item(
                             key = "artist-grid-header-${group.label}",
                             span = { GridItemSpan(maxLineSpan) },
+                            contentType = "header",
                         ) {
                             IndexSectionHeader(label = group.label)
                         }
                         items(
                             items = group.items,
                             key = { artist -> "artist-${artist.name}" },
+                            contentType = { "artist" },
                         ) { artist ->
                             Box(modifier = Modifier.animateItem()) {
                                 ArtistCoverCard(
@@ -164,7 +166,7 @@ internal fun ArtistsSection(
                     contentPadding = PaddingValues(end = 42.dp, bottom = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    item {
+                    item(contentType = "section-title") {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -189,12 +191,13 @@ internal fun ArtistsSection(
                         }
                     }
                     artistGroups.forEach { group ->
-                        item(key = "artist-list-header-${group.label}") {
+                        item(key = "artist-list-header-${group.label}", contentType = "header") {
                             IndexSectionHeader(label = group.label)
                         }
                         items(
                             items = group.items,
                             key = { artist -> "artist-list-${artist.name}" },
+                            contentType = { "artist" },
                         ) { artist ->
                             Box(modifier = Modifier.animateItem()) {
                                 ArtistListRow(
@@ -229,7 +232,7 @@ internal fun ArtistCoverCard(
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
-    val scale by animateFloatAsState(
+    val scale = animateFloatAsState(
         targetValue = if (isPressed) 0.95f else 1f,
         label = "artist_card_scale",
     )
@@ -241,8 +244,8 @@ internal fun ArtistCoverCard(
                 onClick = onClick,
             )
             .graphicsLayer {
-                scaleX = scale
-                scaleY = scale
+                scaleX = scale.value
+                scaleY = scale.value
             },
         shape = RoundedCornerShape(24.dp),
         color = AppColors.Surface,
@@ -302,7 +305,7 @@ internal fun ArtistListRow(
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
-    val scale by animateFloatAsState(
+    val scale = animateFloatAsState(
         targetValue = if (isPressed) 0.97f else 1f,
         label = "artist_list_scale",
     )
@@ -314,8 +317,8 @@ internal fun ArtistListRow(
                 onClick = onClick,
             )
             .graphicsLayer {
-                scaleX = scale
-                scaleY = scale
+                scaleX = scale.value
+                scaleY = scale.value
             },
         shape = RoundedCornerShape(20.dp),
         color = AppColors.Surface,

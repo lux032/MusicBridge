@@ -21,6 +21,12 @@ data class IndexedGroup<T>(
     val items: List<T>,
 )
 
+private data class IndexKeyed<T>(
+    val item: T,
+    val indexLabel: String,
+    val sortKey: String,
+)
+
 val KanaIndexOrder = listOf("あ", "か", "さ", "た", "な", "は", "ま", "や", "ら", "わ")
 val SupportedIndexOrder = listOf("0-9") + ('A'..'Z').map(Char::toString) + KanaIndexOrder + "#"
 
@@ -111,15 +117,21 @@ fun <T> buildIndexedGroups(
     items: List<T>,
     labelOf: (T) -> String?,
 ): List<IndexedGroup<T>> {
-    return items
+    // Precompute the index label and normalized sort key once per item so the
+    // comparator below does not re-run Normalizer/regex on every comparison.
+    val keyed = items.map { item ->
+        val label = labelOf(item)
+        IndexKeyed(item, indexLabelForText(label), normalizedIndexValue(label))
+    }
+    return keyed
         .sortedWith(
-            compareBy<T> { indexOrderOf(indexLabelForText(labelOf(it))) }
-                .thenBy { normalizedIndexValue(labelOf(it)) }
+            compareBy<IndexKeyed<T>> { indexOrderOf(it.indexLabel) }
+                .thenBy { it.sortKey }
         )
-        .groupBy { indexLabelForText(labelOf(it)) }
+        .groupBy { it.indexLabel }
         .entries
         .sortedBy { indexOrderOf(it.key) }
-        .map { IndexedGroup(label = it.key, items = it.value) }
+        .map { entry -> IndexedGroup(label = entry.key, items = entry.value.map { it.item }) }
 }
 
 fun <T> buildListJumpTargets(
