@@ -989,6 +989,13 @@ internal fun BottomMiniPlayer(
 ) {
     val currentTrack = state.tracks.getOrNull(state.currentIndex) ?: return
     val displayAlbum = currentTrack.toDisplayAlbum(state.album)
+    val artistName = currentTrack.artistName ?: displayAlbum.artistName ?: Strings.unknownArtist
+    val durationMillis = state.durationMillis ?: currentTrack.durationMillis
+    val progress = if (durationMillis != null && durationMillis > 0L) {
+        (state.currentPositionMillis.toFloat() / durationMillis).coerceIn(0f, 1f)
+    } else {
+        0f
+    }
     Surface(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(24.dp),
@@ -996,44 +1003,76 @@ internal fun BottomMiniPlayer(
         border = BorderStroke(1.dp, AppColors.BorderStrong),
         shadowElevation = 10.dp,
     ) {
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = ripple(bounded = true),
                     onClick = onArtworkClick,
-                )
-                .padding(horizontal = 14.dp, vertical = 12.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
+                ),
         ) {
-            Box(
+            Row(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(14.dp)),
+                    .fillMaxWidth()
+                    .padding(start = 14.dp, end = 14.dp, top = 12.dp, bottom = 10.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                AsyncAlbumArtwork(
-                    imageUrl = displayAlbum.thumbUrl,
-                    title = displayAlbum.title,
-                    modifier = Modifier.size(52.dp),
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(14.dp)),
+                ) {
+                    AsyncAlbumArtwork(
+                        imageUrl = displayAlbum.thumbUrl,
+                        title = displayAlbum.title,
+                        modifier = Modifier.size(52.dp),
+                    )
+                }
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    Text(
+                        text = currentTrack.title,
+                        color = AppColors.TextPrimary,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = artistName,
+                        color = AppColors.TextSecondary,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                PlayerControlButton(
+                    icon = if (state.isPaused) PlayerIcon.Play else PlayerIcon.Pause,
+                    onClick = onTogglePause,
+                    enabled = true,
+                    highlighted = true,
+                    sizeOverride = 54.dp,
+                    iconSizeOverride = 24.dp,
                 )
             }
-            Text(
-                text = currentTrack.title,
-                modifier = Modifier.weight(1f),
-                color = AppColors.TextPrimary,
-                fontWeight = FontWeight.Bold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            PlayerControlButton(
-                icon = if (state.isPaused) PlayerIcon.Play else PlayerIcon.Pause,
-                onClick = onTogglePause,
-                enabled = true,
-                highlighted = true,
-                sizeOverride = 54.dp,
-                iconSizeOverride = 24.dp,
-            )
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 16.dp, end = 16.dp, bottom = 12.dp)
+                    .height(3.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(AppColors.SurfaceMuted),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(progress)
+                        .height(3.dp)
+                        .clip(RoundedCornerShape(2.dp))
+                        .background(AppColors.Accent),
+                )
+            }
         }
     }
 }
