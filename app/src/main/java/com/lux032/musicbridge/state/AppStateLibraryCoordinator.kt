@@ -8,6 +8,7 @@ import com.lux032.musicbridge.plex.PlexSection
 import com.lux032.musicbridge.plex.PlexTrackStream
 import com.lux032.musicbridge.plex.isFavorite
 import com.lux032.musicbridge.sonos.SonosRoom
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -52,40 +53,42 @@ internal class AppStateLibraryCoordinator(
         }
         state.errorMessage = null
         state.actionMessage = null
-        val albumsResult = runCatching {
-            state.client().fetchAlbums()
-        }
-        albumsResult.onSuccess {
-            state.allAlbums = it.albums
+        try {
+            val fetched = state.client().fetchAlbums()
+            state.allAlbums = fetched.albums
             withContext(Dispatchers.IO) {
-                state.albumLocalStore.replaceAllAlbums(it.albums)
+                state.albumLocalStore.replaceAllAlbums(fetched.albums)
             }
             state.lastAlbumSyncEpochMillis = System.currentTimeMillis()
             state.appPreferences.saveLastAlbumSyncEpochMillis(state.lastAlbumSyncEpochMillis!!)
             if (state.selectedAlbum?.ratingKey?.let { key ->
-                    it.albums.none { album -> album.ratingKey == key }
+                    fetched.albums.none { album -> album.ratingKey == key }
                 } == true
             ) {
                 state.selectedAlbum = null
                 state.trackResult = null
             }
-            state.actionMessage = "已同步 ${it.albums.size} 张专辑，正在同步曲目..."
+            state.actionMessage = "已同步 ${fetched.albums.size} 张专辑，正在同步曲目..."
             val client = state.client()
-            val allTracks = client.fetchAllAlbumTracks(it.albums) { current, total ->
+            val allTracks = client.fetchAllAlbumTracks(fetched.albums) { current, total ->
                 state.actionMessage = "正在同步曲目 $current/$total"
             }
             withContext(Dispatchers.IO) {
                 state.albumLocalStore.replaceAllAlbumTracks(allTracks)
             }
             val totalTrackCount = allTracks.values.sumOf { tracks -> tracks.size }
-            state.actionMessage = "已同步 ${it.albums.size} 张专辑、${totalTrackCount} 首曲目"
-        }.onFailure {
+            state.actionMessage = "已同步 ${fetched.albums.size} 张专辑、${totalTrackCount} 首曲目"
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (error: Throwable) {
             state.selectedAlbum = null
             state.trackResult = null
-            state.errorMessage = it.message ?: "未知错误"
-        }
-        if (showLoading) {
-            state.isLoading = false
+            state.actionMessage = null
+            state.errorMessage = error.message ?: "未知错误"
+        } finally {
+            if (showLoading) {
+                state.isLoading = false
+            }
         }
     }
 
