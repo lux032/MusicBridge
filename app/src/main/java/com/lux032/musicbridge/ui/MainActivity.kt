@@ -31,7 +31,8 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.key
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.tween
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -236,8 +237,11 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                 )
             )
     ) {
-        key(activeSection) {
-            val currentSection = activeSection
+        Crossfade(
+            targetState = activeSection,
+            animationSpec = tween(durationMillis = 250),
+            label = "section_transition",
+        ) { currentSection ->
 
             if (currentSection == AppSection.AllAlbums) {
                 val savedPos = state.getSavedLazyScrollPosition(AppSection.AllAlbums)
@@ -301,7 +305,7 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                             onArtistClick = state::openArtistAlbums,
                         )
                     }
-                } else if (activeSection == AppSection.Playlists) {
+                } else if (currentSection == AppSection.Playlists) {
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
@@ -314,7 +318,7 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                             onOpenFavorites = state::openFavoriteTracks,
                         )
                     }
-                } else if (activeSection == AppSection.PlaylistDetail) {
+                } else if (currentSection == AppSection.PlaylistDetail) {
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
@@ -353,7 +357,7 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                             },
                         )
                     }
-                } else if (activeSection == AppSection.PlaybackDetail) {
+                } else if (currentSection == AppSection.PlaybackDetail) {
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
@@ -398,7 +402,7 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                             onCancelSleepTimer = state::cancelSleepTimer,
                         )
                     }
-                } else if (activeSection == AppSection.ArtistAlbums) {
+                } else if (currentSection == AppSection.ArtistAlbums) {
                     val savedPos = state.getSavedLazyScrollPosition(AppSection.ArtistAlbums)
                     val artistAlbumsGridState = rememberLazyGridState(
                         initialFirstVisibleItemIndex = savedPos.index,
@@ -430,7 +434,7 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                             onShuffleArtist = state::shuffleArtist,
                         )
                     }
-                } else if (activeSection == AppSection.FavoriteCollection) {
+                } else if (currentSection == AppSection.FavoriteCollection) {
                     val savedPos = state.getSavedLazyScrollPosition(AppSection.FavoriteCollection)
                     val favoriteGridState = rememberLazyGridState(
                         initialFirstVisibleItemIndex = savedPos.index,
@@ -461,7 +465,7 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                             onAlbumClick = state::openAlbumDetail,
                         )
                     }
-                } else if (activeSection == AppSection.RecentAdded) {
+                } else if (currentSection == AppSection.RecentAdded) {
                     val savedPos = state.getSavedLazyScrollPosition(AppSection.RecentAdded)
                     val recentAddedGridState = rememberLazyGridState(
                         initialFirstVisibleItemIndex = savedPos.index,
@@ -514,7 +518,7 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                             .padding(start = 16.dp, top = 16.dp, end = 16.dp, bottom = contentBottomPadding),
                         verticalArrangement = Arrangement.spacedBy(16.dp),
                     ) {
-                        when (activeSection) {
+                        when (currentSection) {
                             AppSection.Home -> HomeSection(
                                 connectionPreferences = state.connectionPreferences,
                                 allAlbums = state.allAlbums,
