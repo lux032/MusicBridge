@@ -1,0 +1,7 @@
+com.lux032.musicbridge.baselineprofile-pngs-0 D:\MusicBridge\baselineprofile\build\generated\res\pngs\benchmark
+com.lux032.musicbridge.baselineprofile-updated_navigation_xml-1 D:\MusicBridge\baselineprofile\build\generated\updated_navigation_xml\benchmark
+com.lux032.musicbridge.baselineprofile-packageBenchmarkResources-2 D:\MusicBridge\baselineprofile\build\intermediates\incremental\benchmark\packageBenchmarkResources\merged.dir
+com.lux032.musicbridge.baselineprofile-packageBenchmarkResources-3 D:\MusicBridge\baselineprofile\build\intermediates\incremental\benchmark\packageBenchmarkResources\stripped.dir
+com.lux032.musicbridge.baselineprofile-benchmark-4 D:\MusicBridge\baselineprofile\build\intermediates\merged_res\benchmark\mergeBenchmarkResources
+com.lux032.musicbridge.baselineprofile-benchmark-5 D:\MusicBridge\baselineprofile\src\benchmark\res
+com.lux032.musicbridge.baselineprofile-main-6 D:\MusicBridge\baselineprofile\src\main\res

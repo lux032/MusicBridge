@@ -1,0 +1,21 @@
+{
+  "version": 3,
+  "artifactType": {
+    "type": "APK",
+    "kind": "Directory"
+  },
+  "applicationId": "com.lux032.musicbridge.baselineprofile",
+  "variantName": "benchmark",
+  "elements": [
+    {
+      "type": "SINGLE",
+      "filters": [],
+      "attributes": [],
+      "versionCode": 0,
+      "versionName": "",
+      "outputFile": "baselineprofile-benchmark.apk"
+    }
+  ],
+  "elementType": "File",
+  "minSdkVersionForDexing": 28
+}

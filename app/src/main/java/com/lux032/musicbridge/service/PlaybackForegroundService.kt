@@ -18,6 +18,7 @@ import android.os.PowerManager
 import com.lux032.musicbridge.MainActivity
 import com.lux032.musicbridge.R
 import com.lux032.musicbridge.SleepTimerState
+import com.lux032.musicbridge.plexThumbnailUrl
 import com.lux032.musicbridge.sonos.SonosController
 import com.lux032.musicbridge.sonos.SonosRoom
 import kotlinx.coroutines.CoroutineScope
@@ -118,13 +119,19 @@ class PlaybackForegroundService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     fun updateNotification(title: String, subtitle: String, isPaused: Boolean, artworkUrl: String?) {
+        val metadataChanged = title != currentTitle ||
+            subtitle != currentSubtitle ||
+            isPaused != currentIsPaused
+        val artworkChanged = artworkUrl != null && artworkUrl != currentArtworkUrl
+        if (!metadataChanged && !artworkChanged) return
+
         currentTitle = title
         currentSubtitle = subtitle
         currentIsPaused = isPaused
         val manager = getSystemService(NotificationManager::class.java)
-        if (artworkUrl != null && artworkUrl != currentArtworkUrl) {
+        if (artworkChanged) {
             currentArtworkUrl = artworkUrl
-            loadArtworkAsync(artworkUrl)
+            loadArtworkAsync(requireNotNull(artworkUrl))
         }
         manager.notify(NOTIFICATION_ID, buildNotification())
     }
@@ -188,7 +195,11 @@ class PlaybackForegroundService : Service() {
     private fun loadArtworkAsync(url: String) {
         serviceScope.launch {
             val bitmap = runCatching {
-                URL(url).openStream().use { BitmapFactory.decodeStream(it) }
+                // Media notifications render a relatively small large icon. Asking Plex for a
+                // bounded source avoids decoding multi-megapixel artwork outside Coil's cache.
+                URL(plexThumbnailUrl(url, NOTIFICATION_ARTWORK_SIZE_PX)).openStream().use {
+                    BitmapFactory.decodeStream(it)
+                }
             }.getOrNull()
             if (url == currentArtworkUrl && bitmap != null) {
                 currentArtwork = bitmap
@@ -294,6 +305,7 @@ class PlaybackForegroundService : Service() {
         const val ROOM_SEPARATOR = "\u001F"
         private const val CHANNEL_ID = "musicbridge_playback"
         private const val NOTIFICATION_ID = 1
+        private const val NOTIFICATION_ARTWORK_SIZE_PX = 512
         const val ACTION_STOP = "com.lux032.musicbridge.STOP_PLAYBACK"
         const val ACTION_PREVIOUS = "com.lux032.musicbridge.ACTION_PREVIOUS"
         const val ACTION_TOGGLE_PAUSE = "com.lux032.musicbridge.ACTION_TOGGLE_PAUSE"

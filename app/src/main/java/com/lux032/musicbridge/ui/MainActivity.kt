@@ -37,8 +37,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.animation.Crossfade
-import androidx.compose.animation.core.tween
+import androidx.compose.runtime.key
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -269,11 +268,8 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                 .weight(1f)
                 .fillMaxHeight(),
         ) {
-        Crossfade(
-            targetState = activeSection,
-            animationSpec = tween(durationMillis = 250),
-            label = "section_transition",
-        ) { currentSection ->
+        key(activeSection) {
+            val currentSection = activeSection
 
             if (currentSection == AppSection.AllAlbums) {
                 val savedPos = state.getSavedLazyScrollPosition(AppSection.AllAlbums)

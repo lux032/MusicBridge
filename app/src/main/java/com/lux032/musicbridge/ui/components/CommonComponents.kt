@@ -40,7 +40,6 @@ import com.lux032.musicbridge.sonos.SonosRoom
 import com.lux032.musicbridge.plex.PlexAlbum
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
-import coil3.request.crossfade
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.graphics.painter.ColorPainter
@@ -380,7 +379,7 @@ internal fun AlbumCoverCard(
                     .aspectRatio(1f)
                     .clip(RoundedCornerShape(18.dp)),
                 contentScale = ContentScale.Crop,
-                thumbnailSize = 160.dp,
+                thumbnailSize = layoutInfo.albumGridMinimumWidth * 1.1f,
             )
         } else {
             Column(
@@ -394,7 +393,7 @@ internal fun AlbumCoverCard(
                         .aspectRatio(1f)
                         .clip(RoundedCornerShape(16.dp)),
                     contentScale = ContentScale.Crop,
-                    thumbnailSize = 200.dp,
+                    thumbnailSize = layoutInfo.albumGridMinimumWidth * 1.1f,
                 )
                 Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
                     Text(
@@ -664,7 +663,6 @@ internal fun AsyncAlbumArtwork(
         val imageRequest = remember(requestUrl, context) {
             ImageRequest.Builder(context)
                 .data(requestUrl)
-                .crossfade(180)
                 .build()
         }
         AsyncImage(

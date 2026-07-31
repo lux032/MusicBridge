@@ -37,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import com.lux032.musicbridge.plex.PlexAlbum
 import com.lux032.musicbridge.sonos.SonosRoom
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
 
 @Composable
 internal fun ArtistsSection(
@@ -68,6 +69,7 @@ internal fun ArtistsSection(
         buildIndexedGroups(artists) { it.name }
     }
     val scope = rememberCoroutineScope()
+    var jumpJob by remember { mutableStateOf<Job?>(null) }
 
     when (presentation) {
         ArtistPresentation.Covers -> {
@@ -138,7 +140,8 @@ internal fun ArtistsSection(
                         modifier = Modifier.padding(top = 56.dp, bottom = 12.dp),
                         onSelect = { label ->
                             jumpTargets.firstOrNull { it.first == label }?.let { (_, index) ->
-                                scope.launch { gridState.animateScrollToItem(index) }
+                                jumpJob?.cancel()
+                                jumpJob = scope.launch { gridState.scrollToItem(index) }
                             }
                         },
                     )
@@ -207,7 +210,8 @@ internal fun ArtistsSection(
                         modifier = Modifier.padding(top = 56.dp, bottom = 12.dp),
                         onSelect = { label ->
                             jumpTargets.firstOrNull { it.first == label }?.let { (_, index) ->
-                                scope.launch { listState.animateScrollToItem(index) }
+                                jumpJob?.cancel()
+                                jumpJob = scope.launch { listState.scrollToItem(index) }
                             }
                         },
                     )
@@ -228,7 +232,7 @@ internal fun ArtistCoverCard(
         shape = RoundedCornerShape(24.dp),
         color = AppColors.Surface,
         border = BorderStroke(1.dp, AppColors.Border),
-        shadowElevation = 4.dp,
+        shadowElevation = 0.dp,
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             if (artist.coverUrl != null) {
@@ -239,7 +243,7 @@ internal fun ArtistCoverCard(
                         .fillMaxWidth()
                         .aspectRatio(1.05f)
                         .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)),
-                    thumbnailSize = 200.dp,
+                    thumbnailSize = LocalAppLayoutInfo.current.artistGridMinimumWidth * 1.1f,
                 )
             } else {
                 Box(

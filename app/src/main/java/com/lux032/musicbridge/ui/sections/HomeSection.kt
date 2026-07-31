@@ -35,6 +35,7 @@ import androidx.compose.ui.unit.dp
 import com.lux032.musicbridge.plex.PlexAlbum
 import com.lux032.musicbridge.sonos.SonosRoom
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
 
 @Composable
 internal fun HomeSection(
@@ -491,6 +492,7 @@ internal fun AllAlbumsSection(
         buildIndexedGroups(albums) { it.title }
     }
     val scope = rememberCoroutineScope()
+    var jumpJob by remember { mutableStateOf<Job?>(null) }
     val jumpTargets = remember(albumGroups) {
         buildGridJumpTargets(
             leadingItemCount = 3,
@@ -597,7 +599,8 @@ internal fun AllAlbumsSection(
                 modifier = Modifier.padding(top = 100.dp, end = 4.dp, bottom = 12.dp),
                 onSelect = { label ->
                     jumpTargets.firstOrNull { it.first == label }?.let { (_, index) ->
-                        scope.launch { gridState.animateScrollToItem(index) }
+                        jumpJob?.cancel()
+                        jumpJob = scope.launch { gridState.scrollToItem(index) }
                     }
                 },
             )

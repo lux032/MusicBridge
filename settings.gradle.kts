@@ -24,3 +24,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "MusicBridge"
 include(":app")
+include(":baselineprofile")

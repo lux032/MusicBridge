@@ -1,0 +1,29 @@
+<?xml version='1.0' encoding='UTF-8' ?>
+<testsuites tests="0" failures="0" errors="0" skipped="0" time="0.005" timestamp="2026-07-31T14:27:00" hostname="localhost">
+  <system-err>ErrorName: INSTALL_FAILED_USER_RESTRICTED
+NameSpace: DdmlibAndroidDeviceController
+ErrorCode: 1
+ErrorType: TEST
+Message: Failed to install split APK(s): [D:\MusicBridge\baselineprofile\build\outputs\apk\benchmark\baselineprofile-benchmark.apk]
+Failed to install split APK(s): [D:\MusicBridge\baselineprofile\build\outputs\apk\benchmark\baselineprofile-benchmark.apk]
+Failed to commit install session 1152987903 with command package install-commit 1152987903. Error: INSTALL_FAILED_USER_RESTRICTED: Install canceled by user
+com.android.ddmlib.InstallException: Failed to commit install session 1152987903 with command package install-commit 1152987903. Error: INSTALL_FAILED_USER_RESTRICTED: Install canceled by user
+	at com.android.ddmlib.SplitApkInstallerBase.installCommit(SplitApkInstallerBase.java:171)
+	at com.android.ddmlib.SplitApkInstaller.install(SplitApkInstaller.java:85)
+	at com.android.ddmlib.IDeviceSharedImpl.installPackages(IDeviceSharedImpl.java:395)
+	at com.android.ddmlib.internal.DeviceImpl.lambda$installPackages$34(DeviceImpl.java:1491)
+	at com.android.ddmlib.internal.DeviceImpl.logRun3(DeviceImpl.java:1833)
+	at com.android.ddmlib.internal.DeviceImpl.installPackages(DeviceImpl.java:1488)
+	at com.android.ddmlib.internal.DeviceImpl.lambda$installPackages$35(DeviceImpl.java:1503)
+	at com.android.ddmlib.internal.DeviceImpl.logRun3(DeviceImpl.java:1833)
+	at com.android.ddmlib.internal.DeviceImpl.installPackages(DeviceImpl.java:1499)
+	at com.android.tools.utp.plugins.deviceprovider.ddmlib.DdmlibAndroidDevice.installPackages(DdmlibAndroidDevice.kt:80)
+	at com.android.tools.utp.plugins.deviceprovider.ddmlib.DdmlibAndroidDeviceController$executeAsync$deferred$1.invokeSuspend(DdmlibAndroidDeviceController.kt:251)
+	at kotlin.coroutines.jvm.internal.BaseContinuationImpl.resumeWith(ContinuationImpl.kt:34)
+	at kotlinx.coroutines.DispatchedTask.run(DispatchedTask.kt:108)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(Unknown Source)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(Unknown Source)
+	at java.base/java.lang.Thread.run(Unknown Source)
+
+</system-err>
+</testsuites>
