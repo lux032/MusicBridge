@@ -78,6 +78,39 @@ object AlbumArtworkImageLoader {
     }
 }
 
+// Buckets keep the set of distinct transcode sizes small so Coil's memory/disk cache
+// can be shared across screens that show the same artwork at similar sizes.
+private val ThumbnailSizeBuckets = intArrayOf(256, 512, 768, 1024, 1536)
+
+/**
+ * Rewrites a full-resolution Plex artwork URL ("{server}{thumbPath}?X-Plex-Token=…") into a
+ * server-side transcode request sized for the actual on-screen target. Original artwork is
+ * frequently 1000–3000 px / multi-MB, which is what makes cover-heavy lists stutter; the
+ * transcoded variant is a few tens of KB. Falls back to the original URL if it cannot be parsed.
+ */
+fun plexThumbnailUrl(originalUrl: String, targetPx: Int): String {
+    if (targetPx <= 0) return originalUrl
+    val uri = android.net.Uri.parse(originalUrl)
+    val scheme = uri.scheme ?: return originalUrl
+    val authority = uri.authority ?: return originalUrl
+    val mediaPath = uri.path?.takeIf { it.isNotBlank() } ?: return originalUrl
+    if (mediaPath.contains("/photo/:/transcode")) return originalUrl
+    val token = uri.getQueryParameter("X-Plex-Token")?.takeIf { it.isNotBlank() } ?: return originalUrl
+    val bucket = ThumbnailSizeBuckets.firstOrNull { it >= targetPx } ?: ThumbnailSizeBuckets.last()
+    return android.net.Uri.Builder()
+        .scheme(scheme)
+        .encodedAuthority(authority)
+        .encodedPath("/photo/:/transcode")
+        .appendQueryParameter("width", bucket.toString())
+        .appendQueryParameter("height", bucket.toString())
+        .appendQueryParameter("minSize", "1")
+        .appendQueryParameter("upscale", "1")
+        .appendQueryParameter("url", mediaPath)
+        .appendQueryParameter("X-Plex-Token", token)
+        .build()
+        .toString()
+}
+
 fun indexLabelForText(text: String?): String {
     if (text.isNullOrBlank()) return "#"
     val normalized = normalizedIndexValue(text)

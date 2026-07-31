@@ -129,6 +129,7 @@ private fun PlaylistCard(
                 modifier = Modifier
                     .size(68.dp)
                     .clip(RoundedCornerShape(18.dp)),
+                thumbnailSize = 68.dp,
             )
             Column(
                 modifier = Modifier.weight(1f),
@@ -197,6 +198,7 @@ internal fun PlaylistDetailSection(
                         .fillMaxWidth()
                         .aspectRatio(1f)
                         .clip(RoundedCornerShape(16.dp)),
+                    thumbnailSize = layoutInfo.detailArtworkMaximumWidth,
                 )
             }
         }

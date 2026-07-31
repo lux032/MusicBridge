@@ -38,6 +38,9 @@ import com.lux032.musicbridge.sonos.SonosRoom
 import com.lux032.musicbridge.plex.PlexAlbum
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
+import coil3.request.crossfade
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.graphics.painter.ColorPainter
 import java.time.Instant
 import java.time.ZoneId
@@ -153,6 +156,22 @@ internal fun BottomNavigationBar(
             )
         }
     }
+}
+
+/** Keeps once-per-second playback progress updates inside the mini-player subtree. */
+@Composable
+internal fun BottomMiniPlayerHost(
+    appState: AppState,
+    modifier: Modifier = Modifier,
+    onOpenPlayback: () -> Unit,
+) {
+    val playerState = appState.miniPlayerState ?: return
+    BottomMiniPlayer(
+        state = playerState,
+        modifier = modifier,
+        onArtworkClick = onOpenPlayback,
+        onTogglePause = { appState.togglePause(playerState) },
+    )
 }
 
 @Composable
@@ -328,49 +347,6 @@ internal fun EmptyStateCard(
 }
 
 @Composable
-internal fun AlbumGrid(
-    albums: List<PlexAlbum>,
-    columns: Int,
-    selectedAlbum: PlexAlbum?,
-    onAlbumClick: (PlexAlbum) -> Unit,
-    compact: Boolean,
-) {
-    val layoutInfo = LocalAppLayoutInfo.current
-    val responsiveColumns = when {
-        !layoutInfo.isTablet -> columns
-        layoutInfo.isWide -> maxOf(columns, 5)
-        else -> maxOf(columns, 4)
-    }
-    val spacing = if (compact) 10.dp else 14.dp
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(spacing),
-    ) {
-        albums.chunked(responsiveColumns).forEach { rowAlbums ->
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(spacing),
-            ) {
-                rowAlbums.forEach { album ->
-                    Box(modifier = Modifier.weight(1f)) {
-                        AlbumCoverCard(
-                            album = album,
-                            selected = selectedAlbum?.ratingKey == album.ratingKey,
-                            onClick = { onAlbumClick(album) },
-                            compact = compact,
-                        )
-                    }
-                }
-
-                repeat(responsiveColumns - rowAlbums.size) {
-                    Spacer(modifier = Modifier.weight(1f))
-                }
-            }
-        }
-    }
-}
-
-@Composable
 internal fun AlbumCoverCard(
     album: PlexAlbum,
     selected: Boolean,
@@ -396,6 +372,7 @@ internal fun AlbumCoverCard(
                     .aspectRatio(1f)
                     .clip(RoundedCornerShape(18.dp)),
                 contentScale = ContentScale.Crop,
+                thumbnailSize = 160.dp,
             )
         } else {
             Column(
@@ -409,6 +386,7 @@ internal fun AlbumCoverCard(
                         .aspectRatio(1f)
                         .clip(RoundedCornerShape(16.dp)),
                     contentScale = ContentScale.Crop,
+                    thumbnailSize = 200.dp,
                 )
                 Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
                     Text(
@@ -626,14 +604,24 @@ internal fun AsyncAlbumArtwork(
     title: String,
     modifier: Modifier = Modifier,
     contentScale: ContentScale = ContentScale.Fit,
+    thumbnailSize: Dp? = null,
 ) {
     val context = LocalContext.current
     val imageLoader = remember(context) { AlbumArtworkImageLoader.get(context) }
 
     if (imageUrl != null) {
-        val imageRequest = remember(imageUrl, context) {
+        val density = LocalDensity.current
+        val requestUrl = remember(imageUrl, thumbnailSize, density) {
+            if (thumbnailSize != null) {
+                plexThumbnailUrl(imageUrl, with(density) { thumbnailSize.roundToPx() })
+            } else {
+                imageUrl
+            }
+        }
+        val imageRequest = remember(requestUrl, context) {
             ImageRequest.Builder(context)
-                .data(imageUrl)
+                .data(requestUrl)
+                .crossfade(180)
                 .build()
         }
         AsyncImage(

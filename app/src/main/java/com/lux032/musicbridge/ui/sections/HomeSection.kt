@@ -119,30 +119,28 @@ internal fun HomeSection(
                 }
             }
             if (favoriteAlbums.isNotEmpty()) {
-                item(key = "home-favorites", contentType = "album-grid") {
-                    AlbumPreviewGridSection(
-                        title = Strings.favoriteAlbums,
-                        subtitle = "",
-                        albums = favoriteAlbums.take(layoutInfo.homePreviewItemCount),
-                        selectedAlbum = selectedAlbum,
-                        actionLabel = Strings.viewAll,
-                        onAction = onOpenFavorites,
-                        onAlbumClick = onAlbumClick,
-                    )
-                }
+                albumPreviewGridItems(
+                    keyPrefix = "home-favorites",
+                    title = Strings.favoriteAlbums,
+                    albums = favoriteAlbums.take(layoutInfo.homePreviewItemCount),
+                    columns = layoutInfo.homePreviewColumns,
+                    selectedAlbum = selectedAlbum,
+                    actionLabel = Strings.viewAll,
+                    onAction = onOpenFavorites,
+                    onAlbumClick = onAlbumClick,
+                )
             }
             if (recentAddedAlbums.isNotEmpty()) {
-                item(key = "home-recent-added", contentType = "album-grid") {
-                    AlbumPreviewGridSection(
-                        title = Strings.recentAdded,
-                        subtitle = "",
-                        albums = recentAddedAlbums.take(layoutInfo.homePreviewItemCount),
-                        selectedAlbum = selectedAlbum,
-                        actionLabel = Strings.viewTop100,
-                        onAction = onOpenRecentAdded,
-                        onAlbumClick = onAlbumClick,
-                    )
-                }
+                albumPreviewGridItems(
+                    keyPrefix = "home-recent-added",
+                    title = Strings.recentAdded,
+                    albums = recentAddedAlbums.take(layoutInfo.homePreviewItemCount),
+                    columns = layoutInfo.homePreviewColumns,
+                    selectedAlbum = selectedAlbum,
+                    actionLabel = Strings.viewTop100,
+                    onAction = onOpenRecentAdded,
+                    onAlbumClick = onAlbumClick,
+                )
             }
         }
     }
@@ -234,6 +232,7 @@ private fun RecentPlayedShelfSection(
                             title = album.title,
                             modifier = Modifier.fillMaxSize(),
                             contentScale = ContentScale.Crop,
+                            thumbnailSize = layoutInfo.recentAlbumCardWidth,
                         )
                     }
                     Text(
@@ -300,53 +299,60 @@ internal fun EntryActionCard(
     }
 }
 
-@Composable
-internal fun AlbumPreviewGridSection(
+/**
+ * Emits a preview grid as one item per row instead of a single giant item, so scrolling past
+ * it composes a handful of covers per frame rather than the whole grid at once.
+ */
+private fun androidx.compose.foundation.lazy.LazyListScope.albumPreviewGridItems(
+    keyPrefix: String,
     title: String,
-    subtitle: String,
     albums: List<PlexAlbum>,
+    columns: Int,
     selectedAlbum: PlexAlbum?,
+    actionLabel: String,
+    onAction: () -> Unit,
     onAlbumClick: (PlexAlbum) -> Unit,
-    actionLabel: String? = null,
-    onAction: (() -> Unit)? = null,
 ) {
-    val layoutInfo = LocalAppLayoutInfo.current
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
+    item(key = "$keyPrefix-header", contentType = "grid-header") {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.Top,
         ) {
-            Column(
+            Text(
+                text = title,
                 modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.titleLarge,
-                    color = AppColors.TextPrimary,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                if (subtitle.isNotBlank()) {
-                    Text(text = subtitle, color = AppColors.TextSecondary)
-                }
+                style = MaterialTheme.typography.titleLarge,
+                color = AppColors.TextPrimary,
+                fontWeight = FontWeight.SemiBold,
+            )
+            OutlinedButton(onClick = onAction) {
+                Text(actionLabel)
             }
-            if (actionLabel != null && onAction != null) {
-                OutlinedButton(onClick = onAction) {
-                    Text(actionLabel)
+        }
+    }
+    albums.chunked(columns).forEachIndexed { rowIndex, rowAlbums ->
+        item(key = "$keyPrefix-row-$rowIndex", contentType = "album-row") {
+            val layoutInfo = LocalAppLayoutInfo.current
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(layoutInfo.contentSpacing),
+            ) {
+                rowAlbums.forEach { album ->
+                    Box(modifier = Modifier.weight(1f)) {
+                        AlbumCoverCard(
+                            album = album,
+                            selected = selectedAlbum?.ratingKey == album.ratingKey,
+                            onClick = { onAlbumClick(album) },
+                            compact = true,
+                        )
+                    }
+                }
+                repeat(columns - rowAlbums.size) {
+                    Spacer(modifier = Modifier.weight(1f))
                 }
             }
         }
-        AlbumGrid(
-            albums = albums,
-            columns = layoutInfo.homePreviewColumns,
-            selectedAlbum = selectedAlbum,
-            onAlbumClick = onAlbumClick,
-            compact = true,
-        )
     }
 }
 
@@ -399,6 +405,7 @@ internal fun AlbumCollectionSection(
                         .fillMaxWidth()
                         .aspectRatio(1f)
                         .clip(RoundedCornerShape(16.dp)),
+                    thumbnailSize = layoutInfo.collectionHeroMaximumWidth,
                 )
             }
         }

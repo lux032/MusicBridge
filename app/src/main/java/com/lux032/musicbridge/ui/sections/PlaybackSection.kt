@@ -13,8 +13,10 @@ import androidx.compose.material3.ripple
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.selection.selectable
@@ -115,6 +117,7 @@ internal fun PlaybackDetailSection(
                 .aspectRatio(1f)
                 .clip(RoundedCornerShape(16.dp)),
             contentScale = ContentScale.Crop,
+            thumbnailSize = layoutInfo.detailArtworkMaximumWidth,
         )
     }
     val playerDetails: @Composable ColumnScope.() -> Unit = {
@@ -332,21 +335,30 @@ internal fun PlaybackDetailSection(
             onDismissRequest = { isPlaylistSheetVisible = false },
             containerColor = AppColors.Surface,
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 16.dp, vertical = 8.dp)
-                    .padding(bottom = 24.dp),
+            // Lazy so a long queue does not compose hundreds of rows at once; start at the
+            // currently playing track instead of the top.
+            val queueListState = rememberLazyListState(
+                initialFirstVisibleItemIndex = currentState.currentIndex.coerceIn(0, currentState.tracks.lastIndex.coerceAtLeast(0)),
+            )
+            LazyColumn(
+                state = queueListState,
+                modifier = Modifier.fillMaxWidth(),
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 32.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                Text(
-                    text = Strings.playlist,
-                    style = MaterialTheme.typography.titleLarge,
-                    color = AppColors.TextPrimary,
-                    fontWeight = FontWeight.Bold,
-                )
-                currentState.tracks.forEachIndexed { index, track ->
+                item(key = "queue-title", contentType = "queue-title") {
+                    Text(
+                        text = Strings.playlist,
+                        style = MaterialTheme.typography.titleLarge,
+                        color = AppColors.TextPrimary,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+                itemsIndexed(
+                    items = currentState.tracks,
+                    key = { index, track -> "$index-${track.ratingKey}" },
+                    contentType = { _, _ -> "queue-track" },
+                ) { index, track ->
                     val isCurrent = index == currentState.currentIndex
                     Surface(
                         modifier = Modifier
@@ -746,6 +758,9 @@ internal fun AlbumDetailSection(
     selectedRoom: SonosRoom?,
     isPlaybackLoading: Boolean,
     isFavoriteLoading: Boolean,
+    bottomContentPadding: androidx.compose.ui.unit.Dp,
+    modifier: Modifier = Modifier,
+    trackListState: LazyListState = rememberLazyListState(),
     onReturnHome: () -> Unit,
     onArtistClick: (String?) -> Unit,
     onToggleAlbumFavorite: (PlexAlbum) -> Unit,
@@ -765,16 +780,24 @@ internal fun AlbumDetailSection(
     }
 
     val layoutInfo = LocalAppLayoutInfo.current
+    val artworkMaximumWidth = if (layoutInfo.isWide) 300.dp else layoutInfo.detailArtworkMaximumWidth
     val albumSummary: @Composable ColumnScope.() -> Unit = {
-        AsyncAlbumArtwork(
-            imageUrl = currentTrackResult.album.thumbUrl,
-            title = currentTrackResult.album.title,
-            modifier = Modifier
-                .widthIn(max = layoutInfo.detailArtworkMaximumWidth)
-                .fillMaxWidth()
-                .aspectRatio(1f)
-                .clip(RoundedCornerShape(16.dp)),
-        )
+        Box(
+            modifier = Modifier.fillMaxWidth(),
+            contentAlignment = Alignment.Center,
+        ) {
+            AsyncAlbumArtwork(
+                imageUrl = currentTrackResult.album.thumbUrl,
+                title = currentTrackResult.album.title,
+                modifier = Modifier
+                    .widthIn(max = artworkMaximumWidth)
+                    .fillMaxWidth()
+                    .aspectRatio(1f)
+                    .clip(RoundedCornerShape(16.dp)),
+                contentScale = ContentScale.Crop,
+                thumbnailSize = artworkMaximumWidth,
+            )
+        }
 
         Column(
             modifier = Modifier.fillMaxWidth(),
@@ -841,89 +864,142 @@ internal fun AlbumDetailSection(
         }
     }
 
-    val trackList: @Composable ColumnScope.() -> Unit = {
-            currentTrackResult.tracks.forEachIndexed { index, track ->
-                Surface(
-                    modifier = Modifier
-                        .clickable(
-                            enabled = selectedRoom != null && !isPlaybackLoading,
-                        ) {
-                            onPlayTrack(currentTrackResult.album, track, selectedRoom!!)
-                        },
-                    shape = RoundedCornerShape(12.dp),
-                    color = AppColors.Surface,
-                    border = BorderStroke(1.dp, AppColors.Border),
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 14.dp, vertical = 12.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column(
-                            modifier = Modifier.weight(1f),
-                            verticalArrangement = Arrangement.spacedBy(3.dp),
-                        ) {
-                            Text("${index + 1}. ${track.title}", color = AppColors.TextPrimary, fontWeight = FontWeight.Medium)
-                            track.durationMillis?.let {
-                                Text(formatDuration(it), color = AppColors.TextTertiary)
-                            }
-                        }
-                        Column(
-                            horizontalAlignment = Alignment.End,
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                FavoriteIconButton(
-                                    isFavorite = track.isFavorite,
-                                    isLoading = isFavoriteLoading,
-                                    onClick = { onToggleTrackFavorite(track) },
-                                )
-                                IconCircleButton(
-                                    onClick = { selectedRoom?.let { onPlayTrack(currentTrackResult.album, track, it) } },
-                                    enabled = selectedRoom != null && !isPlaybackLoading,
-                                ) {
-                                    PlayerIconGraphic(
-                                        icon = PlayerIcon.Play,
-                                        tint = if (selectedRoom != null) AppColors.TextPrimary else AppColors.TextTertiary,
-                                        modifier = Modifier.size(16.dp),
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-    }
-
     if (layoutInfo.isWide) {
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = modifier.fillMaxSize(),
             horizontalArrangement = Arrangement.spacedBy(28.dp),
             verticalAlignment = Alignment.Top,
         ) {
             Column(
-                modifier = Modifier.weight(0.82f),
+                modifier = Modifier
+                    .weight(0.82f)
+                    .fillMaxHeight()
+                    .verticalScroll(rememberScrollState())
+                    .padding(bottom = bottomContentPadding),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
                 content = albumSummary,
             )
-            Column(
-                modifier = Modifier.weight(1.18f),
+            LazyColumn(
+                state = trackListState,
+                modifier = Modifier
+                    .weight(1.18f)
+                    .fillMaxHeight(),
+                contentPadding = PaddingValues(bottom = bottomContentPadding),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
-                content = trackList,
-            )
+            ) {
+                itemsIndexed(
+                    items = currentTrackResult.tracks,
+                    key = { index, track -> track.ratingKey ?: index },
+                    contentType = { _, _ -> "album-track" },
+                ) { index, track ->
+                    AlbumTrackRow(
+                        index = index,
+                        album = currentTrackResult.album,
+                        track = track,
+                        selectedRoom = selectedRoom,
+                        isPlaybackLoading = isPlaybackLoading,
+                        isFavoriteLoading = isFavoriteLoading,
+                        onToggleTrackFavorite = onToggleTrackFavorite,
+                        onPlayTrack = onPlayTrack,
+                    )
+                }
+            }
         }
     } else {
-        Column(
-            modifier = Modifier.fillMaxWidth(),
+        LazyColumn(
+            state = trackListState,
+            modifier = modifier.fillMaxSize(),
+            contentPadding = PaddingValues(bottom = bottomContentPadding),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            albumSummary()
-            trackList()
+            item(key = "album-summary", contentType = "album-summary") {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                    content = albumSummary,
+                )
+            }
+            itemsIndexed(
+                items = currentTrackResult.tracks,
+                key = { index, track -> track.ratingKey ?: index },
+                contentType = { _, _ -> "album-track" },
+            ) { index, track ->
+                AlbumTrackRow(
+                    index = index,
+                    album = currentTrackResult.album,
+                    track = track,
+                    selectedRoom = selectedRoom,
+                    isPlaybackLoading = isPlaybackLoading,
+                    isFavoriteLoading = isFavoriteLoading,
+                    onToggleTrackFavorite = onToggleTrackFavorite,
+                    onPlayTrack = onPlayTrack,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AlbumTrackRow(
+    index: Int,
+    album: PlexAlbum,
+    track: PlexTrackStream,
+    selectedRoom: SonosRoom?,
+    isPlaybackLoading: Boolean,
+    isFavoriteLoading: Boolean,
+    onToggleTrackFavorite: (PlexTrackStream) -> Unit,
+    onPlayTrack: (PlexAlbum, PlexTrackStream, SonosRoom) -> Unit,
+) {
+    Surface(
+        modifier = Modifier.clickable(
+            enabled = selectedRoom != null && !isPlaybackLoading,
+        ) {
+            selectedRoom?.let { onPlayTrack(album, track, it) }
+        },
+        shape = RoundedCornerShape(12.dp),
+        color = AppColors.Surface,
+        border = BorderStroke(1.dp, AppColors.Border),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(3.dp),
+            ) {
+                Text(
+                    text = "${index + 1}. ${track.title}",
+                    color = AppColors.TextPrimary,
+                    fontWeight = FontWeight.Medium,
+                )
+                track.durationMillis?.let { duration ->
+                    Text(formatDuration(duration), color = AppColors.TextTertiary)
+                }
+            }
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                FavoriteIconButton(
+                    isFavorite = track.isFavorite,
+                    isLoading = isFavoriteLoading,
+                    onClick = { onToggleTrackFavorite(track) },
+                )
+                IconCircleButton(
+                    onClick = { selectedRoom?.let { onPlayTrack(album, track, it) } },
+                    enabled = selectedRoom != null && !isPlaybackLoading,
+                ) {
+                    PlayerIconGraphic(
+                        icon = PlayerIcon.Play,
+                        tint = if (selectedRoom != null) AppColors.TextPrimary else AppColors.TextTertiary,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+            }
         }
     }
 }
@@ -1088,6 +1164,7 @@ internal fun BottomMiniPlayer(
                         imageUrl = displayAlbum.thumbUrl,
                         title = displayAlbum.title,
                         modifier = Modifier.size(52.dp),
+                        thumbnailSize = 52.dp,
                     )
                 }
                 Column(

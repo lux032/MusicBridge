@@ -59,6 +59,9 @@ dependencies {
     implementation(libs.androidx.compose.material.icons.extended)
     implementation(libs.coil.compose)
     implementation(libs.coil.network.okhttp)
+    // Installs the baseline profiles shipped inside Compose artifacts so release builds get
+    // AOT-compiled scroll/animation hot paths instead of warming up through JIT.
+    implementation(libs.androidx.profileinstaller)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

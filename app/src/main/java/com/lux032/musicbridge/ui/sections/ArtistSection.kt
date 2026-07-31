@@ -239,6 +239,7 @@ internal fun ArtistCoverCard(
                         .fillMaxWidth()
                         .aspectRatio(1.05f)
                         .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)),
+                    thumbnailSize = 200.dp,
                 )
             } else {
                 Box(
@@ -301,6 +302,7 @@ internal fun ArtistListRow(
                 modifier = Modifier
                     .size(68.dp)
                     .clip(RoundedCornerShape(18.dp)),
+                thumbnailSize = 68.dp,
             )
             Column(
                 modifier = Modifier.weight(1f),
@@ -462,6 +464,7 @@ internal fun ArtistAlbumsSection(
                             .fillMaxWidth()
                             .aspectRatio(1f)
                             .clip(RoundedCornerShape(24.dp)),
+                        thumbnailSize = layoutInfo.collectionHeroMaximumWidth,
                     )
                 }
             }
