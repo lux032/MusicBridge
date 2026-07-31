@@ -34,6 +34,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.lux032.musicbridge.plex.PlexAlbum
 import com.lux032.musicbridge.sonos.SonosRoom
 import kotlinx.coroutines.launch
@@ -50,6 +51,7 @@ internal fun ArtistsSection(
     onArtistClick: (ArtistSummary) -> Unit,
 ) {
     val layoutInfo = LocalAppLayoutInfo.current
+    val compactPhone = !layoutInfo.isTablet && !layoutInfo.isLandscape
     if (artists.isEmpty()) {
         Column(
             modifier = Modifier.fillMaxWidth(),
@@ -83,19 +85,22 @@ internal fun ArtistsSection(
             Box(modifier = Modifier.fillMaxSize()) {
                 LazyVerticalGrid(
                     state = gridState,
-                    columns = GridCells.Adaptive(layoutInfo.artistGridMinimumWidth),
+                    columns = if (compactPhone) GridCells.Fixed(2) else GridCells.Adaptive(layoutInfo.artistGridMinimumWidth),
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(end = 42.dp, bottom = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                    contentPadding = PaddingValues(end = if (compactPhone) 34.dp else 42.dp, bottom = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(if (compactPhone) 10.dp else 14.dp),
+                    verticalArrangement = Arrangement.spacedBy(if (compactPhone) 10.dp else 14.dp),
                 ) {
-                    item(span = { GridItemSpan(2) }, contentType = "section-title") {
+                    item(span = { GridItemSpan(maxLineSpan) }, contentType = "section-title") {
                         Row(
                             modifier = Modifier.fillMaxWidth().padding(bottom = 2.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Column(
+                                modifier = Modifier.weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
                                 Text(
                                     text = Strings.artists,
                                     style = MaterialTheme.typography.headlineMedium,
@@ -128,6 +133,7 @@ internal fun ArtistsSection(
                         ) { artist ->
                             ArtistCoverCard(
                                 artist = artist,
+                                compact = compactPhone,
                                 onClick = { onArtistClick(artist) },
                             )
                         }
@@ -137,7 +143,8 @@ internal fun ArtistsSection(
                 if (jumpTargets.size > 1) {
                     VerticalIndexBar(
                         labels = jumpTargets.map { it.first },
-                        modifier = Modifier.padding(top = 56.dp, bottom = 12.dp),
+                        compact = compactPhone,
+                        modifier = Modifier.padding(top = if (compactPhone) 8.dp else 56.dp, bottom = 12.dp),
                         onSelect = { label ->
                             jumpTargets.firstOrNull { it.first == label }?.let { (_, index) ->
                                 jumpJob?.cancel()
@@ -160,7 +167,7 @@ internal fun ArtistsSection(
                 LazyColumn(
                     state = listState,
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(end = 42.dp, bottom = 8.dp),
+                    contentPadding = PaddingValues(end = if (compactPhone) 34.dp else 42.dp, bottom = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     item(contentType = "section-title") {
@@ -169,7 +176,10 @@ internal fun ArtistsSection(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Column(
+                                modifier = Modifier.weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
                                 Text(
                                     text = Strings.artists,
                                     style = MaterialTheme.typography.headlineMedium,
@@ -207,7 +217,8 @@ internal fun ArtistsSection(
                 if (jumpTargets.size > 1) {
                     VerticalIndexBar(
                         labels = jumpTargets.map { it.first },
-                        modifier = Modifier.padding(top = 56.dp, bottom = 12.dp),
+                        compact = compactPhone,
+                        modifier = Modifier.padding(top = if (compactPhone) 8.dp else 56.dp, bottom = 12.dp),
                         onSelect = { label ->
                             jumpTargets.firstOrNull { it.first == label }?.let { (_, index) ->
                                 jumpJob?.cancel()
@@ -224,17 +235,19 @@ internal fun ArtistsSection(
 @Composable
 internal fun ArtistCoverCard(
     artist: ArtistSummary,
+    compact: Boolean = false,
     onClick: () -> Unit,
 ) {
+    val cornerRadius = if (compact) 18.dp else 24.dp
     Surface(
         modifier = Modifier
             .clickable(onClick = onClick),
-        shape = RoundedCornerShape(24.dp),
+        shape = RoundedCornerShape(cornerRadius),
         color = AppColors.Surface,
         border = BorderStroke(1.dp, AppColors.Border),
         shadowElevation = 0.dp,
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(if (compact) 7.dp else 10.dp)) {
             if (artist.coverUrl != null) {
                 AsyncAlbumArtwork(
                     imageUrl = artist.coverUrl,
@@ -242,7 +255,7 @@ internal fun ArtistCoverCard(
                     modifier = Modifier
                         .fillMaxWidth()
                         .aspectRatio(1.05f)
-                        .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)),
+                        .clip(RoundedCornerShape(topStart = cornerRadius, topEnd = cornerRadius)),
                     thumbnailSize = LocalAppLayoutInfo.current.artistGridMinimumWidth * 1.1f,
                 )
             } else {
@@ -250,19 +263,23 @@ internal fun ArtistCoverCard(
                     modifier = Modifier
                         .fillMaxWidth()
                         .aspectRatio(1.05f)
-                        .background(AppColors.SurfaceMuted, RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)),
+                        .background(AppColors.SurfaceMuted, RoundedCornerShape(topStart = cornerRadius, topEnd = cornerRadius)),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         imageVector = Icons.Filled.Person,
                         contentDescription = null,
                         tint = AppColors.TextSecondary,
-                        modifier = Modifier.size(64.dp)
+                        modifier = Modifier.size(if (compact) 44.dp else 64.dp)
                     )
                 }
             }
             Column(
-                modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 14.dp),
+                modifier = Modifier.padding(
+                    start = if (compact) 10.dp else 14.dp,
+                    end = if (compact) 10.dp else 14.dp,
+                    bottom = if (compact) 10.dp else 14.dp,
+                ),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 Text(
@@ -354,6 +371,7 @@ internal fun BoxScope.VerticalIndexBar(
     labels: List<String>,
     onSelect: (String) -> Unit,
     modifier: Modifier = Modifier,
+    compact: Boolean = false,
 ) {
     if (labels.isEmpty()) return
 
@@ -387,27 +405,34 @@ internal fun BoxScope.VerticalIndexBar(
                     onDragCancel = { activeLabel = null },
                 )
             },
-        shape = RoundedCornerShape(20.dp),
+        shape = RoundedCornerShape(if (compact) 16.dp else 20.dp),
         color = AppColors.SurfaceStrong.copy(alpha = 0.94f),
         border = BorderStroke(1.dp, AppColors.BorderStrong),
         shadowElevation = 6.dp,
     ) {
         Column(
-            modifier = Modifier.padding(horizontal = 6.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
+            modifier = Modifier.padding(
+                horizontal = if (compact) 3.dp else 6.dp,
+                vertical = if (compact) 4.dp else 8.dp,
+            ),
+            verticalArrangement = Arrangement.spacedBy(if (compact) 0.dp else 2.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             labels.forEach { label ->
                 Text(
                     text = label,
                     modifier = Modifier
-                        .width(26.dp)
+                        .width(if (compact) 22.dp else 26.dp)
                         .clip(RoundedCornerShape(10.dp))
                         .clickable { onSelect(label) }
-                        .padding(vertical = 2.dp),
+                        .padding(vertical = if (compact) 0.dp else 2.dp),
                     color = if (label == activeLabel) AppColors.SurfaceStrong else AppColors.TextPrimary,
                     textAlign = TextAlign.Center,
-                    style = MaterialTheme.typography.labelSmall,
+                    style = if (compact) {
+                        MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, lineHeight = 11.sp)
+                    } else {
+                        MaterialTheme.typography.labelSmall
+                    },
                     fontWeight = FontWeight.SemiBold,
                 )
             }
@@ -537,7 +562,7 @@ internal fun ArtistPresentationToggle(
         ) {
             NavIconGraphic(
                 icon = NavIcon.Covers,
-                tint = if (presentation == ArtistPresentation.Covers) AppColors.SurfaceStrong else AppColors.TextPrimary,
+                tint = if (presentation == ArtistPresentation.Covers) AppColors.Accent else AppColors.TextPrimary,
                 modifier = Modifier.size(18.dp),
             )
         }
@@ -548,7 +573,7 @@ internal fun ArtistPresentationToggle(
         ) {
             NavIconGraphic(
                 icon = NavIcon.List,
-                tint = if (presentation == ArtistPresentation.List) AppColors.SurfaceStrong else AppColors.TextPrimary,
+                tint = if (presentation == ArtistPresentation.List) AppColors.Accent else AppColors.TextPrimary,
                 modifier = Modifier.size(18.dp),
             )
         }

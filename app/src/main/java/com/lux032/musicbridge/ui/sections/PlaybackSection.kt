@@ -109,6 +109,33 @@ internal fun PlaybackDetailSection(
     }
 
     val layoutInfo = LocalAppLayoutInfo.current
+    val topBar: @Composable () -> Unit = {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(48.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconCircleButton(onClick = onBack) {
+                Icon(
+                    imageVector = Icons.Filled.ArrowBack,
+                    contentDescription = Strings.back,
+                    tint = AppColors.TextPrimary,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+            Text(
+                text = Strings.nowPlaying,
+                modifier = Modifier.weight(1f),
+                color = AppColors.TextSecondary,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                textAlign = TextAlign.Center,
+            )
+            // Keep the title optically centered against the back button.
+            Spacer(modifier = Modifier.size(42.dp))
+        }
+    }
     val artworkContent: @Composable (androidx.compose.ui.unit.Dp) -> Unit = { maximumSize ->
         AsyncAlbumArtwork(
             imageUrl = displayAlbum.thumbUrl,
@@ -262,8 +289,8 @@ internal fun PlaybackDetailSection(
                 icon = PlayerIcon.Previous,
                 onClick = onPrevious,
                 enabled = currentState.currentIndex > 0 && !isLoading,
-                sizeOverride = if (compact) 46.dp else null,
-                iconSizeOverride = if (compact) 20.dp else null,
+                sizeOverride = if (compact) 46.dp else 56.dp,
+                iconSizeOverride = if (compact) 20.dp else 23.dp,
             )
             Spacer(modifier = Modifier.width(if (compact) 20.dp else 32.dp))
             PlayerControlButton(
@@ -271,16 +298,16 @@ internal fun PlaybackDetailSection(
                 onClick = { onTogglePause(currentState) },
                 enabled = !isLoading,
                 highlighted = true,
-                sizeOverride = if (compact) 54.dp else null,
-                iconSizeOverride = if (compact) 24.dp else null,
+                sizeOverride = if (compact) 54.dp else 72.dp,
+                iconSizeOverride = if (compact) 24.dp else 30.dp,
             )
             Spacer(modifier = Modifier.width(if (compact) 20.dp else 32.dp))
             PlayerControlButton(
                 icon = PlayerIcon.Next,
                 onClick = onNext,
                 enabled = currentState.currentIndex < currentState.tracks.lastIndex && !isLoading,
-                sizeOverride = if (compact) 46.dp else null,
-                iconSizeOverride = if (compact) 20.dp else null,
+                sizeOverride = if (compact) 46.dp else 56.dp,
+                iconSizeOverride = if (compact) 20.dp else 23.dp,
             )
         }
         PlaybackActionBar(
@@ -320,76 +347,102 @@ internal fun PlaybackDetailSection(
     }
 
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-        val availableHeight = maxHeight
+        val topBarHeight = 48.dp
+        val availableWidth = maxWidth
+        val bodyHeight = (maxHeight - topBarHeight).coerceAtLeast(0.dp)
         val compactLandscape = layoutInfo.isLandscape && maxHeight < 500.dp
-        if (layoutInfo.isLandscape) {
-            val outerPadding = if (compactLandscape) 4.dp else 12.dp
-            val columnSpacing = if (compactLandscape) 16.dp else 32.dp
-            val artworkSize = minOf(
-                maxHeight - (outerPadding * 2),
-                maxWidth * if (compactLandscape) 0.38f else 0.42f,
-                layoutInfo.detailArtworkMaximumWidth,
-            ).coerceAtLeast(160.dp)
 
-            Row(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(vertical = outerPadding),
-                horizontalArrangement = Arrangement.spacedBy(columnSpacing),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(
+        Column(modifier = Modifier.fillMaxSize()) {
+            topBar()
+
+            if (layoutInfo.isLandscape) {
+                val verticalPadding = if (compactLandscape) 4.dp else 16.dp
+                val columnSpacing = if (compactLandscape) 16.dp else 40.dp
+                val artworkSize = minOf(
+                    bodyHeight - (verticalPadding * 2),
+                    availableWidth * if (compactLandscape) 0.34f else 0.38f,
+                    if (layoutInfo.isTablet) 420.dp else 360.dp,
+                ).coerceAtLeast(160.dp)
+
+                Row(
                     modifier = Modifier
-                        .width(artworkSize)
-                        .fillMaxHeight(),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    artworkContent(artworkSize)
-                }
-                Box(
-                    modifier = Modifier
+                        .fillMaxWidth()
                         .weight(1f)
-                        .fillMaxHeight(),
+                        .padding(vertical = verticalPadding),
+                    horizontalArrangement = Arrangement.spacedBy(columnSpacing),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .weight(0.9f)
+                            .fillMaxHeight(),
+                        contentAlignment = Alignment.CenterEnd,
+                    ) {
+                        Box(modifier = Modifier.width(artworkSize)) {
+                            artworkContent(artworkSize)
+                        }
+                    }
+                    Box(
+                        modifier = Modifier
+                            .weight(1.1f)
+                            .fillMaxHeight(),
+                        contentAlignment = Alignment.CenterStart,
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .widthIn(max = 560.dp)
+                                .fillMaxWidth()
+                                .heightIn(max = bodyHeight - (verticalPadding * 2))
+                                .verticalScroll(rememberScrollState())
+                                .padding(vertical = if (compactLandscape) 2.dp else 8.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            playerDetails(compactLandscape)
+                        }
+                    }
+                }
+            } else {
+                val artworkSize = minOf(
+                    availableWidth,
+                    bodyHeight * if (layoutInfo.isTablet) 0.42f else 0.46f,
+                    if (layoutInfo.isTablet) 420.dp else 360.dp,
+                ).coerceAtLeast(220.dp)
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Column(
-                        modifier = Modifier
-                            .widthIn(max = 620.dp)
-                            .fillMaxWidth()
-                            .heightIn(max = availableHeight - (outerPadding * 2))
-                            .verticalScroll(rememberScrollState())
-                            .padding(vertical = if (compactLandscape) 2.dp else 8.dp),
-                        verticalArrangement = Arrangement.spacedBy(if (compactLandscape) 8.dp else 18.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                    ) {
-                        playerDetails(compactLandscape)
+                    if (layoutInfo.isTablet) {
+                        Column(
+                            modifier = Modifier.fillMaxSize(),
+                            verticalArrangement = Arrangement.SpaceEvenly,
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            Box(modifier = Modifier.width(artworkSize)) {
+                                artworkContent(artworkSize)
+                            }
+                            playerDetails(false)
+                        }
+                    } else {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = bodyHeight)
+                                .verticalScroll(rememberScrollState())
+                                .padding(vertical = 12.dp),
+                            verticalArrangement = Arrangement.spacedBy(22.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            Box(modifier = Modifier.width(artworkSize)) {
+                                artworkContent(artworkSize)
+                            }
+                            playerDetails(false)
+                        }
                     }
                 }
             }
-        } else {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState())
-                    .padding(bottom = 20.dp),
-                verticalArrangement = Arrangement.spacedBy(18.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                artworkContent(layoutInfo.detailArtworkMaximumWidth)
-                playerDetails(false)
-            }
-        }
-
-        IconCircleButton(
-            onClick = onBack,
-            modifier = Modifier.align(Alignment.TopStart),
-        ) {
-            Icon(
-                imageVector = Icons.Filled.ArrowBack,
-                contentDescription = Strings.back,
-                tint = AppColors.TextPrimary,
-                modifier = Modifier.size(20.dp),
-            )
         }
     }
 
