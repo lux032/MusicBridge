@@ -104,20 +104,20 @@ internal fun PlaybackDetailSection(
         }
     }
 
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
+    val layoutInfo = LocalAppLayoutInfo.current
+    val artworkContent: @Composable () -> Unit = {
         AsyncAlbumArtwork(
             imageUrl = displayAlbum.thumbUrl,
             title = displayAlbum.title,
             modifier = Modifier
+                .widthIn(max = layoutInfo.detailArtworkMaximumWidth)
                 .fillMaxWidth()
                 .aspectRatio(1f)
                 .clip(RoundedCornerShape(16.dp)),
             contentScale = ContentScale.Crop,
         )
+    }
+    val playerDetails: @Composable ColumnScope.() -> Unit = {
         Column(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -286,6 +286,44 @@ internal fun PlaybackDetailSection(
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.SemiBold,
             )
+        }
+    }
+
+    if (layoutInfo.isWide) {
+        Row(
+            modifier = Modifier.fillMaxSize(),
+            horizontalArrangement = Arrangement.spacedBy(32.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight(),
+                contentAlignment = Alignment.Center,
+            ) {
+                artworkContent()
+            }
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .verticalScroll(rememberScrollState())
+                    .padding(vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                content = playerDetails,
+            )
+        }
+    } else {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            artworkContent()
+            playerDetails()
         }
     }
 
@@ -726,16 +764,15 @@ internal fun AlbumDetailSection(
         return
     }
 
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
+    val layoutInfo = LocalAppLayoutInfo.current
+    val albumSummary: @Composable ColumnScope.() -> Unit = {
         AsyncAlbumArtwork(
             imageUrl = currentTrackResult.album.thumbUrl,
             title = currentTrackResult.album.title,
             modifier = Modifier
+                .widthIn(max = layoutInfo.detailArtworkMaximumWidth)
                 .fillMaxWidth()
-                .aspectRatio(1.3f)
+                .aspectRatio(1f)
                 .clip(RoundedCornerShape(16.dp)),
         )
 
@@ -802,11 +839,9 @@ internal fun AlbumDetailSection(
                 }
             }
         }
+    }
 
-        Column(
-            modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
+    val trackList: @Composable ColumnScope.() -> Unit = {
             currentTrackResult.tracks.forEachIndexed { index, track ->
                 Surface(
                     modifier = Modifier
@@ -863,6 +898,32 @@ internal fun AlbumDetailSection(
                     }
                 }
             }
+    }
+
+    if (layoutInfo.isWide) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(28.dp),
+            verticalAlignment = Alignment.Top,
+        ) {
+            Column(
+                modifier = Modifier.weight(0.82f),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+                content = albumSummary,
+            )
+            Column(
+                modifier = Modifier.weight(1.18f),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                content = trackList,
+            )
+        }
+    } else {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            albumSummary()
+            trackList()
         }
     }
 }

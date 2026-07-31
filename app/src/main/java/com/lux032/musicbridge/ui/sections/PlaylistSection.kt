@@ -2,11 +2,6 @@ package com.lux032.musicbridge
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsPressedAsState
-import androidx.compose.material3.ripple
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -73,23 +68,9 @@ internal fun PlaylistsSection(
 private fun FavoriteTracksCard(
     onClick: () -> Unit,
 ) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val isPressed by interactionSource.collectIsPressedAsState()
-    val scale = animateFloatAsState(
-        targetValue = if (isPressed) 0.97f else 1f,
-        label = "favorite_tracks_scale",
-    )
     Surface(
         modifier = Modifier
-            .clickable(
-                interactionSource = interactionSource,
-                indication = ripple(bounded = true),
-                onClick = onClick,
-            )
-            .graphicsLayer {
-                scaleX = scale.value
-                scaleY = scale.value
-            },
+            .clickable(onClick = onClick),
         shape = RoundedCornerShape(20.dp),
         color = AppColors.SurfaceStrong,
         border = BorderStroke(1.dp, AppColors.BorderStrong),
@@ -128,23 +109,9 @@ private fun PlaylistCard(
     playlist: PlexPlaylist,
     onClick: () -> Unit,
 ) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val isPressed by interactionSource.collectIsPressedAsState()
-    val scale = animateFloatAsState(
-        targetValue = if (isPressed) 0.97f else 1f,
-        label = "playlist_scale",
-    )
     Surface(
         modifier = Modifier
-            .clickable(
-                interactionSource = interactionSource,
-                indication = ripple(bounded = true),
-                onClick = onClick,
-            )
-            .graphicsLayer {
-                scaleX = scale.value
-                scaleY = scale.value
-            },
+            .clickable(onClick = onClick),
         shape = RoundedCornerShape(20.dp),
         color = AppColors.Surface,
         border = BorderStroke(1.dp, AppColors.Border),
@@ -205,6 +172,7 @@ internal fun PlaylistDetailSection(
         )
         return
     }
+    val layoutInfo = LocalAppLayoutInfo.current
 
     LazyColumn(
         modifier = Modifier.fillMaxWidth(),
@@ -217,14 +185,20 @@ internal fun PlaylistDetailSection(
         }
 
         item {
-            AsyncAlbumArtwork(
-                imageUrl = currentResult.playlist.thumbUrl,
-                title = currentResult.playlist.title,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(1.3f)
-                    .clip(RoundedCornerShape(16.dp)),
-            )
+            Box(
+                modifier = Modifier.fillMaxWidth(),
+                contentAlignment = Alignment.Center,
+            ) {
+                AsyncAlbumArtwork(
+                    imageUrl = currentResult.playlist.thumbUrl,
+                    title = currentResult.playlist.title,
+                    modifier = Modifier
+                        .widthIn(max = layoutInfo.detailArtworkMaximumWidth)
+                        .fillMaxWidth()
+                        .aspectRatio(1f)
+                        .clip(RoundedCornerShape(16.dp)),
+                )
+            }
         }
 
         item {

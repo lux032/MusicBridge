@@ -13,16 +13,21 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.SystemBarStyle
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.ViewModelProvider
 import androidx.compose.foundation.background
+import androidx.compose.foundation.LocalOverscrollFactory
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -56,6 +61,7 @@ import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     var onHardwareVolumeStep: ((Int) -> Boolean)? = null
+    internal val appState: AppState by lazy { ViewModelProvider(this)[AppState::class.java] }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -109,7 +115,8 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
     val activity = context as? MainActivity
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
-    val state = remember(context) { AppState(context) }
+    val state = remember(activity) { requireNotNull(activity).appState }
+    val layoutInfo = rememberAppLayoutInfo()
 
     var username by rememberSaveable { mutableStateOf(state.connectionPreferences.username) }
     var password by rememberSaveable { mutableStateOf(state.connectionPreferences.password) }
@@ -123,22 +130,24 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
 
     val activeSection = state.activeSection
     val bottomNavigationHeight = 84.dp
+    val isNavigationRailVisible = layoutInfo.useNavigationRail && activeSection != AppSection.PlaybackDetail
+    val navigationBottomPadding = if (isNavigationRailVisible) 0.dp else bottomNavigationHeight
     val contentBottomPadding = with(density) {
         if (activeSection == AppSection.PlaybackDetail) {
             20.dp
         } else if (state.miniPlayerState != null) {
-            miniPlayerHeightPx.toDp() + bottomNavigationHeight + 28.dp
+            miniPlayerHeightPx.toDp() + navigationBottomPadding + 28.dp
         } else {
-            bottomNavigationHeight + 20.dp
+            navigationBottomPadding + 20.dp
         }
     }
     val volumeOverlayBottomPadding = with(density) {
         if (activeSection == AppSection.PlaybackDetail) {
             24.dp
         } else if (state.miniPlayerState != null) {
-            miniPlayerHeightPx.toDp() + bottomNavigationHeight + 32.dp
+            miniPlayerHeightPx.toDp() + navigationBottomPadding + 32.dp
         } else {
-            bottomNavigationHeight + 24.dp
+            navigationBottomPadding + 24.dp
         }
     }
 
@@ -228,7 +237,11 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
             else -> true
         }
 
-    Box(
+    CompositionLocalProvider(
+        LocalAppLayoutInfo provides layoutInfo,
+        LocalOverscrollFactory provides null,
+    ) {
+    Row(
         modifier = modifier
             .fillMaxSize()
             .background(
@@ -237,6 +250,17 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                 )
             )
     ) {
+        if (isNavigationRailVisible) {
+            AppNavigationRail(
+                primarySection = state.primarySection,
+                onSectionChange = state::switchPrimarySection,
+            )
+        }
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxHeight(),
+        ) {
         Crossfade(
             targetState = activeSection,
             animationSpec = tween(durationMillis = 250),
@@ -293,7 +317,7 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(start = 16.dp, top = 16.dp, end = 16.dp, bottom = contentBottomPadding),
+                            .padding(start = layoutInfo.horizontalPadding, top = 16.dp, end = layoutInfo.horizontalPadding, bottom = contentBottomPadding),
                     ) {
                         ArtistsSection(
                             artists = state.artists,
@@ -309,7 +333,7 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(start = 16.dp, top = 16.dp, end = 16.dp, bottom = contentBottomPadding),
+                            .padding(start = layoutInfo.horizontalPadding, top = 16.dp, end = layoutInfo.horizontalPadding, bottom = contentBottomPadding),
                     ) {
                         PlaylistsSection(
                             playlists = state.playlists,
@@ -322,7 +346,7 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(start = 16.dp, top = 16.dp, end = 16.dp, bottom = contentBottomPadding),
+                            .padding(start = layoutInfo.horizontalPadding, top = 16.dp, end = layoutInfo.horizontalPadding, bottom = contentBottomPadding),
                     ) {
                         PlaylistDetailSection(
                             playlistResult = state.playlistTrackResult,
@@ -361,7 +385,7 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(start = 16.dp, top = 16.dp, end = 16.dp, bottom = contentBottomPadding),
+                            .padding(start = layoutInfo.horizontalPadding, top = 16.dp, end = layoutInfo.horizontalPadding, bottom = contentBottomPadding),
                     ) {
                         PlaybackDetailSection(
                             state = state.miniPlayerState,
@@ -420,7 +444,7 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(start = 16.dp, top = 16.dp, end = 16.dp),
+                            .padding(start = layoutInfo.horizontalPadding, top = 16.dp, end = layoutInfo.horizontalPadding),
                     ) {
                         ArtistAlbumsSection(
                             artist = state.selectedArtist,
@@ -452,7 +476,7 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(start = 16.dp, top = 16.dp, end = 16.dp),
+                            .padding(start = layoutInfo.horizontalPadding, top = 16.dp, end = layoutInfo.horizontalPadding),
                     ) {
                         AlbumCollectionSection(
                             title = Strings.favoriteAlbumsCollection,
@@ -483,7 +507,7 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(start = 16.dp, top = 16.dp, end = 16.dp),
+                            .padding(start = layoutInfo.horizontalPadding, top = 16.dp, end = layoutInfo.horizontalPadding),
                     ) {
                         AlbumCollectionSection(
                             title = Strings.recentAdded100,
@@ -496,6 +520,44 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                             onAlbumClick = state::openAlbumDetail,
                         )
                     }
+                } else if (currentSection == AppSection.Home) {
+                    val savedPos = state.getSavedLazyScrollPosition(AppSection.Home)
+                    val homeListState = rememberLazyListState(
+                        initialFirstVisibleItemIndex = savedPos.index,
+                        initialFirstVisibleItemScrollOffset = savedPos.offset,
+                    )
+                    DisposableEffect(Unit) {
+                        onDispose {
+                            state.saveLazyScrollPosition(
+                                AppSection.Home,
+                                homeListState.firstVisibleItemIndex,
+                                homeListState.firstVisibleItemScrollOffset,
+                            )
+                        }
+                    }
+                    HomeSection(
+                        connectionPreferences = state.connectionPreferences,
+                        allAlbums = state.allAlbums,
+                        recentPlayedAlbums = state.recentPlayedAlbums,
+                        favoriteAlbums = state.favoriteAlbums,
+                        recentAddedAlbums = state.recentAddedAlbums.take(100),
+                        selectedAlbum = state.selectedAlbum,
+                        selectedSonosRoom = state.selectedSonosRoom,
+                        lastAlbumSyncEpochMillis = state.lastAlbumSyncEpochMillis,
+                        isLoading = state.isLoading,
+                        errorMessage = state.errorMessage,
+                        actionMessage = state.actionMessage,
+                        bottomContentPadding = contentBottomPadding,
+                        listState = homeListState,
+                        onRefreshFavorites = { scope.launch { state.refreshAlbums() } },
+                        onAlbumClick = state::openAlbumDetail,
+                        onOpenAllAlbums = {
+                            state.albumSearchQuery = ""
+                            state.navigateTo(AppSection.AllAlbums)
+                        },
+                        onOpenFavorites = { state.navigateTo(AppSection.FavoriteCollection) },
+                        onOpenRecentAdded = { state.navigateTo(AppSection.RecentAdded) },
+                    )
                 } else {
                     val scrollState = rememberScrollState(
                         initial = if (shouldPersistVerticalScroll(currentSection)) {
@@ -515,31 +577,11 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                         modifier = Modifier
                             .fillMaxSize()
                             .verticalScroll(scrollState)
-                            .padding(start = 16.dp, top = 16.dp, end = 16.dp, bottom = contentBottomPadding),
+                            .padding(start = layoutInfo.horizontalPadding, top = 16.dp, end = layoutInfo.horizontalPadding, bottom = contentBottomPadding),
                         verticalArrangement = Arrangement.spacedBy(16.dp),
                     ) {
                         when (currentSection) {
-                            AppSection.Home -> HomeSection(
-                                connectionPreferences = state.connectionPreferences,
-                                allAlbums = state.allAlbums,
-                                recentPlayedAlbums = state.recentPlayedAlbums.take(9),
-                                favoriteAlbums = state.favoriteAlbums,
-                                recentAddedAlbums = state.recentAddedAlbums.take(100),
-                                selectedAlbum = state.selectedAlbum,
-                                selectedSonosRoom = state.selectedSonosRoom,
-                                lastAlbumSyncEpochMillis = state.lastAlbumSyncEpochMillis,
-                                isLoading = state.isLoading,
-                                errorMessage = state.errorMessage,
-                                actionMessage = state.actionMessage,
-                                onRefreshFavorites = { scope.launch { state.refreshAlbums() } },
-                                onAlbumClick = state::openAlbumDetail,
-                                onOpenAllAlbums = {
-                                    state.albumSearchQuery = ""
-                                    state.navigateTo(AppSection.AllAlbums)
-                                },
-                                onOpenFavorites = { state.navigateTo(AppSection.FavoriteCollection) },
-                                onOpenRecentAdded = { state.navigateTo(AppSection.RecentAdded) },
-                            )
+                            AppSection.Home -> Unit
                             AppSection.AlbumDetail -> AlbumDetailSection(
                                 trackResult = state.trackResult,
                                 selectedRoom = state.selectedSonosRoom,
@@ -591,7 +633,7 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
             }
         }
 
-        if (isBottomBarVisible) {
+        if (isBottomBarVisible && !isNavigationRailVisible) {
             BottomNavigationBar(
                 primarySection = state.primarySection,
                 modifier = Modifier
@@ -615,10 +657,10 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .padding(
-                            start = 16.dp,
-                            end = 16.dp,
+                            start = layoutInfo.horizontalPadding,
+                            end = layoutInfo.horizontalPadding,
                             top = 12.dp,
-                            bottom = bottomNavigationHeight + 12.dp,
+                            bottom = navigationBottomPadding + 12.dp,
                         )
                         .onSizeChanged { miniPlayerHeightPx = it.height },
                     onArtworkClick = {
@@ -640,7 +682,11 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                 isVolumeChanging = state.isVolumeChanging,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .padding(start = 16.dp, end = 16.dp, bottom = volumeOverlayBottomPadding),
+                    .padding(
+                        start = layoutInfo.horizontalPadding,
+                        end = layoutInfo.horizontalPadding,
+                        bottom = volumeOverlayBottomPadding,
+                    ),
                 onVolumeChange = { newValue ->
                     state.applyVolumeChange(overlayRoom, newValue)
                     showVolumeOverlay()
@@ -648,6 +694,8 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
             )
         }
 
+        }
+    }
     }
 }
 }

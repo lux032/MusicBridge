@@ -38,7 +38,6 @@ import com.lux032.musicbridge.sonos.SonosRoom
 import com.lux032.musicbridge.plex.PlexAlbum
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
-import coil3.request.crossfade
 import androidx.compose.ui.graphics.painter.ColorPainter
 import java.time.Instant
 import java.time.ZoneId
@@ -152,6 +151,47 @@ internal fun BottomNavigationBar(
                 isSelected = primarySection == AppSection.Settings,
                 onClick = { onSectionChange(AppSection.Settings) },
             )
+        }
+    }
+}
+
+@Composable
+internal fun AppNavigationRail(
+    primarySection: AppSection,
+    modifier: Modifier = Modifier,
+    onSectionChange: (AppSection) -> Unit,
+) {
+    val systemBarPadding = WindowInsets.systemBars.asPaddingValues()
+
+    Surface(
+        modifier = modifier
+            .fillMaxHeight()
+            .width(104.dp),
+        color = AppColors.Surface.copy(alpha = 0.96f),
+        shadowElevation = 8.dp,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxHeight()
+                .padding(
+                    top = systemBarPadding.calculateTopPadding() + 20.dp,
+                    bottom = systemBarPadding.calculateBottomPadding() + 20.dp,
+                ),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            listOf(
+                AppSection.Home,
+                AppSection.Artists,
+                AppSection.Playlists,
+                AppSection.Settings,
+            ).forEach { section ->
+                BottomNavButton(
+                    section = section,
+                    isSelected = primarySection == section,
+                    onClick = { onSectionChange(section) },
+                )
+            }
         }
     }
 }
@@ -295,12 +335,18 @@ internal fun AlbumGrid(
     onAlbumClick: (PlexAlbum) -> Unit,
     compact: Boolean,
 ) {
+    val layoutInfo = LocalAppLayoutInfo.current
+    val responsiveColumns = when {
+        !layoutInfo.isTablet -> columns
+        layoutInfo.isWide -> maxOf(columns, 5)
+        else -> maxOf(columns, 4)
+    }
     val spacing = if (compact) 10.dp else 14.dp
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(spacing),
     ) {
-        albums.chunked(columns).forEach { rowAlbums ->
+        albums.chunked(responsiveColumns).forEach { rowAlbums ->
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(spacing),
@@ -316,7 +362,7 @@ internal fun AlbumGrid(
                     }
                 }
 
-                repeat(columns - rowAlbums.size) {
+                repeat(responsiveColumns - rowAlbums.size) {
                     Spacer(modifier = Modifier.weight(1f))
                 }
             }
@@ -331,20 +377,11 @@ internal fun AlbumCoverCard(
     onClick: () -> Unit,
     compact: Boolean = false,
 ) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val isPressed by interactionSource.collectIsPressedAsState()
+    val layoutInfo = LocalAppLayoutInfo.current
 
     Surface(
         modifier = Modifier
-            .clickable(
-                interactionSource = interactionSource,
-                indication = ripple(bounded = true),
-                onClick = onClick,
-            )
-            .graphicsLayer {
-                scaleX = if (isPressed) 0.95f else 1f
-                scaleY = if (isPressed) 0.95f else 1f
-            },
+            .clickable(onClick = onClick),
         shape = RoundedCornerShape(if (compact) 18.dp else 16.dp),
         color = if (compact) Color.Transparent else Color.Transparent,
         border = BorderStroke(0.dp, Color.Transparent),
@@ -358,6 +395,7 @@ internal fun AlbumCoverCard(
                     .fillMaxWidth()
                     .aspectRatio(1f)
                     .clip(RoundedCornerShape(18.dp)),
+                contentScale = ContentScale.Crop,
             )
         } else {
             Column(
@@ -370,18 +408,21 @@ internal fun AlbumCoverCard(
                         .fillMaxWidth()
                         .aspectRatio(1f)
                         .clip(RoundedCornerShape(16.dp)),
+                    contentScale = ContentScale.Crop,
                 )
                 Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
                     Text(
                         text = album.title,
                         color = AppColors.TextPrimary,
                         fontWeight = FontWeight.Bold,
-                        maxLines = 2,
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = if (layoutInfo.isWide) 1 else 2,
                         overflow = TextOverflow.Ellipsis,
                     )
                     Text(
                         text = album.artistName ?: Strings.unknownArtist,
                         color = AppColors.TextSecondary,
+                        style = MaterialTheme.typography.bodySmall,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -593,7 +634,6 @@ internal fun AsyncAlbumArtwork(
         val imageRequest = remember(imageUrl, context) {
             ImageRequest.Builder(context)
                 .data(imageUrl)
-                .crossfade(200)
                 .build()
         }
         AsyncImage(

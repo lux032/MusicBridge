@@ -4,11 +4,6 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsPressedAsState
-import androidx.compose.material3.ripple
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -53,6 +48,7 @@ internal fun ArtistsSection(
     onGoHome: () -> Unit,
     onArtistClick: (ArtistSummary) -> Unit,
 ) {
+    val layoutInfo = LocalAppLayoutInfo.current
     if (artists.isEmpty()) {
         Column(
             modifier = Modifier.fillMaxWidth(),
@@ -85,7 +81,7 @@ internal fun ArtistsSection(
             Box(modifier = Modifier.fillMaxSize()) {
                 LazyVerticalGrid(
                     state = gridState,
-                    columns = GridCells.Fixed(2),
+                    columns = GridCells.Adaptive(layoutInfo.artistGridMinimumWidth),
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(end = 42.dp, bottom = 8.dp),
                     horizontalArrangement = Arrangement.spacedBy(14.dp),
@@ -128,12 +124,10 @@ internal fun ArtistsSection(
                             key = { artist -> "artist-${artist.name}" },
                             contentType = { "artist" },
                         ) { artist ->
-                            Box(modifier = Modifier.animateItem()) {
-                                ArtistCoverCard(
-                                    artist = artist,
-                                    onClick = { onArtistClick(artist) },
-                                )
-                            }
+                            ArtistCoverCard(
+                                artist = artist,
+                                onClick = { onArtistClick(artist) },
+                            )
                         }
                     }
                 }
@@ -199,12 +193,10 @@ internal fun ArtistsSection(
                             key = { artist -> "artist-list-${artist.name}" },
                             contentType = { "artist" },
                         ) { artist ->
-                            Box(modifier = Modifier.animateItem()) {
-                                ArtistListRow(
-                                    artist = artist,
-                                    onClick = { onArtistClick(artist) },
-                                )
-                            }
+                            ArtistListRow(
+                                artist = artist,
+                                onClick = { onArtistClick(artist) },
+                            )
                         }
                     }
                 }
@@ -230,23 +222,9 @@ internal fun ArtistCoverCard(
     artist: ArtistSummary,
     onClick: () -> Unit,
 ) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val isPressed by interactionSource.collectIsPressedAsState()
-    val scale = animateFloatAsState(
-        targetValue = if (isPressed) 0.95f else 1f,
-        label = "artist_card_scale",
-    )
     Surface(
         modifier = Modifier
-            .clickable(
-                interactionSource = interactionSource,
-                indication = ripple(bounded = true),
-                onClick = onClick,
-            )
-            .graphicsLayer {
-                scaleX = scale.value
-                scaleY = scale.value
-            },
+            .clickable(onClick = onClick),
         shape = RoundedCornerShape(24.dp),
         color = AppColors.Surface,
         border = BorderStroke(1.dp, AppColors.Border),
@@ -303,23 +281,9 @@ internal fun ArtistListRow(
     artist: ArtistSummary,
     onClick: () -> Unit,
 ) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val isPressed by interactionSource.collectIsPressedAsState()
-    val scale = animateFloatAsState(
-        targetValue = if (isPressed) 0.97f else 1f,
-        label = "artist_list_scale",
-    )
     Surface(
         modifier = Modifier
-            .clickable(
-                interactionSource = interactionSource,
-                indication = ripple(bounded = true),
-                onClick = onClick,
-            )
-            .graphicsLayer {
-                scaleX = scale.value
-                scaleY = scale.value
-            },
+            .clickable(onClick = onClick),
         shape = RoundedCornerShape(20.dp),
         color = AppColors.Surface,
         border = BorderStroke(1.dp, AppColors.Border),
@@ -457,6 +421,7 @@ internal fun ArtistAlbumsSection(
     onAlbumClick: (PlexAlbum) -> Unit,
     onShuffleArtist: (ArtistSummary, SonosRoom) -> Unit,
 ) {
+    val layoutInfo = LocalAppLayoutInfo.current
     val currentArtist = artist
     if (currentArtist == null) {
         EmptyStateCard(
@@ -472,7 +437,7 @@ internal fun ArtistAlbumsSection(
 
     LazyVerticalGrid(
         state = gridState,
-        columns = GridCells.Fixed(2),
+        columns = GridCells.Adaptive(layoutInfo.albumGridMinimumWidth),
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(bottom = bottomContentPadding),
         horizontalArrangement = Arrangement.spacedBy(14.dp),
@@ -485,14 +450,20 @@ internal fun ArtistAlbumsSection(
         }
         if (heroAlbum != null) {
             item(span = { GridItemSpan(maxLineSpan) }, contentType = "hero") {
-                AsyncAlbumArtwork(
-                    imageUrl = currentArtist.coverUrl ?: heroAlbum.thumbUrl,
-                    title = currentArtist.name,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(1.25f)
-                        .clip(RoundedCornerShape(24.dp)),
-                )
+                Box(
+                    modifier = Modifier.fillMaxWidth(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    AsyncAlbumArtwork(
+                        imageUrl = currentArtist.coverUrl ?: heroAlbum.thumbUrl,
+                        title = currentArtist.name,
+                        modifier = Modifier
+                            .widthIn(max = layoutInfo.collectionHeroMaximumWidth)
+                            .fillMaxWidth()
+                            .aspectRatio(1f)
+                            .clip(RoundedCornerShape(24.dp)),
+                    )
+                }
             }
         }
         item(span = { GridItemSpan(maxLineSpan) }, contentType = "header") {

@@ -9,8 +9,11 @@ import androidx.compose.material3.ripple
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.items as lazyItems
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyGridState
@@ -23,20 +26,13 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.lux032.musicbridge.plex.PlexAlbum
 import com.lux032.musicbridge.sonos.SonosRoom
-import coil3.request.ImageRequest
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlin.math.absoluteValue
 
 @Composable
 internal fun HomeSection(
@@ -51,94 +47,104 @@ internal fun HomeSection(
     isLoading: Boolean,
     errorMessage: String?,
     actionMessage: String?,
+    bottomContentPadding: androidx.compose.ui.unit.Dp,
+    listState: LazyListState = rememberLazyListState(),
     onRefreshFavorites: () -> Unit,
     onAlbumClick: (PlexAlbum) -> Unit,
     onOpenAllAlbums: () -> Unit,
     onOpenFavorites: () -> Unit,
     onOpenRecentAdded: () -> Unit,
 ) {
-    val context = LocalContext.current
-    val imageLoader = remember(context) { AlbumArtworkImageLoader.get(context) }
+    val layoutInfo = LocalAppLayoutInfo.current
+    val needsConnection = !connectionPreferences.hasCredentials() && allAlbums.isEmpty()
 
-    LaunchedEffect(recentPlayedAlbums, favoriteAlbums, recentAddedAlbums) {
-        (recentPlayedAlbums.take(9) + favoriteAlbums.take(9) + recentAddedAlbums.take(9))
-            .mapNotNull(PlexAlbum::thumbUrl)
-            .distinct()
-            .forEach { imageUrl ->
-                imageLoader.enqueue(
-                    ImageRequest.Builder(context)
-                        .data(imageUrl)
-                        .build()
+    LazyColumn(
+        state = listState,
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(
+            start = layoutInfo.horizontalPadding,
+            top = 16.dp,
+            end = layoutInfo.horizontalPadding,
+            bottom = bottomContentPadding,
+        ),
+        verticalArrangement = Arrangement.spacedBy(layoutInfo.contentSpacing),
+    ) {
+        errorMessage?.let { message ->
+            item(key = "home-error", contentType = "message") {
+                MessageCard(label = Strings.error, message = message, tone = MessageTone.Error)
+            }
+        }
+        if (isLoading) {
+            item(key = "home-loading", contentType = "message") {
+                LoadingCard(message = Strings.loading)
+            }
+        }
+        if (needsConnection) {
+            item(key = "home-connection", contentType = "empty") {
+                EmptyStateCard(
+                    title = Strings.settingsPromptTitle,
+                    body = Strings.settingsPromptBody,
+                    actionLabel = Strings.refreshHome,
+                    onAction = onRefreshFavorites,
                 )
             }
-    }
-
-//    HomeStatusCard(
-//        selectedRoom = selectedSonosRoom,
-//        lastAlbumSyncEpochMillis = lastAlbumSyncEpochMillis,
-//    )
-
-    errorMessage?.let { MessageCard(label = Strings.error, message = it, tone = MessageTone.Error) }
-
-    if (isLoading) {
-        LoadingCard(message = Strings.loading)
-    }
-
-    if (!connectionPreferences.hasCredentials() && allAlbums.isEmpty()) {
-        EmptyStateCard(
-            title = Strings.settingsPromptTitle,
-            body = Strings.settingsPromptBody,
-            actionLabel = Strings.refreshHome,
-            onAction = onRefreshFavorites,
-        )
-        return
-    }
-
-    if (!isLoading && favoriteAlbums.isEmpty() && errorMessage == null) {
-        EmptyStateCard(
-            title = Strings.noFavoritesTitle,
-            body = Strings.noFavoritesBody,
-            actionLabel = Strings.retry,
-            onAction = onRefreshFavorites,
-        )
-    }
-
-    if (allAlbums.isNotEmpty()) {
-        EntryActionCard(
-            title = Strings.allAlbums,
-            body = Strings.albumsSynced(allAlbums.size),
-            actionLabel = Strings.view,
-            onAction = onOpenAllAlbums,
-        )
-    }
-    if (recentPlayedAlbums.isNotEmpty()) {
-        RecentPlayedCarouselSection(
-            albums = recentPlayedAlbums.take(9),
-            selectedAlbum = selectedAlbum,
-            onAlbumClick = onAlbumClick,
-        )
-    }
-    if (favoriteAlbums.isNotEmpty()) {
-        AlbumPreviewGridSection(
-            title = Strings.favoriteAlbums,
-            subtitle = "",
-            albums = favoriteAlbums.take(9),
-            selectedAlbum = selectedAlbum,
-            actionLabel = Strings.viewAll,
-            onAction = onOpenFavorites,
-            onAlbumClick = onAlbumClick,
-        )
-    }
-    if (recentAddedAlbums.isNotEmpty()) {
-        AlbumPreviewGridSection(
-            title = Strings.recentAdded,
-            subtitle = "",
-            albums = recentAddedAlbums.take(9),
-            selectedAlbum = selectedAlbum,
-            actionLabel = Strings.viewTop100,
-            onAction = onOpenRecentAdded,
-            onAlbumClick = onAlbumClick,
-        )
+        } else {
+            if (!isLoading && favoriteAlbums.isEmpty() && errorMessage == null) {
+                item(key = "home-no-favorites", contentType = "empty") {
+                    EmptyStateCard(
+                        title = Strings.noFavoritesTitle,
+                        body = Strings.noFavoritesBody,
+                        actionLabel = Strings.retry,
+                        onAction = onRefreshFavorites,
+                    )
+                }
+            }
+            if (allAlbums.isNotEmpty()) {
+                item(key = "home-all-albums", contentType = "entry") {
+                    EntryActionCard(
+                        title = Strings.allAlbums,
+                        body = Strings.albumsSynced(allAlbums.size),
+                        actionLabel = Strings.view,
+                        onAction = onOpenAllAlbums,
+                    )
+                }
+            }
+            if (recentPlayedAlbums.isNotEmpty()) {
+                item(key = "home-recent-played", contentType = "album-shelf") {
+                    RecentPlayedShelfSection(
+                        albums = recentPlayedAlbums.take(20),
+                        selectedAlbum = selectedAlbum,
+                        onAlbumClick = onAlbumClick,
+                    )
+                }
+            }
+            if (favoriteAlbums.isNotEmpty()) {
+                item(key = "home-favorites", contentType = "album-grid") {
+                    AlbumPreviewGridSection(
+                        title = Strings.favoriteAlbums,
+                        subtitle = "",
+                        albums = favoriteAlbums.take(layoutInfo.homePreviewItemCount),
+                        selectedAlbum = selectedAlbum,
+                        actionLabel = Strings.viewAll,
+                        onAction = onOpenFavorites,
+                        onAlbumClick = onAlbumClick,
+                    )
+                }
+            }
+            if (recentAddedAlbums.isNotEmpty()) {
+                item(key = "home-recent-added", contentType = "album-grid") {
+                    AlbumPreviewGridSection(
+                        title = Strings.recentAdded,
+                        subtitle = "",
+                        albums = recentAddedAlbums.take(layoutInfo.homePreviewItemCount),
+                        selectedAlbum = selectedAlbum,
+                        actionLabel = Strings.viewTop100,
+                        onAction = onOpenRecentAdded,
+                        onAlbumClick = onAlbumClick,
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -178,140 +184,74 @@ internal fun HomeStatusCard(
 }
 
 @Composable
-private fun RecentPlayedCarouselSection(
+private fun RecentPlayedShelfSection(
     albums: List<PlexAlbum>,
     selectedAlbum: PlexAlbum?,
     onAlbumClick: (PlexAlbum) -> Unit,
 ) {
-    val pagerState = rememberPagerState(pageCount = { albums.size })
-
-    LaunchedEffect(albums.size) {
-        if (albums.size <= 1) return@LaunchedEffect
-        while (true) {
-            delay(3_500)
-            pagerState.animateScrollToPage((pagerState.currentPage + 1) % albums.size)
-        }
-    }
+    val layoutInfo = LocalAppLayoutInfo.current
 
     Column(
         modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(
-                text = Strings.recentPlayed,
-                style = MaterialTheme.typography.titleLarge,
-                color = AppColors.TextPrimary,
-                fontWeight = FontWeight.SemiBold,
-            )
-        }
+        Text(
+            text = Strings.recentPlayed,
+            style = MaterialTheme.typography.titleLarge,
+            color = AppColors.TextPrimary,
+            fontWeight = FontWeight.SemiBold,
+        )
 
-        HorizontalPager(
-            state = pagerState,
-            contentPadding = PaddingValues(horizontal = 28.dp),
-            pageSpacing = 12.dp,
+        LazyRow(
             modifier = Modifier.fillMaxWidth(),
-        ) { page ->
-            val album = albums[page]
-            val offset = ((pagerState.currentPage - page) + pagerState.currentPageOffsetFraction).absoluteValue
-                .coerceIn(0f, 1f)
-            val scale = 0.9f + ((1f - offset) * 0.1f)
-            val alpha = 0.7f + ((1f - offset) * 0.3f)
-
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .graphicsLayer {
-                        scaleX = scale
-                        scaleY = scale
-                        this.alpha = alpha
-                    }
-                    .clickable { onAlbumClick(album) },
-                shape = RoundedCornerShape(28.dp),
-                color = AppColors.Surface,
-                border = BorderStroke(
-                    width = if (selectedAlbum?.ratingKey == album.ratingKey) 1.5.dp else 1.dp,
-                    color = if (selectedAlbum?.ratingKey == album.ratingKey) AppColors.Accent else AppColors.Border,
-                ),
-                shadowElevation = 6.dp,
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(1.18f)
-                ) {
-                    AsyncAlbumArtwork(
-                        imageUrl = album.thumbUrl,
-                        title = album.title,
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop,
-                    )
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(
-                                Brush.verticalGradient(
-                                    colors = listOf(
-                                        Color.Transparent,
-                                        Color.Black.copy(alpha = 0.18f + offset * 0.18f),
-                                        Color.Black.copy(alpha = 0.72f),
-                                    )
-                                )
-                            )
-                    )
-                    Column(
-                        modifier = Modifier
-                            .align(Alignment.BottomStart)
-                            .fillMaxWidth()
-                            .padding(18.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        if (selectedAlbum?.ratingKey == album.ratingKey) {
-                            Text(
-                                text = Strings.currentViewing,
-                                color = AppColors.Accent,
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.Bold,
-                            )
-                        }
-                        Text(
-                            text = album.title,
-                            color = Color.White,
-                            style = MaterialTheme.typography.headlineSmall,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Text(
-                            text = album.artistName ?: Strings.unknownArtist,
-                            color = Color.White.copy(alpha = 0.88f),
-                            style = MaterialTheme.typography.bodyMedium,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
-            }
-        }
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.Center,
+            contentPadding = PaddingValues(end = layoutInfo.horizontalPadding),
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            albums.forEachIndexed { index, _ ->
-                Box(
+            lazyItems(
+                items = albums,
+                key = { it.ratingKey },
+                contentType = { "recent-album" },
+            ) { album ->
+                Column(
                     modifier = Modifier
-                        .padding(horizontal = 4.dp)
-                        .size(
-                            width = if (index == pagerState.currentPage) 22.dp else 8.dp,
-                            height = 8.dp,
+                        .width(layoutInfo.recentAlbumCardWidth)
+                        .clickable { onAlbumClick(album) },
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(1f),
+                        shape = RoundedCornerShape(20.dp),
+                        color = AppColors.Surface,
+                        border = BorderStroke(
+                            width = if (selectedAlbum?.ratingKey == album.ratingKey) 1.5.dp else 1.dp,
+                            color = if (selectedAlbum?.ratingKey == album.ratingKey) AppColors.Accent else AppColors.Border,
+                        ),
+                    ) {
+                        AsyncAlbumArtwork(
+                            imageUrl = album.thumbUrl,
+                            title = album.title,
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop,
                         )
-                        .clip(RoundedCornerShape(999.dp))
-                        .background(
-                            if (index == pagerState.currentPage) AppColors.Accent
-                            else AppColors.BorderStrong.copy(alpha = 0.7f)
-                        )
-                )
+                    }
+                    Text(
+                        text = album.title,
+                        color = AppColors.TextPrimary,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = album.artistName ?: Strings.unknownArtist,
+                        color = AppColors.TextSecondary,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
         }
     }
@@ -370,6 +310,7 @@ internal fun AlbumPreviewGridSection(
     actionLabel: String? = null,
     onAction: (() -> Unit)? = null,
 ) {
+    val layoutInfo = LocalAppLayoutInfo.current
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -401,7 +342,7 @@ internal fun AlbumPreviewGridSection(
         }
         AlbumGrid(
             albums = albums,
-            columns = 3,
+            columns = layoutInfo.homePreviewColumns,
             selectedAlbum = selectedAlbum,
             onAlbumClick = onAlbumClick,
             compact = true,
@@ -420,6 +361,7 @@ internal fun AlbumCollectionSection(
     onBack: () -> Unit,
     onAlbumClick: (PlexAlbum) -> Unit,
 ) {
+    val layoutInfo = LocalAppLayoutInfo.current
     val heroAlbum = albums.firstOrNull()
     if (heroAlbum == null) {
         EmptyStateCard(
@@ -433,7 +375,7 @@ internal fun AlbumCollectionSection(
 
     LazyVerticalGrid(
         state = gridState,
-        columns = GridCells.Fixed(2),
+        columns = GridCells.Adaptive(layoutInfo.albumGridMinimumWidth),
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(bottom = bottomContentPadding),
         horizontalArrangement = Arrangement.spacedBy(14.dp),
@@ -445,14 +387,20 @@ internal fun AlbumCollectionSection(
             }
         }
         item(span = { GridItemSpan(maxLineSpan) }, contentType = "hero") {
-            AsyncAlbumArtwork(
-                imageUrl = heroAlbum.thumbUrl,
-                title = heroAlbum.title,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(1.25f)
-                    .clip(RoundedCornerShape(16.dp)),
-            )
+            Box(
+                modifier = Modifier.fillMaxWidth(),
+                contentAlignment = Alignment.Center,
+            ) {
+                AsyncAlbumArtwork(
+                    imageUrl = heroAlbum.thumbUrl,
+                    title = heroAlbum.title,
+                    modifier = Modifier
+                        .widthIn(max = layoutInfo.collectionHeroMaximumWidth)
+                        .fillMaxWidth()
+                        .aspectRatio(1f)
+                        .clip(RoundedCornerShape(16.dp)),
+                )
+            }
         }
         item(span = { GridItemSpan(maxLineSpan) }, contentType = "header") {
             Column(
@@ -504,6 +452,7 @@ internal fun AllAlbumsSection(
     onBack: () -> Unit,
     onAlbumClick: (PlexAlbum) -> Unit,
 ) {
+    val layoutInfo = LocalAppLayoutInfo.current
     val albumGroups = remember(albums) {
         buildIndexedGroups(albums) { it.title }
     }
@@ -518,10 +467,10 @@ internal fun AllAlbumsSection(
     Box(modifier = Modifier.fillMaxSize()) {
         LazyVerticalGrid(
             state = gridState,
-            columns = GridCells.Fixed(2),
+            columns = GridCells.Adaptive(layoutInfo.albumGridMinimumWidth),
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 16.dp),
+                .padding(horizontal = layoutInfo.horizontalPadding),
             contentPadding = PaddingValues(
                 top = 16.dp,
                 end = 42.dp,
@@ -596,14 +545,12 @@ internal fun AllAlbumsSection(
                         key = { album -> album.ratingKey },
                         contentType = { "album" },
                     ) { album ->
-                        Box(modifier = Modifier.animateItem()) {
-                            AlbumCoverCard(
-                                album = album,
-                                selected = selectedAlbum?.ratingKey == album.ratingKey,
-                                onClick = { onAlbumClick(album) },
-                                compact = false,
-                            )
-                        }
+                        AlbumCoverCard(
+                            album = album,
+                            selected = selectedAlbum?.ratingKey == album.ratingKey,
+                            onClick = { onAlbumClick(album) },
+                            compact = false,
+                        )
                     }
                 }
             }
