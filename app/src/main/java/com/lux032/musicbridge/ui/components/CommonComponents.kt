@@ -4,6 +4,8 @@ import android.content.Context
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.material3.ripple
@@ -346,18 +348,24 @@ internal fun EmptyStateCard(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun AlbumCoverCard(
     album: PlexAlbum,
     selected: Boolean,
     onClick: () -> Unit,
+    onQueueAction: ((QueuePlacement) -> Unit)? = null,
     compact: Boolean = false,
 ) {
     val layoutInfo = LocalAppLayoutInfo.current
+    var showQueueMenu by remember { mutableStateOf(false) }
 
+    Box {
     Surface(
-        modifier = Modifier
-            .clickable(onClick = onClick),
+        modifier = Modifier.combinedClickable(
+            onClick = onClick,
+            onLongClick = { if (onQueueAction != null) showQueueMenu = true },
+        ),
         shape = RoundedCornerShape(if (compact) 18.dp else 16.dp),
         color = if (compact) Color.Transparent else Color.Transparent,
         border = BorderStroke(0.dp, Color.Transparent),
@@ -415,6 +423,41 @@ internal fun AlbumCoverCard(
                 }
             }
         }
+    }
+        QueueActionMenu(
+            expanded = showQueueMenu,
+            onDismiss = { showQueueMenu = false },
+            onAction = { placement ->
+                showQueueMenu = false
+                onQueueAction?.invoke(placement)
+            },
+        )
+    }
+}
+
+@Composable
+internal fun QueueActionMenu(
+    expanded: Boolean,
+    onDismiss: () -> Unit,
+    onAction: (QueuePlacement) -> Unit,
+) {
+    DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
+        Text(
+            text = Strings.addToPlaybackQueue,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            color = AppColors.TextSecondary,
+            style = MaterialTheme.typography.labelMedium,
+        )
+        DropdownMenuItem(
+            text = { Text(Strings.playNext) },
+            leadingIcon = { Icon(Icons.Filled.SkipNext, contentDescription = null) },
+            onClick = { onAction(QueuePlacement.Next) },
+        )
+        DropdownMenuItem(
+            text = { Text(Strings.addToQueueEnd) },
+            leadingIcon = { Icon(Icons.Filled.PlaylistAdd, contentDescription = null) },
+            onClick = { onAction(QueuePlacement.End) },
+        )
     }
 }
 

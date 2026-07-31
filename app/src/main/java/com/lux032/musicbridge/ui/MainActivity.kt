@@ -300,6 +300,7 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                     onSearchQueryChange = { state.albumSearchQuery = it },
                     onBack = state::navigateBack,
                     onAlbumClick = state::openAlbumDetail,
+                    onAlbumQueueAction = state::enqueueAlbum,
                 )
             } else {
                 if (currentSection == AppSection.Artists) {
@@ -363,6 +364,7 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                             isFavoriteLoading = state.isFavoriteMutationLoading,
                             onBack = state::navigateBack,
                             onToggleTrackFavorite = state::toggleTrackFavorite,
+                            onQueueTrack = state::enqueueTrack,
                             onPlayPlaylist = { playlistResult, room ->
                                 state.startPlaylistPlayback(playlistResult, room, shuffle = false)
                             },
@@ -464,6 +466,7 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                             gridState = artistAlbumsGridState,
                             onBack = state::navigateBack,
                             onAlbumClick = state::openAlbumDetail,
+                            onAlbumQueueAction = state::enqueueAlbum,
                             onShuffleArtist = state::shuffleArtist,
                         )
                     }
@@ -496,6 +499,7 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                             gridState = favoriteGridState,
                             onBack = state::navigateBack,
                             onAlbumClick = state::openAlbumDetail,
+                            onAlbumQueueAction = state::enqueueAlbum,
                         )
                     }
                 } else if (currentSection == AppSection.RecentAdded) {
@@ -527,6 +531,7 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                             gridState = recentAddedGridState,
                             onBack = state::navigateBack,
                             onAlbumClick = state::openAlbumDetail,
+                            onAlbumQueueAction = state::enqueueAlbum,
                         )
                     }
                 } else if (currentSection == AppSection.AlbumDetail) {
@@ -551,6 +556,8 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                             onArtistClick = state::openArtistAlbumsByName,
                             onToggleAlbumFavorite = state::toggleAlbumFavorite,
                             onToggleTrackFavorite = state::toggleTrackFavorite,
+                            onQueueAlbum = state::enqueueAlbum,
+                            onQueueTrack = state::enqueueTrack,
                             onPlayAlbum = { albumTrackResult: PlexAlbumTracksResult, room: SonosRoom ->
                                 state.startAlbumPlayback(albumTrackResult, room)
                             },
@@ -599,6 +606,7 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                         listState = homeListState,
                         onRefreshFavorites = { scope.launch { state.refreshAlbums() } },
                         onAlbumClick = state::openAlbumDetail,
+                        onAlbumQueueAction = state::enqueueAlbum,
                         onOpenAllAlbums = {
                             state.albumSearchQuery = ""
                             state.navigateTo(AppSection.AllAlbums)

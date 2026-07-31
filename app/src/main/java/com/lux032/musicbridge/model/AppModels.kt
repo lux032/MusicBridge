@@ -56,6 +56,11 @@ enum class PlaybackMode {
         }
 }
 
+enum class QueuePlacement {
+    Next,
+    End,
+}
+
 enum class PlayerIcon {
     Back,
     Previous,

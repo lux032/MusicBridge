@@ -2,6 +2,8 @@ package com.lux032.musicbridge
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -151,6 +153,7 @@ private fun PlaylistCard(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun PlaylistDetailSection(
     playlistResult: PlexPlaylistTracksResult?,
@@ -159,6 +162,7 @@ internal fun PlaylistDetailSection(
     isFavoriteLoading: Boolean,
     onBack: () -> Unit,
     onToggleTrackFavorite: (PlexTrackStream) -> Unit,
+    onQueueTrack: (PlexTrackStream, QueuePlacement) -> Unit,
     onPlayPlaylist: (PlexPlaylistTracksResult, SonosRoom) -> Unit,
     onShufflePlaylist: (PlexPlaylistTracksResult, SonosRoom) -> Unit,
     onPlayTrack: (PlexPlaylist, PlexTrackStream, SonosRoom, Int) -> Unit,
@@ -260,13 +264,17 @@ internal fun PlaylistDetailSection(
             key = { index, track -> track.ratingKey ?: index },
             contentType = { _, _ -> "track" },
         ) { index, track ->
+            var showQueueMenu by remember { mutableStateOf(false) }
+            Box {
             Surface(
                 modifier = Modifier
-                    .clickable(
-                        enabled = selectedRoom != null && !isPlaybackLoading,
-                    ) {
-                        onPlayTrack(currentResult.playlist, track, selectedRoom!!, index)
-                    },
+                    .combinedClickable(
+                        enabled = !isPlaybackLoading,
+                        onClick = {
+                            selectedRoom?.let { onPlayTrack(currentResult.playlist, track, it, index) }
+                        },
+                        onLongClick = { showQueueMenu = true },
+                    ),
                 shape = RoundedCornerShape(12.dp),
                 color = AppColors.Surface,
                 border = BorderStroke(1.dp, AppColors.Border),
@@ -313,6 +321,15 @@ internal fun PlaylistDetailSection(
                         }
                     }
                 }
+            }
+                QueueActionMenu(
+                    expanded = showQueueMenu,
+                    onDismiss = { showQueueMenu = false },
+                    onAction = { placement ->
+                        showQueueMenu = false
+                        onQueueTrack(track, placement)
+                    },
+                )
             }
         }
     }

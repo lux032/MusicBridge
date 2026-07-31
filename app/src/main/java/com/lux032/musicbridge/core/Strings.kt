@@ -58,6 +58,13 @@ object Strings {
     val noPlaybackDesc get() = if (isZhCN) "先从专辑详情里播放内容，底部栏出现后再进入播放详情。" else "Start playback from album details first. Then access playback details from the bottom bar."
     val nowPlaying get() = if (isZhCN) "正在播放" else "Now Playing"
     val playlist get() = if (isZhCN) "播放列表" else "Playlist"
+    val addToPlaybackQueue get() = if (isZhCN) "添加到播放列表" else "Add to playback queue"
+    val playNext get() = if (isZhCN) "下一首播放" else "Play next"
+    val addToQueueEnd get() = if (isZhCN) "添加到列表末尾" else "Add to end of queue"
+    val longPressQueueHint get() = if (isZhCN) "长按可添加到播放列表" else "Long press to add to the playback queue"
+    val startPlaybackBeforeQueueing get() = if (isZhCN) "请先开始播放，再添加到播放列表" else "Start playback before adding items to the queue"
+    val queueAddedNext get() = if (isZhCN) { title: String -> "已将 $title 插入到下一首" } else { title: String -> "$title will play next" }
+    val queueAddedEnd get() = if (isZhCN) { title: String -> "已将 $title 添加到播放列表末尾" } else { title: String -> "Added $title to the end of the queue" }
     val playbackMode get() = if (isZhCN) "播放模式" else "Playback Mode"
     val selectSonosRoom get() = if (isZhCN) "选择 Sonos 房间" else "Select Sonos Room"
     val noAvailableRooms get() = if (isZhCN) "当前没有可用的 Sonos 房间。" else "No available Sonos rooms."

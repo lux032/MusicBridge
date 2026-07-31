@@ -17,6 +17,7 @@ internal data class AppLayoutInfo(
     val height: Dp,
 ) {
     val isTablet: Boolean get() = width >= 600.dp
+    val isLandscape: Boolean get() = width > height
     val isWide: Boolean get() = width >= 840.dp && width > height
     val useNavigationRail: Boolean get() = isWide
     val horizontalPadding: Dp get() = if (isTablet) 24.dp else 16.dp

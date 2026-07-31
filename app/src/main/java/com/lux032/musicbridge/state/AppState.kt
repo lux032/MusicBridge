@@ -267,6 +267,12 @@ class AppState(
     fun playQueueIndex(index: Int, positionMillis: Long = 0L, room: SonosRoom? = null) =
         playbackCoordinator.playQueueIndex(index, positionMillis, room)
 
+    fun enqueueTrack(track: PlexTrackStream, placement: QueuePlacement) =
+        playbackCoordinator.enqueueTracks(listOf(track), placement, track.title)
+
+    fun enqueueAlbum(album: PlexAlbum, placement: QueuePlacement) =
+        playbackCoordinator.enqueueAlbum(album, placement)
+
     fun switchPlaybackRoom(room: SonosRoom) = playbackCoordinator.switchPlaybackRoom(room)
 
     fun seekPlayback(state: MiniPlayerState, positionMillis: Long) =

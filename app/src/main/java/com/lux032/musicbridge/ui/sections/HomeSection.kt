@@ -3,6 +3,8 @@ package com.lux032.musicbridge
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.material3.ripple
@@ -51,6 +53,7 @@ internal fun HomeSection(
     listState: LazyListState = rememberLazyListState(),
     onRefreshFavorites: () -> Unit,
     onAlbumClick: (PlexAlbum) -> Unit,
+    onAlbumQueueAction: (PlexAlbum, QueuePlacement) -> Unit,
     onOpenAllAlbums: () -> Unit,
     onOpenFavorites: () -> Unit,
     onOpenRecentAdded: () -> Unit,
@@ -115,6 +118,7 @@ internal fun HomeSection(
                         albums = recentPlayedAlbums.take(20),
                         selectedAlbum = selectedAlbum,
                         onAlbumClick = onAlbumClick,
+                        onAlbumQueueAction = onAlbumQueueAction,
                     )
                 }
             }
@@ -128,6 +132,7 @@ internal fun HomeSection(
                     actionLabel = Strings.viewAll,
                     onAction = onOpenFavorites,
                     onAlbumClick = onAlbumClick,
+                    onAlbumQueueAction = onAlbumQueueAction,
                 )
             }
             if (recentAddedAlbums.isNotEmpty()) {
@@ -140,6 +145,7 @@ internal fun HomeSection(
                     actionLabel = Strings.viewTop100,
                     onAction = onOpenRecentAdded,
                     onAlbumClick = onAlbumClick,
+                    onAlbumQueueAction = onAlbumQueueAction,
                 )
             }
         }
@@ -181,11 +187,13 @@ internal fun HomeStatusCard(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun RecentPlayedShelfSection(
     albums: List<PlexAlbum>,
     selectedAlbum: PlexAlbum?,
     onAlbumClick: (PlexAlbum) -> Unit,
+    onAlbumQueueAction: (PlexAlbum, QueuePlacement) -> Unit,
 ) {
     val layoutInfo = LocalAppLayoutInfo.current
 
@@ -210,10 +218,15 @@ private fun RecentPlayedShelfSection(
                 key = { it.ratingKey },
                 contentType = { "recent-album" },
             ) { album ->
+                var showQueueMenu by remember { mutableStateOf(false) }
+                Box {
                 Column(
                     modifier = Modifier
                         .width(layoutInfo.recentAlbumCardWidth)
-                        .clickable { onAlbumClick(album) },
+                        .combinedClickable(
+                            onClick = { onAlbumClick(album) },
+                            onLongClick = { showQueueMenu = true },
+                        ),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     Surface(
@@ -249,6 +262,15 @@ private fun RecentPlayedShelfSection(
                         style = MaterialTheme.typography.bodySmall,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                    QueueActionMenu(
+                        expanded = showQueueMenu,
+                        onDismiss = { showQueueMenu = false },
+                        onAction = { placement ->
+                            showQueueMenu = false
+                            onAlbumQueueAction(album, placement)
+                        },
                     )
                 }
             }
@@ -312,6 +334,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.albumPreviewGridItems
     actionLabel: String,
     onAction: () -> Unit,
     onAlbumClick: (PlexAlbum) -> Unit,
+    onAlbumQueueAction: (PlexAlbum, QueuePlacement) -> Unit,
 ) {
     item(key = "$keyPrefix-header", contentType = "grid-header") {
         Row(
@@ -344,6 +367,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.albumPreviewGridItems
                             album = album,
                             selected = selectedAlbum?.ratingKey == album.ratingKey,
                             onClick = { onAlbumClick(album) },
+                            onQueueAction = { onAlbumQueueAction(album, it) },
                             compact = true,
                         )
                     }
@@ -366,6 +390,7 @@ internal fun AlbumCollectionSection(
     gridState: LazyGridState = rememberLazyGridState(),
     onBack: () -> Unit,
     onAlbumClick: (PlexAlbum) -> Unit,
+    onAlbumQueueAction: (PlexAlbum, QueuePlacement) -> Unit,
 ) {
     val layoutInfo = LocalAppLayoutInfo.current
     val heroAlbum = albums.firstOrNull()
@@ -441,6 +466,7 @@ internal fun AlbumCollectionSection(
                 album = album,
                 selected = selectedAlbum?.ratingKey == album.ratingKey,
                 onClick = { onAlbumClick(album) },
+                onQueueAction = { onAlbumQueueAction(album, it) },
                 compact = false,
             )
         }
@@ -458,6 +484,7 @@ internal fun AllAlbumsSection(
     onSearchQueryChange: (String) -> Unit,
     onBack: () -> Unit,
     onAlbumClick: (PlexAlbum) -> Unit,
+    onAlbumQueueAction: (PlexAlbum, QueuePlacement) -> Unit,
 ) {
     val layoutInfo = LocalAppLayoutInfo.current
     val albumGroups = remember(albums) {
@@ -556,6 +583,7 @@ internal fun AllAlbumsSection(
                             album = album,
                             selected = selectedAlbum?.ratingKey == album.ratingKey,
                             onClick = { onAlbumClick(album) },
+                            onQueueAction = { onAlbumQueueAction(album, it) },
                             compact = false,
                         )
                     }

@@ -129,8 +129,12 @@ internal class AppStatePlaybackCoordinator(
                     trackResult = albumTrackResult,
                     startIndex = startIndex,
                     initialPositionMillis = initialPositionMillis,
+                    getTracks = { state.miniPlayerState?.tracks ?: albumTrackResult.tracks },
                     getNextIndex = { currentIndex ->
-                        resolveNextPlaybackIndex(albumTrackResult.tracks.size, currentIndex)
+                        resolveNextPlaybackIndex(
+                            state.miniPlayerState?.tracks?.size ?: albumTrackResult.tracks.size,
+                            currentIndex,
+                        )
                     },
                     onTrackChanged = { index, track, startPositionMillis ->
                         if (!didStartFirstTrack) {
@@ -269,12 +273,14 @@ internal class AppStatePlaybackCoordinator(
                     trackResult = PlexAlbumTracksResult("", fakeAlbum, tracks),
                     startIndex = 0,
                     initialPositionMillis = 0L,
+                    getTracks = { state.miniPlayerState?.tracks ?: tracks },
                     getNextIndex = { currentIndex ->
+                        val queueSize = state.miniPlayerState?.tracks?.size ?: tracks.size
                         when (state.playbackMode) {
-                            PlaybackMode.Sequential -> if (currentIndex < tracks.lastIndex) currentIndex + 1 else null
-                            PlaybackMode.RepeatAll -> (currentIndex + 1) % tracks.size
+                            PlaybackMode.Sequential -> if (currentIndex < queueSize - 1) currentIndex + 1 else null
+                            PlaybackMode.RepeatAll -> (currentIndex + 1) % queueSize
                             PlaybackMode.RepeatOne -> currentIndex
-                            PlaybackMode.Shuffle -> Random.nextInt(tracks.size)
+                            PlaybackMode.Shuffle -> Random.nextInt(queueSize)
                         }
                     },
                     onTrackChanged = { index, track, positionMillis ->
@@ -382,6 +388,51 @@ internal class AppStatePlaybackCoordinator(
         }
     }
 
+    fun enqueueTracks(
+        tracks: List<PlexTrackStream>,
+        placement: QueuePlacement,
+        displayTitle: String,
+    ) {
+        if (tracks.isEmpty()) return
+        val playerState = state.miniPlayerState
+        if (playerState == null) {
+            state.actionMessage = null
+            state.errorMessage = Strings.startPlaybackBeforeQueueing
+            return
+        }
+
+        val insertIndex = when (placement) {
+            QueuePlacement.Next -> (playerState.currentIndex + 1).coerceAtMost(playerState.tracks.size)
+            QueuePlacement.End -> playerState.tracks.size
+        }
+        val updatedTracks = playerState.tracks.toMutableList().apply {
+            addAll(insertIndex, tracks)
+        }
+        state.miniPlayerState = playerState.copy(tracks = updatedTracks)
+        state.errorMessage = null
+        state.actionMessage = when (placement) {
+            QueuePlacement.Next -> Strings.queueAddedNext(displayTitle)
+            QueuePlacement.End -> Strings.queueAddedEnd(displayTitle)
+        }
+    }
+
+    fun enqueueAlbum(album: PlexAlbum, placement: QueuePlacement) {
+        if (state.miniPlayerState == null) {
+            state.actionMessage = null
+            state.errorMessage = Strings.startPlaybackBeforeQueueing
+            return
+        }
+        state.scope.launch {
+            runCatching {
+                state.client().fetchAlbumTrackStreams(album).tracks
+            }.onSuccess { tracks ->
+                enqueueTracks(tracks, placement, album.title)
+            }.onFailure {
+                state.errorMessage = it.message ?: "无法读取专辑曲目"
+            }
+        }
+    }
+
     fun startSleepTimer(hours: Int, minutes: Int, room: SonosRoom) {
         val safeHours = hours.coerceIn(0, 23)
         val safeMinutes = minutes.coerceIn(0, 59)
@@ -463,8 +514,9 @@ internal class AppStatePlaybackCoordinator(
                 val latestMiniPlayerState = state.miniPlayerState ?: break
                 if (latestMiniPlayerState.room.coordinatorUuid != room.coordinatorUuid) break
 
+                val currentQueue = latestMiniPlayerState.tracks
                 val status = runCatching { state.sonosController.getPlaybackStatus(room) }.getOrNull() ?: continue
-                val resolvedTrack = resolveActiveTrack(tracks, latestMiniPlayerState, status) ?: continue
+                val resolvedTrack = resolveActiveTrack(currentQueue, latestMiniPlayerState, status) ?: continue
                 val playbackState = status.toPlexPlaybackState()
                 val positionMillis = ((status.relTimeSeconds ?: 0) * 1_000L).coerceAtLeast(0L)
                 val durationMillis = resolvedTrack.durationMillis ?: status.trackDurationSeconds?.times(1_000L)
@@ -501,7 +553,7 @@ internal class AppStatePlaybackCoordinator(
                 }
 
                 state.miniPlayerState = latestMiniPlayerState.copy(
-                    currentIndex = tracks.indexOfFirst { it.ratingKey == currentTrack.ratingKey }
+                    currentIndex = currentQueue.indexOfFirst { it.ratingKey == currentTrack.ratingKey }
                         .takeIf { it >= 0 } ?: latestMiniPlayerState.currentIndex,
                     isPaused = playbackState == "paused",
                     currentPositionMillis = currentTrackTimeMillis,
@@ -558,11 +610,11 @@ internal class AppStatePlaybackCoordinator(
                             durationMillis = currentTrackDurationMillis,
                         )
                         // Try to advance to next track instead of stopping
-                        val currentIndex = tracks.indexOfFirst { it.ratingKey == currentTrack.ratingKey }
+                        val currentIndex = currentQueue.indexOfFirst { it.ratingKey == currentTrack.ratingKey }
                             .takeIf { it >= 0 } ?: break
-                        val nextIndex = resolveNextPlaybackIndex(tracks.size, currentIndex)
+                        val nextIndex = resolveNextPlaybackIndex(currentQueue.size, currentIndex)
                         if (nextIndex == null || nextIndex == currentIndex) break
-                        val nextTrack = tracks.getOrNull(nextIndex) ?: break
+                        currentQueue.getOrNull(nextIndex) ?: break
                         state.scope.launch {
                             playQueueIndex(nextIndex, 0L, room)
                         }

@@ -6,6 +6,7 @@ import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.border
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -86,6 +87,7 @@ internal fun PlaybackDetailSection(
         return
     }
     val displayAlbum = currentTrack.toDisplayAlbum(currentState.album)
+    val showAlbumTitle = !displayAlbum.title.equals(currentTrack.title, ignoreCase = true)
 
     val trackDurationMillis = currentState.durationMillis?.takeIf { it > 0L } ?: currentTrack.durationMillis
     var isSeeking by remember(currentTrack.ratingKey) { mutableStateOf(false) }
@@ -107,53 +109,71 @@ internal fun PlaybackDetailSection(
     }
 
     val layoutInfo = LocalAppLayoutInfo.current
-    val artworkContent: @Composable () -> Unit = {
+    val artworkContent: @Composable (androidx.compose.ui.unit.Dp) -> Unit = { maximumSize ->
         AsyncAlbumArtwork(
             imageUrl = displayAlbum.thumbUrl,
             title = displayAlbum.title,
             modifier = Modifier
-                .widthIn(max = layoutInfo.detailArtworkMaximumWidth)
+                .widthIn(max = maximumSize)
                 .fillMaxWidth()
                 .aspectRatio(1f)
                 .clip(RoundedCornerShape(16.dp)),
             contentScale = ContentScale.Crop,
-            thumbnailSize = layoutInfo.detailArtworkMaximumWidth,
+            thumbnailSize = maximumSize,
         )
     }
-    val playerDetails: @Composable ColumnScope.() -> Unit = {
+    val playerDetails: @Composable ColumnScope.(Boolean) -> Unit = { compact ->
+        Column(
+            modifier = Modifier
+                .widthIn(max = 560.dp)
+                .fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(if (compact) 10.dp else 18.dp),
+        ) {
         Column(
             modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(if (compact) 4.dp else 8.dp),
         ) {
             Text(
                 currentTrack.title,
-                modifier = Modifier.basicMarquee(),
-                style = MaterialTheme.typography.titleLarge,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onAlbumClick(displayAlbum) }
+                    .basicMarquee(),
+                style = if (compact) MaterialTheme.typography.titleMedium else MaterialTheme.typography.titleLarge,
                 color = AppColors.TextPrimary,
                 fontWeight = FontWeight.Bold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            Text(
-                text = displayAlbum.artistName ?: Strings.unknownArtist,
-                color = AppColors.Accent,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { onArtistClick(displayAlbum.artistName) },
-            )
-            Text(
-                text = displayAlbum.title,
-                color = AppColors.TextSecondary,
-                fontWeight = FontWeight.Medium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { onAlbumClick(displayAlbum) },
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = displayAlbum.artistName ?: Strings.unknownArtist,
+                    color = AppColors.Accent,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .weight(1f, fill = !showAlbumTitle)
+                        .clickable { onArtistClick(displayAlbum.artistName) },
+                )
+                if (showAlbumTitle) {
+                    Text("·", color = AppColors.TextTertiary)
+                    Text(
+                        text = displayAlbum.title,
+                        color = AppColors.TextSecondary,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier
+                            .weight(1f)
+                            .clickable { onAlbumClick(displayAlbum) },
+                    )
+                }
+            }
             Text(
                 text = "${currentState.room.roomName} · ${currentState.currentIndex + 1}/${currentState.tracks.size}",
                 color = AppColors.TextTertiary,
@@ -166,7 +186,7 @@ internal fun PlaybackDetailSection(
             val clampedSliderValue = sliderPositionMillis.coerceIn(0f, clampedDuration.toFloat())
             Column(
                 modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(if (compact) 2.dp else 6.dp),
             ) {
                 Slider(
                     value = clampedSliderValue,
@@ -242,27 +262,33 @@ internal fun PlaybackDetailSection(
                 icon = PlayerIcon.Previous,
                 onClick = onPrevious,
                 enabled = currentState.currentIndex > 0 && !isLoading,
+                sizeOverride = if (compact) 46.dp else null,
+                iconSizeOverride = if (compact) 20.dp else null,
             )
-            Spacer(modifier = Modifier.width(32.dp))
+            Spacer(modifier = Modifier.width(if (compact) 20.dp else 32.dp))
             PlayerControlButton(
                 icon = if (currentState.isPaused) PlayerIcon.Play else PlayerIcon.Pause,
                 onClick = { onTogglePause(currentState) },
                 enabled = !isLoading,
                 highlighted = true,
+                sizeOverride = if (compact) 54.dp else null,
+                iconSizeOverride = if (compact) 24.dp else null,
             )
-            Spacer(modifier = Modifier.width(32.dp))
+            Spacer(modifier = Modifier.width(if (compact) 20.dp else 32.dp))
             PlayerControlButton(
                 icon = PlayerIcon.Next,
                 onClick = onNext,
                 enabled = currentState.currentIndex < currentState.tracks.lastIndex && !isLoading,
+                sizeOverride = if (compact) 46.dp else null,
+                iconSizeOverride = if (compact) 20.dp else null,
             )
         }
-        Spacer(modifier = Modifier.height(2.dp))
         PlaybackActionBar(
             currentTrack = currentTrack,
             playbackMode = playbackMode,
             sleepTimerState = sleepTimerState,
             isFavoriteLoading = isFavoriteLoading,
+            compact = compact,
             modifier = Modifier.fillMaxWidth(),
             onShowPlaylist = { isPlaylistSheetVisible = true },
             onShowModePicker = { isModeDialogVisible = true },
@@ -290,43 +316,80 @@ internal fun PlaybackDetailSection(
                 fontWeight = FontWeight.SemiBold,
             )
         }
+        }
     }
 
-    if (layoutInfo.isWide) {
-        Row(
-            modifier = Modifier.fillMaxSize(),
-            horizontalArrangement = Arrangement.spacedBy(32.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val availableHeight = maxHeight
+        val compactLandscape = layoutInfo.isLandscape && maxHeight < 500.dp
+        if (layoutInfo.isLandscape) {
+            val outerPadding = if (compactLandscape) 4.dp else 12.dp
+            val columnSpacing = if (compactLandscape) 16.dp else 32.dp
+            val artworkSize = minOf(
+                maxHeight - (outerPadding * 2),
+                maxWidth * if (compactLandscape) 0.38f else 0.42f,
+                layoutInfo.detailArtworkMaximumWidth,
+            ).coerceAtLeast(160.dp)
+
+            Row(
                 modifier = Modifier
-                    .weight(1f)
-                    .fillMaxHeight(),
-                contentAlignment = Alignment.Center,
+                    .fillMaxSize()
+                    .padding(vertical = outerPadding),
+                horizontalArrangement = Arrangement.spacedBy(columnSpacing),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                artworkContent()
+                Box(
+                    modifier = Modifier
+                        .width(artworkSize)
+                        .fillMaxHeight(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    artworkContent(artworkSize)
+                }
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .widthIn(max = 620.dp)
+                            .fillMaxWidth()
+                            .heightIn(max = availableHeight - (outerPadding * 2))
+                            .verticalScroll(rememberScrollState())
+                            .padding(vertical = if (compactLandscape) 2.dp else 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(if (compactLandscape) 8.dp else 18.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        playerDetails(compactLandscape)
+                    }
+                }
             }
+        } else {
             Column(
                 modifier = Modifier
-                    .weight(1f)
-                    .fillMaxHeight()
+                    .fillMaxWidth()
                     .verticalScroll(rememberScrollState())
-                    .padding(vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(24.dp),
+                    .padding(bottom = 20.dp),
+                verticalArrangement = Arrangement.spacedBy(18.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                content = playerDetails,
-            )
+            ) {
+                artworkContent(layoutInfo.detailArtworkMaximumWidth)
+                playerDetails(false)
+            }
         }
-    } else {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
+
+        IconCircleButton(
+            onClick = onBack,
+            modifier = Modifier.align(Alignment.TopStart),
         ) {
-            artworkContent()
-            playerDetails()
+            Icon(
+                imageVector = Icons.Filled.ArrowBack,
+                contentDescription = Strings.back,
+                tint = AppColors.TextPrimary,
+                modifier = Modifier.size(20.dp),
+            )
         }
     }
 
@@ -612,6 +675,7 @@ private fun PlaybackActionBar(
     playbackMode: PlaybackMode,
     sleepTimerState: SleepTimerState,
     isFavoriteLoading: Boolean,
+    compact: Boolean = false,
     modifier: Modifier = Modifier,
     onShowPlaylist: () -> Unit,
     onShowModePicker: () -> Unit,
@@ -619,8 +683,8 @@ private fun PlaybackActionBar(
     onShowSleepTimer: () -> Unit,
     onShowRoomPicker: () -> Unit,
 ) {
-    val actionIconSize = 36.dp
-    val actionSlotHeight = 56.dp
+    val actionIconSize = if (compact) 24.dp else 28.dp
+    val actionSlotHeight = if (compact) 44.dp else 56.dp
     Row(
         modifier = modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(0.dp),
@@ -667,13 +731,13 @@ private fun PlaybackActionBar(
                     .fillMaxWidth()
                     .height(actionSlotHeight),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(4.dp),
+                verticalArrangement = Arrangement.Center,
             ) {
                 FavoriteIconGraphic(
                     isFavorite = currentTrack.isFavorite,
                     tint = if (currentTrack.isFavorite) AppColors.Accent else AppColors.TextSecondary,
                     baseSize = actionIconSize,
-                    selectedSize = 38.dp,
+                    selectedSize = if (compact) 27.dp else 31.dp,
                 )
             }
         }
@@ -752,6 +816,7 @@ private fun PlaybackActionButton(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun AlbumDetailSection(
     trackResult: PlexAlbumTracksResult?,
@@ -765,6 +830,8 @@ internal fun AlbumDetailSection(
     onArtistClick: (String?) -> Unit,
     onToggleAlbumFavorite: (PlexAlbum) -> Unit,
     onToggleTrackFavorite: (PlexTrackStream) -> Unit,
+    onQueueAlbum: (PlexAlbum, QueuePlacement) -> Unit,
+    onQueueTrack: (PlexTrackStream, QueuePlacement) -> Unit,
     onPlayAlbum: (PlexAlbumTracksResult, SonosRoom) -> Unit,
     onPlayTrack: (PlexAlbum, PlexTrackStream, SonosRoom) -> Unit,
 ) {
@@ -781,6 +848,7 @@ internal fun AlbumDetailSection(
 
     val layoutInfo = LocalAppLayoutInfo.current
     val artworkMaximumWidth = if (layoutInfo.isWide) 300.dp else layoutInfo.detailArtworkMaximumWidth
+    var showAlbumQueueMenu by remember { mutableStateOf(false) }
     val albumSummary: @Composable ColumnScope.() -> Unit = {
         Box(
             modifier = Modifier.fillMaxWidth(),
@@ -793,9 +861,21 @@ internal fun AlbumDetailSection(
                     .widthIn(max = artworkMaximumWidth)
                     .fillMaxWidth()
                     .aspectRatio(1f)
-                    .clip(RoundedCornerShape(16.dp)),
+                    .clip(RoundedCornerShape(16.dp))
+                    .combinedClickable(
+                        onClick = {},
+                        onLongClick = { showAlbumQueueMenu = true },
+                    ),
                 contentScale = ContentScale.Crop,
                 thumbnailSize = artworkMaximumWidth,
+            )
+            QueueActionMenu(
+                expanded = showAlbumQueueMenu,
+                onDismiss = { showAlbumQueueMenu = false },
+                onAction = { placement ->
+                    showAlbumQueueMenu = false
+                    onQueueAlbum(currentTrackResult.album, placement)
+                },
             )
         }
 
@@ -900,6 +980,7 @@ internal fun AlbumDetailSection(
                         isPlaybackLoading = isPlaybackLoading,
                         isFavoriteLoading = isFavoriteLoading,
                         onToggleTrackFavorite = onToggleTrackFavorite,
+                        onQueueTrack = onQueueTrack,
                         onPlayTrack = onPlayTrack,
                     )
                 }
@@ -932,6 +1013,7 @@ internal fun AlbumDetailSection(
                     isPlaybackLoading = isPlaybackLoading,
                     isFavoriteLoading = isFavoriteLoading,
                     onToggleTrackFavorite = onToggleTrackFavorite,
+                    onQueueTrack = onQueueTrack,
                     onPlayTrack = onPlayTrack,
                 )
             }
@@ -939,6 +1021,7 @@ internal fun AlbumDetailSection(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun AlbumTrackRow(
     index: Int,
@@ -948,14 +1031,17 @@ private fun AlbumTrackRow(
     isPlaybackLoading: Boolean,
     isFavoriteLoading: Boolean,
     onToggleTrackFavorite: (PlexTrackStream) -> Unit,
+    onQueueTrack: (PlexTrackStream, QueuePlacement) -> Unit,
     onPlayTrack: (PlexAlbum, PlexTrackStream, SonosRoom) -> Unit,
 ) {
+    var showQueueMenu by remember { mutableStateOf(false) }
+    Box {
     Surface(
-        modifier = Modifier.clickable(
-            enabled = selectedRoom != null && !isPlaybackLoading,
-        ) {
-            selectedRoom?.let { onPlayTrack(album, track, it) }
-        },
+        modifier = Modifier.combinedClickable(
+            enabled = !isPlaybackLoading,
+            onClick = { selectedRoom?.let { onPlayTrack(album, track, it) } },
+            onLongClick = { showQueueMenu = true },
+        ),
         shape = RoundedCornerShape(12.dp),
         color = AppColors.Surface,
         border = BorderStroke(1.dp, AppColors.Border),
@@ -1001,6 +1087,15 @@ private fun AlbumTrackRow(
                 }
             }
         }
+    }
+        QueueActionMenu(
+            expanded = showQueueMenu,
+            onDismiss = { showQueueMenu = false },
+            onAction = { placement ->
+                showQueueMenu = false
+                onQueueTrack(track, placement)
+            },
+        )
     }
 }
 
@@ -1349,17 +1444,23 @@ internal suspend fun playAlbumSequentially(
     trackResult: PlexAlbumTracksResult,
     startIndex: Int = 0,
     initialPositionMillis: Long = 0L,
+    getTracks: () -> List<PlexTrackStream> = { trackResult.tracks },
     getNextIndex: (Int) -> Int?,
     onTrackChanged: (Int, PlexTrackStream, Long) -> Unit,
 ) {
-    val tracks = trackResult.tracks
-    require(tracks.isNotEmpty()) { "专辑里没有可播放的单曲。" }
+    val initialTracks = getTracks()
+    require(initialTracks.isNotEmpty()) { "专辑里没有可播放的单曲。" }
 
-    var index = startIndex.coerceIn(0, tracks.lastIndex)
+    var index = startIndex.coerceIn(0, initialTracks.lastIndex)
+    var isFirstTrack = true
 
     while (true) {
+        val tracks = getTracks()
+        if (tracks.isEmpty()) return
+        index = index.coerceIn(0, tracks.lastIndex)
         val track = tracks[index]
-        val startPositionMillis = if (index == startIndex) initialPositionMillis.coerceAtLeast(0L) else 0L
+        val startPositionMillis = if (isFirstTrack) initialPositionMillis.coerceAtLeast(0L) else 0L
+        isFirstTrack = false
         sonosController.playTrack(
             room = room,
             trackUrl = track.streamUrl,
@@ -1380,12 +1481,15 @@ internal suspend fun playAlbumSequentially(
             expectedDurationMillis = track.durationMillis,
         )
 
-        val nextIndex = getNextIndex(index)
+        val latestTracks = getTracks()
+        val currentIndex = latestTracks.indexOfFirst { it.ratingKey == track.ratingKey }
+            .takeIf { it >= 0 } ?: index.coerceIn(0, latestTracks.lastIndex)
+        val nextIndex = getNextIndex(currentIndex)
         if (nextIndex == null) {
             return
         }
 
-        index = nextIndex.coerceIn(0, tracks.lastIndex)
+        index = nextIndex.coerceIn(0, latestTracks.lastIndex)
     }
 }
 

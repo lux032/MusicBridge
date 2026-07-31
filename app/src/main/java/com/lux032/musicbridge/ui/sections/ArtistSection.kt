@@ -421,6 +421,7 @@ internal fun ArtistAlbumsSection(
     gridState: LazyGridState = rememberLazyGridState(),
     onBack: () -> Unit,
     onAlbumClick: (PlexAlbum) -> Unit,
+    onAlbumQueueAction: (PlexAlbum, QueuePlacement) -> Unit,
     onShuffleArtist: (ArtistSummary, SonosRoom) -> Unit,
 ) {
     val layoutInfo = LocalAppLayoutInfo.current
@@ -512,6 +513,7 @@ internal fun ArtistAlbumsSection(
                 album = album,
                 selected = selectedAlbum?.ratingKey == album.ratingKey,
                 onClick = { onAlbumClick(album) },
+                onQueueAction = { onAlbumQueueAction(album, it) },
                 compact = false,
             )
         }
