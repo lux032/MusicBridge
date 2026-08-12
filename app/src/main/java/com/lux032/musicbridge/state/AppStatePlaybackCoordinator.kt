@@ -2,7 +2,6 @@ package com.lux032.musicbridge
 
 import com.lux032.musicbridge.plex.PlexAlbum
 import com.lux032.musicbridge.plex.PlexAlbumTracksResult
-import com.lux032.musicbridge.plex.PlexClient
 import com.lux032.musicbridge.plex.PlexPlaylistTracksResult
 import com.lux032.musicbridge.plex.PlexSection
 import com.lux032.musicbridge.plex.PlexTrackStream
@@ -41,8 +40,8 @@ internal class AppStatePlaybackCoordinator(
         val displayAlbum = resolveAlbumForTrack(targetTrack, album)
         state.albumPlaybackJob?.cancel()
         state.playbackReportingJob?.cancel()
-        state.appPreferences.markAlbumPlayed(displayAlbum.ratingKey)
-        state.recentPlayedAlbumKeys = state.appPreferences.loadRecentPlayedAlbumKeys()
+        state.appPreferences.markAlbumPlayed(displayAlbum.sourceId, displayAlbum.ratingKey)
+        state.recentPlayedAlbumKeys = state.appPreferences.loadRecentPlayedAlbumKeys(displayAlbum.sourceId)
         state.selectedSonosRoom = room
         state.volumeSyncKey += 1
         syncSleepTimerRoom(room)
@@ -94,8 +93,8 @@ internal class AppStatePlaybackCoordinator(
     ) {
         state.albumPlaybackJob?.cancel()
         state.playbackReportingJob?.cancel()
-        state.appPreferences.markAlbumPlayed(albumTrackResult.album.ratingKey)
-        state.recentPlayedAlbumKeys = state.appPreferences.loadRecentPlayedAlbumKeys()
+        state.appPreferences.markAlbumPlayed(albumTrackResult.album.sourceId, albumTrackResult.album.ratingKey)
+        state.recentPlayedAlbumKeys = state.appPreferences.loadRecentPlayedAlbumKeys(albumTrackResult.album.sourceId)
         state.selectedSonosRoom = room
         state.volumeSyncKey += 1
         syncSleepTimerRoom(room)
@@ -245,6 +244,7 @@ internal class AppStatePlaybackCoordinator(
             addedAtEpochSeconds = null,
             lastViewedAtEpochSeconds = null,
             section = PlexSection("", "", ""),
+            sourceId = playlistResult.playlist.sourceId.ifBlank { tracks.firstOrNull()?.sourceId.orEmpty() },
         )
         val initialAlbum = tracks.firstOrNull()?.let { resolveAlbumForTrack(it, fakeAlbum) } ?: fakeAlbum
         state.miniPlayerState = MiniPlayerState(
@@ -340,7 +340,9 @@ internal class AppStatePlaybackCoordinator(
         val targetIndex = index.coerceIn(0, playerState.tracks.lastIndex)
         val currentTrackResult = state.trackResult?.takeIf { result ->
             result.album.ratingKey == playerState.album.ratingKey &&
-                result.tracks.map(PlexTrackStream::ratingKey) == playerState.tracks.map(PlexTrackStream::ratingKey)
+                result.album.sourceId == playerState.album.sourceId &&
+                result.tracks.map { it.sourceId to it.ratingKey } ==
+                playerState.tracks.map { it.sourceId to it.ratingKey }
         }
         if (currentTrackResult != null) {
             startAlbumPlayback(currentTrackResult, targetRoom, targetIndex, positionMillis)
@@ -424,7 +426,7 @@ internal class AppStatePlaybackCoordinator(
         }
         state.scope.launch {
             runCatching {
-                state.client().fetchAlbumTrackStreams(album).tracks
+                state.clientFor(album.sourceId).fetchAlbumTrackStreams(album).tracks
             }.onSuccess { tracks ->
                 enqueueTracks(tracks, placement, album.title)
             }.onFailure {
@@ -488,7 +490,6 @@ internal class AppStatePlaybackCoordinator(
                 artworkUrl = initialTrack.thumbUrl,
             )
             try {
-            val plexClient = state.client()
             val scrobbledTrackKeys = mutableSetOf<String>()
             var currentTrack = initialTrack
             var currentTrackTimeMillis = initialPositionMillis.coerceAtLeast(0L)
@@ -498,7 +499,6 @@ internal class AppStatePlaybackCoordinator(
             var stoppedPollCount = 0
 
             reportTimelineSafely(
-                plexClient = plexClient,
                 track = currentTrack,
                 stateName = "playing",
                 timeMillis = currentTrackTimeMillis,
@@ -521,16 +521,14 @@ internal class AppStatePlaybackCoordinator(
                 val positionMillis = ((status.relTimeSeconds ?: 0) * 1_000L).coerceAtLeast(0L)
                 val durationMillis = resolvedTrack.durationMillis ?: status.trackDurationSeconds?.times(1_000L)
 
-                if (resolvedTrack.ratingKey != currentTrack.ratingKey) {
+                if (resolvedTrack.ratingKey != currentTrack.ratingKey || resolvedTrack.sourceId != currentTrack.sourceId) {
                     reportStoppedTrackIfNeeded(
-                        plexClient = plexClient,
                         track = currentTrack,
                         timeMillis = currentTrackTimeMillis,
                         durationMillis = currentTrackDurationMillis,
                         continuing = true,
                     )
                     scrobbleIfNeeded(
-                        plexClient = plexClient,
                         scrobbledTrackKeys = scrobbledTrackKeys,
                         track = currentTrack,
                         timeMillis = currentTrackTimeMillis,
@@ -553,7 +551,7 @@ internal class AppStatePlaybackCoordinator(
                 }
 
                 state.miniPlayerState = latestMiniPlayerState.copy(
-                    currentIndex = currentQueue.indexOfFirst { it.ratingKey == currentTrack.ratingKey }
+                    currentIndex = currentQueue.indexOfFirst { it.ratingKey == currentTrack.ratingKey && it.sourceId == currentTrack.sourceId }
                         .takeIf { it >= 0 } ?: latestMiniPlayerState.currentIndex,
                     isPaused = playbackState == "paused",
                     currentPositionMillis = currentTrackTimeMillis,
@@ -573,7 +571,6 @@ internal class AppStatePlaybackCoordinator(
 
                 if (shouldReportTimeline) {
                     reportTimelineSafely(
-                        plexClient = plexClient,
                         track = currentTrack,
                         stateName = playbackState,
                         timeMillis = currentTrackTimeMillis,
@@ -585,7 +582,6 @@ internal class AppStatePlaybackCoordinator(
                 }
 
                 scrobbleIfNeeded(
-                    plexClient = plexClient,
                     scrobbledTrackKeys = scrobbledTrackKeys,
                     track = currentTrack,
                     timeMillis = currentTrackTimeMillis,
@@ -596,21 +592,19 @@ internal class AppStatePlaybackCoordinator(
                     stoppedPollCount += 1
                     if (stoppedPollCount >= 3) {
                         reportStoppedTrackIfNeeded(
-                            plexClient = plexClient,
                             track = currentTrack,
                             timeMillis = currentTrackTimeMillis,
                             durationMillis = currentTrackDurationMillis,
                             continuing = false,
                         )
                         scrobbleIfNeeded(
-                            plexClient = plexClient,
                             scrobbledTrackKeys = scrobbledTrackKeys,
                             track = currentTrack,
                             timeMillis = currentTrackTimeMillis,
                             durationMillis = currentTrackDurationMillis,
                         )
                         // Try to advance to next track instead of stopping
-                        val currentIndex = currentQueue.indexOfFirst { it.ratingKey == currentTrack.ratingKey }
+                        val currentIndex = currentQueue.indexOfFirst { it.ratingKey == currentTrack.ratingKey && it.sourceId == currentTrack.sourceId }
                             .takeIf { it >= 0 } ?: break
                         val nextIndex = resolveNextPlaybackIndex(currentQueue.size, currentIndex)
                         if (nextIndex == null || nextIndex == currentIndex) break
@@ -632,7 +626,6 @@ internal class AppStatePlaybackCoordinator(
     }
 
     private suspend fun reportTimelineSafely(
-        plexClient: PlexClient,
         track: PlexTrackStream,
         stateName: String,
         timeMillis: Long,
@@ -640,7 +633,7 @@ internal class AppStatePlaybackCoordinator(
         continuing: Boolean,
     ) {
         runCatching {
-            plexClient.reportTimeline(
+            state.clientFor(track.sourceId).reportTimeline(
                 ratingKey = track.ratingKey,
                 state = stateName,
                 timeMillis = timeMillis,
@@ -651,14 +644,12 @@ internal class AppStatePlaybackCoordinator(
     }
 
     private suspend fun reportStoppedTrackIfNeeded(
-        plexClient: PlexClient,
         track: PlexTrackStream,
         timeMillis: Long,
         durationMillis: Long?,
         continuing: Boolean,
     ) {
         reportTimelineSafely(
-            plexClient = plexClient,
             track = track,
             stateName = "stopped",
             timeMillis = timeMillis,
@@ -668,22 +659,22 @@ internal class AppStatePlaybackCoordinator(
     }
 
     private suspend fun scrobbleIfNeeded(
-        plexClient: PlexClient,
         scrobbledTrackKeys: MutableSet<String>,
         track: PlexTrackStream,
         timeMillis: Long,
         durationMillis: Long?,
     ) {
-        if (track.ratingKey in scrobbledTrackKeys) return
+        val playbackKey = "${track.sourceId}:${track.ratingKey}"
+        if (playbackKey in scrobbledTrackKeys) return
 
         val effectiveDuration = durationMillis?.takeIf { it > 0L } ?: return
         val scrobbleThreshold = (effectiveDuration * 0.9f).toLong()
         if (timeMillis < scrobbleThreshold) return
 
         runCatching {
-            plexClient.scrobble(track.ratingKey)
+            state.clientFor(track.sourceId).scrobble(track.ratingKey, timeMillis, durationMillis)
         }.onSuccess {
-            scrobbledTrackKeys += track.ratingKey
+            scrobbledTrackKeys += playbackKey
         }
     }
 
@@ -739,7 +730,7 @@ internal class AppStatePlaybackCoordinator(
         fallbackAlbum: PlexAlbum? = null,
     ): PlexAlbum {
         val matchedAlbum = track.albumRatingKey?.let { ratingKey ->
-            state.allAlbums.firstOrNull { album -> album.ratingKey == ratingKey }
+            state.allAlbums.firstOrNull { album -> album.ratingKey == ratingKey && album.sourceId == track.sourceId }
         }
         if (matchedAlbum != null) {
             return matchedAlbum
@@ -756,6 +747,7 @@ internal class AppStatePlaybackCoordinator(
             addedAtEpochSeconds = fallback?.addedAtEpochSeconds,
             lastViewedAtEpochSeconds = fallback?.lastViewedAtEpochSeconds,
             section = fallback?.section ?: PlexSection("", "", ""),
+            sourceId = track.sourceId.ifBlank { fallback?.sourceId.orEmpty() },
         )
     }
 }

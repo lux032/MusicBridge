@@ -38,7 +38,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.key
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.setValue
@@ -123,11 +122,6 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
     val state = remember(activity) { requireNotNull(activity).appState }
     val layoutInfo = rememberAppLayoutInfo()
 
-    var username by rememberSaveable { mutableStateOf(state.connectionPreferences.username) }
-    var password by rememberSaveable { mutableStateOf(state.connectionPreferences.password) }
-    var token by rememberSaveable { mutableStateOf(state.connectionPreferences.token) }
-    var server by rememberSaveable { mutableStateOf(state.connectionPreferences.server) }
-    var baseUrl by rememberSaveable { mutableStateOf(state.connectionPreferences.baseUrl) }
     var miniPlayerHeightPx by remember { mutableIntStateOf(0) }
     var isVolumeOverlayVisible by remember { mutableStateOf(false) }
     var volumeOverlayNonce by remember { mutableIntStateOf(0) }
@@ -381,6 +375,7 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                                         addedAtEpochSeconds = null,
                                         lastViewedAtEpochSeconds = null,
                                         section = PlexSection("", "", ""),
+                                        sourceId = playlist.sourceId,
                                     )
                                     state.startSingleTrackPlayback(fakeAlbum, tracksFromIndex, 0, room)
                                 }
@@ -559,9 +554,15 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                             },
                             onPlayTrack = { album: PlexAlbum, track: PlexTrackStream, room: SonosRoom ->
                                 val currentTrackResult = state.trackResult
-                                if (currentTrackResult?.album?.ratingKey == album.ratingKey) {
+                                if (
+                                    currentTrackResult != null &&
+                                    currentTrackResult.album.ratingKey == album.ratingKey &&
+                                    currentTrackResult.album.sourceId == album.sourceId
+                                ) {
                                     val trackIndex = currentTrackResult.tracks
-                                        .indexOfFirst { it.ratingKey == track.ratingKey }
+                                        .indexOfFirst {
+                                            it.ratingKey == track.ratingKey && it.sourceId == track.sourceId
+                                        }
                                         .coerceAtLeast(0)
                                     val playlist = currentTrackResult.tracks.drop(trackIndex)
                                     state.startSingleTrackPlayback(album, playlist, 0, room)
@@ -644,14 +645,13 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                                 selectedRoom = state.selectedSonosRoom,
                                 isSonosLoading = state.isSonosLoading,
                                 discoveryAttempted = state.sonosDiscoveryAttempted,
-                                token = token,
-                                baseUrl = baseUrl,
+                                serverProfiles = state.serverProfiles,
+                                activeServerId = state.connectionPreferences.id,
                                 onDiscoverSonos = state::refreshSonosRooms,
                                 onSelectRoom = state::selectSonosRoom,
-                                onTokenChange = { token = it },
-                                onBaseUrlChange = { baseUrl = it },
-                                onSave = { state.saveSettings(username, password, token, server, baseUrl, false) },
-                                onSaveAndRefresh = { state.saveSettings(username, password, token, server, baseUrl, true) },
+                                onSaveServer = state::saveServerProfile,
+                                onSwitchServer = state::switchServer,
+                                onDeleteServer = state::deleteServer,
                                 onRefreshHome = { scope.launch { state.refreshAlbums() } },
                             )
                         AppSection.Artists -> Unit

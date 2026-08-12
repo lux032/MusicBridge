@@ -1418,16 +1418,40 @@ internal fun SettingsSection(
     selectedRoom: SonosRoom?,
     isSonosLoading: Boolean,
     discoveryAttempted: Boolean,
-    token: String,
-    baseUrl: String,
+    serverProfiles: List<MusicServerProfile>,
+    activeServerId: String,
     onDiscoverSonos: () -> Unit,
     onSelectRoom: (SonosRoom) -> Unit,
-    onTokenChange: (String) -> Unit,
-    onBaseUrlChange: (String) -> Unit,
-    onSave: () -> Unit,
-    onSaveAndRefresh: () -> Unit,
+    onSaveServer: (MusicServerProfile, Boolean) -> Unit,
+    onSwitchServer: (String) -> Unit,
+    onDeleteServer: (String) -> Unit,
     onRefreshHome: () -> Unit,
 ) {
+    val activeProfile = serverProfiles.firstOrNull { it.id == activeServerId }
+    var draft by remember { mutableStateOf(activeProfile ?: MusicServerProfile(type = MusicServerType.Music032)) }
+    var pendingDelete by remember { mutableStateOf<MusicServerProfile?>(null) }
+
+    LaunchedEffect(activeServerId, serverProfiles) {
+        serverProfiles.firstOrNull { it.id == activeServerId }?.let { draft = it }
+    }
+
+    pendingDelete?.let { profile ->
+        AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text("移除服务器？") },
+            text = { Text("将从本机删除“${profile.displayName}”的连接配置，服务器上的音乐和数据不会被删除。") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onDeleteServer(profile.id)
+                        pendingDelete = null
+                    },
+                ) { Text("移除") }
+            },
+            dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("取消") } },
+        )
+    }
+
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -1441,28 +1465,148 @@ internal fun SettingsSection(
             onSelectRoom = onSelectRoom,
         )
         HorizontalDivider(color = AppColors.Border)
-        Text(Strings.plexSettings, style = MaterialTheme.typography.headlineSmall, color = AppColors.TextPrimary)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("音乐服务器", style = MaterialTheme.typography.headlineSmall, color = AppColors.TextPrimary)
+                Text("可以保存多个 Plex 或 032 Music Server，并随时切换。", color = AppColors.TextSecondary)
+            }
+            FilledTonalButton(
+                onClick = { draft = MusicServerProfile(type = MusicServerType.Music032) },
+            ) {
+                Icon(Icons.Filled.Add, contentDescription = null)
+                Spacer(Modifier.width(6.dp))
+                Text("添加")
+            }
+        }
+
+        serverProfiles.forEach { profile ->
+            val isActive = profile.id == activeServerId
+            ElevatedCard(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.elevatedCardColors(
+                    containerColor = if (isActive) AppColors.Accent.copy(alpha = 0.14f) else AppColors.SurfaceMuted,
+                ),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            draft = profile
+                            onSwitchServer(profile.id)
+                        }
+                        .padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Icon(
+                        imageVector = if (profile.type == MusicServerType.Plex) Icons.Filled.Cloud else Icons.Filled.Storage,
+                        contentDescription = null,
+                        tint = if (isActive) AppColors.Accent else AppColors.TextSecondary,
+                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text(profile.displayName, color = AppColors.TextPrimary, fontWeight = FontWeight.SemiBold)
+                            if (isActive) AssistChip(onClick = {}, label = { Text("当前") })
+                        }
+                        Text(
+                            "${profile.type.label} · ${profile.baseUrl.ifBlank { "自动发现" }}",
+                            color = AppColors.TextSecondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    IconButton(onClick = { draft = profile }) {
+                        Icon(Icons.Filled.Edit, contentDescription = "编辑服务器")
+                    }
+                    IconButton(onClick = { pendingDelete = profile }) {
+                        Icon(Icons.Filled.DeleteOutline, contentDescription = "移除服务器")
+                    }
+                }
+            }
+        }
+
         Text(
-            Strings.plexSettingsDesc,
-            color = AppColors.TextSecondary,
+            if (draft.id.isBlank()) "添加服务器" else "编辑服务器",
+            style = MaterialTheme.typography.titleLarge,
+            color = AppColors.TextPrimary,
         )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            MusicServerType.values().forEach { type ->
+                FilterChip(
+                    selected = draft.type == type,
+                    onClick = { draft = draft.copy(type = type) },
+                    label = { Text(type.label) },
+                    leadingIcon = if (draft.type == type) {
+                        { Icon(Icons.Filled.Check, contentDescription = null, modifier = Modifier.size(18.dp)) }
+                    } else null,
+                )
+            }
+        }
         OutlinedTextField(
-            value = token,
-            onValueChange = onTokenChange,
+            value = draft.name,
+            onValueChange = { draft = draft.copy(name = it) },
             modifier = Modifier.fillMaxWidth(),
-            label = { Text(Strings.plexToken) },
+            label = { Text("显示名称") },
+            placeholder = { Text(if (draft.type == MusicServerType.Plex) "家里的 Plex" else "032 Music Server") },
             singleLine = true,
         )
         OutlinedTextField(
-            value = baseUrl,
-            onValueChange = onBaseUrlChange,
+            value = draft.baseUrl,
+            onValueChange = { draft = draft.copy(baseUrl = it) },
             modifier = Modifier.fillMaxWidth(),
-            label = { Text(Strings.plexBaseUrl) },
+            label = { Text("服务器地址") },
+            placeholder = { Text(if (draft.type == MusicServerType.Plex) "http://192.168.1.10:32400" else "http://192.168.1.10:4533") },
             singleLine = true,
         )
+        OutlinedTextField(
+            value = draft.token,
+            onValueChange = { draft = draft.copy(token = it) },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text(if (draft.type == MusicServerType.Plex) "Plex Token" else "API Token") },
+            singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
+        )
+        if (draft.type == MusicServerType.Music032) {
+            OutlinedTextField(
+                value = draft.mediaToken,
+                onValueChange = { draft = draft.copy(mediaToken = it) },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("媒体 Token") },
+                supportingText = { Text("留空时使用 API Token；建议填写服务端独立的媒体 Token。") },
+                singleLine = true,
+                visualTransformation = PasswordVisualTransformation(),
+            )
+        } else {
+            OutlinedTextField(
+                value = draft.server,
+                onValueChange = { draft = draft.copy(server = it) },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("Plex 服务器名称（可选）") },
+                singleLine = true,
+            )
+            OutlinedTextField(
+                value = draft.username,
+                onValueChange = { draft = draft.copy(username = it) },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("Plex 用户名（无 Token 时使用）") },
+                singleLine = true,
+            )
+            OutlinedTextField(
+                value = draft.password,
+                onValueChange = { draft = draft.copy(password = it) },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("Plex 密码") },
+                singleLine = true,
+                visualTransformation = PasswordVisualTransformation(),
+            )
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Button(
-                onClick = onSave,
+                onClick = { onSaveServer(draft, false) },
                 modifier = Modifier.weight(1f),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = AppColors.Accent,
@@ -1472,7 +1616,7 @@ internal fun SettingsSection(
                 Text(Strings.save)
             }
             OutlinedButton(
-                onClick = onSaveAndRefresh,
+                onClick = { onSaveServer(draft, true) },
                 modifier = Modifier.weight(1f),
                 border = BorderStroke(1.dp, AppColors.BorderStrong),
                 colors = ButtonDefaults.outlinedButtonColors(contentColor = AppColors.TextPrimary),
@@ -1535,7 +1679,9 @@ internal suspend fun playAlbumSequentially(
         )
 
         val latestTracks = getTracks()
-        val currentIndex = latestTracks.indexOfFirst { it.ratingKey == track.ratingKey }
+        val currentIndex = latestTracks.indexOfFirst {
+            it.ratingKey == track.ratingKey && it.sourceId == track.sourceId
+        }
             .takeIf { it >= 0 } ?: index.coerceIn(0, latestTracks.lastIndex)
         val nextIndex = getNextIndex(currentIndex)
         if (nextIndex == null) {
@@ -1615,4 +1761,5 @@ private fun PlexTrackStream.toDisplayAlbum(fallbackAlbum: PlexAlbum): PlexAlbum 
         addedAtEpochSeconds = fallbackAlbum.addedAtEpochSeconds,
         lastViewedAtEpochSeconds = fallbackAlbum.lastViewedAtEpochSeconds,
         section = fallbackAlbum.section,
+        sourceId = sourceId.ifBlank { fallbackAlbum.sourceId },
     )

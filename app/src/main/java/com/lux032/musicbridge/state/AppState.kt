@@ -18,6 +18,8 @@ import com.lux032.musicbridge.plex.PlexPlaylist
 import com.lux032.musicbridge.plex.PlexPlaylistTracksResult
 import com.lux032.musicbridge.plex.PlexTrackStream
 import com.lux032.musicbridge.plex.isFavorite
+import com.lux032.musicbridge.music.Music032Client
+import com.lux032.musicbridge.music.MusicSourceClient
 import com.lux032.musicbridge.service.PlaybackForegroundService
 import com.lux032.musicbridge.sonos.SonosController
 import com.lux032.musicbridge.sonos.SonosRoom
@@ -27,6 +29,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import java.util.UUID
 
 @Stable
 class AppState(
@@ -38,11 +42,14 @@ class AppState(
     internal val albumLocalStore = AlbumLocalStore(context)
     internal val sonosController = SonosController()
 
-    private val initialPreferences = appPreferences.loadPlexConnectionPreferences()
+    private val initialProfiles = appPreferences.loadServerProfiles()
+    private val initialActiveServerId = appPreferences.loadActiveServerId(initialProfiles)
+    private val initialPreferences = initialProfiles.firstOrNull { it.id == initialActiveServerId } ?: MusicServerProfile()
     private val libraryCoordinator = AppStateLibraryCoordinator(this)
     private val playbackCoordinator = AppStatePlaybackCoordinator(this)
 
     val navigationStack = mutableStateListOf(AppSection.Home)
+    val serverProfiles = mutableStateListOf<MusicServerProfile>().apply { addAll(initialProfiles) }
     var primarySection by mutableStateOf(AppSection.Home)
     var connectionPreferences by mutableStateOf(initialPreferences)
 
@@ -52,7 +59,7 @@ class AppState(
     var actionMessage by mutableStateOf<String?>(null)
     var allAlbums by mutableStateOf<List<PlexAlbum>>(emptyList())
     var hasLoadedLocalAlbums by mutableStateOf(false)
-    var lastAlbumSyncEpochMillis by mutableStateOf(appPreferences.loadLastAlbumSyncEpochMillis())
+    var lastAlbumSyncEpochMillis by mutableStateOf(appPreferences.loadLastAlbumSyncEpochMillis(initialPreferences.id))
     var albumSearchQuery by mutableStateOf("")
     var albumSearchResults by mutableStateOf<List<PlexAlbum>>(emptyList())
     var isAlbumSearchLoading by mutableStateOf(false)
@@ -76,7 +83,7 @@ class AppState(
     var favoriteTrackSyncJob by mutableStateOf<Job?>(null)
     var miniPlayerState by mutableStateOf<MiniPlayerState?>(null)
     var playbackMode by mutableStateOf(PlaybackMode.Sequential)
-    var recentPlayedAlbumKeys by mutableStateOf(appPreferences.loadRecentPlayedAlbumKeys())
+    var recentPlayedAlbumKeys by mutableStateOf(appPreferences.loadRecentPlayedAlbumKeys(initialPreferences.id))
     var artists by mutableStateOf<List<ArtistSummary>>(emptyList())
     var playlists by mutableStateOf<List<PlexPlaylist>>(emptyList())
     var selectedPlaylist by mutableStateOf<PlexPlaylist?>(null)
@@ -133,7 +140,7 @@ class AppState(
     // cached album list in step with the underlying database.
     val selectedArtist: ArtistSummary? by derivedStateOf {
         selectedArtistName?.let { selectedName ->
-            val albums = albumLocalStore.getAlbumsByArtist(selectedName)
+            val albums = albumLocalStore.getAlbumsByArtist(connectionPreferences.id, selectedName)
             val summary = artists.firstOrNull { it.name == selectedName }
             summary?.let {
                 ArtistSummary(
@@ -180,15 +187,27 @@ class AppState(
         }
     }
 
-    internal fun client(preferences: PlexConnectionPreferences = connectionPreferences) = PlexClient(
-        PlexAuthConfig(
-            username = preferences.username,
-            password = preferences.password,
-            preferredServer = preferences.server,
-            baseUrl = preferences.baseUrl,
-            token = preferences.token,
+    internal fun client(preferences: MusicServerProfile = connectionPreferences): MusicSourceClient =
+        when (preferences.type) {
+            MusicServerType.Plex -> PlexClient(
+                PlexAuthConfig(
+                    username = preferences.username,
+                    password = preferences.password,
+                    preferredServer = preferences.server,
+                    baseUrl = preferences.baseUrl,
+                    token = preferences.token,
+                    sourceId = preferences.id,
+                )
+            )
+            MusicServerType.Music032 -> Music032Client(preferences)
+        }
+
+    internal fun clientFor(sourceId: String): MusicSourceClient =
+        client(
+            serverProfiles.firstOrNull { it.id == sourceId }
+                ?: connectionPreferences.takeIf { sourceId.isBlank() }
+                ?: error("对应的音乐服务器连接已被移除。")
         )
-    )
 
     suspend fun loadAlbumsFromLocalStore() = libraryCoordinator.loadAlbumsFromLocalStore()
 
@@ -196,14 +215,85 @@ class AppState(
 
     suspend fun refreshAlbums(showLoading: Boolean = true) = libraryCoordinator.refreshAlbums(showLoading)
 
-    fun saveSettings(
-        username: String,
-        password: String,
-        token: String,
-        server: String,
-        baseUrl: String,
-        refreshAfterSave: Boolean,
-    ) = libraryCoordinator.saveSettings(username, password, token, server, baseUrl, refreshAfterSave)
+    fun saveServerProfile(profile: MusicServerProfile, refreshAfterSave: Boolean) {
+        val normalized = profile.copy(
+            id = profile.id.ifBlank { UUID.randomUUID().toString() },
+            name = profile.name.trim().ifBlank { profile.type.label },
+            username = profile.username.trim(),
+            token = profile.token.trim(),
+            mediaToken = profile.mediaToken.trim(),
+            server = profile.server.trim(),
+            baseUrl = profile.baseUrl.trim().trimEnd('/'),
+        )
+        val index = serverProfiles.indexOfFirst { it.id == normalized.id }
+        if (!normalized.hasCredentials()) {
+            errorMessage = when (normalized.type) {
+                MusicServerType.Plex -> "请填写 Plex Token，或填写 Plex 用户名和密码。"
+                MusicServerType.Music032 -> "请填写 032 Music Server 地址和 API Token。"
+            }
+            return
+        }
+        if (index >= 0) serverProfiles[index] = normalized else serverProfiles.add(normalized)
+        activateServer(normalized, refreshAfterSave)
+        actionMessage = "已保存服务器：${normalized.displayName}"
+    }
+
+    fun switchServer(serverId: String) {
+        val profile = serverProfiles.firstOrNull { it.id == serverId } ?: return
+        if (profile.id == connectionPreferences.id) return
+        activateServer(profile, refreshAfterSave = true)
+    }
+
+    fun deleteServer(serverId: String) {
+        val index = serverProfiles.indexOfFirst { it.id == serverId }
+        if (index < 0) return
+        val wasActive = connectionPreferences.id == serverId
+        if (miniPlayerState?.tracks?.any { it.sourceId == serverId } == true) {
+            albumPlaybackJob?.cancel()
+            playbackReportingJob?.cancel()
+            miniPlayerState = null
+            PlaybackForegroundService.stop(context)
+        }
+        serverProfiles.removeAt(index)
+        val next = if (wasActive) serverProfiles.firstOrNull() else connectionPreferences
+        if (next != null && next.id.isNotBlank()) {
+            activateServer(next, refreshAfterSave = false)
+        } else {
+            connectionPreferences = MusicServerProfile()
+            clearLibraryForServerChange()
+            appPreferences.saveServerProfiles(serverProfiles, null)
+        }
+        actionMessage = "服务器已移除"
+    }
+
+    private fun activateServer(profile: MusicServerProfile, refreshAfterSave: Boolean) {
+        connectionPreferences = profile
+        appPreferences.saveServerProfiles(serverProfiles, profile.id)
+        clearLibraryForServerChange()
+        recentPlayedAlbumKeys = appPreferences.loadRecentPlayedAlbumKeys(profile.id)
+        lastAlbumSyncEpochMillis = appPreferences.loadLastAlbumSyncEpochMillis(profile.id)
+        scope.launch {
+            loadAlbumsFromLocalStore()
+            loadArtists()
+            loadPlaylists()
+            if (refreshAfterSave && profile.hasCredentials()) refreshAlbums(showLoading = true)
+        }
+    }
+
+    private fun clearLibraryForServerChange() {
+        allAlbums = emptyList()
+        artists = emptyList()
+        playlists = emptyList()
+        favoriteTracks = emptyList()
+        selectedAlbum = null
+        selectedArtistName = null
+        selectedPlaylist = null
+        trackResult = null
+        playlistTrackResult = null
+        albumSearchResults = emptyList()
+        hasLoadedLocalAlbums = false
+        errorMessage = null
+    }
 
     fun openAlbumDetail(album: PlexAlbum) = libraryCoordinator.openAlbumDetail(album)
 

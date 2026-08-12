@@ -15,8 +15,8 @@ object Strings {
 
     val error get() = if (isZhCN) "错误" else "Error"
     val loading get() = if (isZhCN) "正在从 Plex 同步专辑" else "Syncing albums from Plex"
-    val settingsPromptTitle get() = if (isZhCN) "先在设置里填写 Plex 服务器" else "Configure Plex Server in Settings"
-    val settingsPromptBody get() = if (isZhCN) "首页现在只保留封面展示和播放链路，连接信息已移到设置页并支持持久化。" else "Home page now focuses on album display and playback. Connection settings have been moved to Settings page with persistence support."
+    val settingsPromptTitle get() = if (isZhCN) "先在设置里添加音乐服务器" else "Add a Music Server in Settings"
+    val settingsPromptBody get() = if (isZhCN) "支持 Plex 和 032 Music Server，也可以保存多台服务器并随时切换。" else "Plex and 032 Music Server are supported, including multiple saved servers and direct switching."
     val refreshHome get() = if (isZhCN) "刷新首页" else "Refresh Home"
     val noFavoritesTitle get() = if (isZhCN) "还没有检测到已收藏专辑" else "No Favorite Albums Found"
     val noFavoritesBody get() = if (isZhCN) "当前按 Plex 返回的 userRating 识别收藏专辑。你也可以先打开任意专辑，在详情页直接点击收藏。" else "Favorites are identified by Plex userRating. You can also open any album and mark it as favorite in the detail page."

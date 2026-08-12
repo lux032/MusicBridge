@@ -39,7 +39,7 @@ import kotlinx.coroutines.Job
 
 @Composable
 internal fun HomeSection(
-    connectionPreferences: PlexConnectionPreferences,
+    connectionPreferences: MusicServerProfile,
     allAlbums: List<PlexAlbum>,
     recentPlayedAlbums: List<PlexAlbum>,
     favoriteAlbums: List<PlexAlbum>,

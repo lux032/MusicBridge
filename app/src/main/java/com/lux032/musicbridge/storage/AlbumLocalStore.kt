@@ -17,12 +17,12 @@ class AlbumLocalStore(context: Context) {
         val albumCount: Int,
     )
 
-    fun getFavoriteTracks(): List<PlexTrackStream> =
+    fun getFavoriteTracks(sourceId: String): List<PlexTrackStream> =
         helper.readableDatabase.query(
             AlbumDatabaseHelper.TABLE_TRACKS,
             null,
-            "${AlbumDatabaseHelper.COLUMN_TRACK_USER_RATING} > 0",
-            null,
+            "${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ? AND ${AlbumDatabaseHelper.COLUMN_TRACK_USER_RATING} > 0",
+            arrayOf(sourceId),
             null,
             null,
             "${AlbumDatabaseHelper.COLUMN_TRACK_TITLE} COLLATE NOCASE ASC",
@@ -34,7 +34,7 @@ class AlbumLocalStore(context: Context) {
             }
         }
 
-    fun getArtistSummaries(): List<ArtistInfo> =
+    fun getArtistSummaries(sourceId: String): List<ArtistInfo> =
         helper.readableDatabase.rawQuery(
             """
             SELECT
@@ -43,12 +43,14 @@ class AlbumLocalStore(context: Context) {
                 (SELECT ${AlbumDatabaseHelper.COLUMN_THUMB_URL} FROM ${AlbumDatabaseHelper.TABLE_ALBUMS} t2
                  WHERE COALESCE(NULLIF(TRIM(t2.${AlbumDatabaseHelper.COLUMN_ARTIST_NAME}), ''), '未知艺人') =
                        COALESCE(NULLIF(TRIM(t1.${AlbumDatabaseHelper.COLUMN_ARTIST_NAME}), ''), '未知艺人')
+                 AND t2.${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = t1.${AlbumDatabaseHelper.COLUMN_SOURCE_ID}
                  AND t2.${AlbumDatabaseHelper.COLUMN_THUMB_URL} IS NOT NULL LIMIT 1) as cover_url
             FROM ${AlbumDatabaseHelper.TABLE_ALBUMS} t1
+            WHERE t1.${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ?
             GROUP BY artist
             ORDER BY album_count DESC, artist COLLATE NOCASE ASC
             """.trimIndent(),
-            null
+            arrayOf(sourceId)
         ).use { cursor ->
             buildList {
                 while (cursor.moveToNext()) {
@@ -63,14 +65,14 @@ class AlbumLocalStore(context: Context) {
             }
         }
 
-    fun getAlbumsByArtist(artistName: String): List<PlexAlbum> {
+    fun getAlbumsByArtist(sourceId: String, artistName: String): List<PlexAlbum> {
         val normalizedArtist = artistName.trim().ifBlank { "未知艺人" }
         val selection = if (normalizedArtist == "未知艺人") {
-            "(${AlbumDatabaseHelper.COLUMN_ARTIST_NAME} IS NULL OR TRIM(${AlbumDatabaseHelper.COLUMN_ARTIST_NAME}) = '')"
+            "${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ? AND (${AlbumDatabaseHelper.COLUMN_ARTIST_NAME} IS NULL OR TRIM(${AlbumDatabaseHelper.COLUMN_ARTIST_NAME}) = '')"
         } else {
-            "TRIM(${AlbumDatabaseHelper.COLUMN_ARTIST_NAME}) = ?"
+            "${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ? AND TRIM(${AlbumDatabaseHelper.COLUMN_ARTIST_NAME}) = ?"
         }
-        val selectionArgs = if (normalizedArtist == "未知艺人") null else arrayOf(normalizedArtist)
+        val selectionArgs = if (normalizedArtist == "未知艺人") arrayOf(sourceId) else arrayOf(sourceId, normalizedArtist)
 
         return helper.readableDatabase.query(
             AlbumDatabaseHelper.TABLE_ALBUMS,
@@ -89,12 +91,12 @@ class AlbumLocalStore(context: Context) {
         }
     }
 
-    fun getAllAlbums(): List<PlexAlbum> =
+    fun getAllAlbums(sourceId: String): List<PlexAlbum> =
         helper.readableDatabase.query(
             AlbumDatabaseHelper.TABLE_ALBUMS,
             null,
-            null,
-            null,
+            "${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ?",
+            arrayOf(sourceId),
             null,
             null,
             "${AlbumDatabaseHelper.COLUMN_TITLE} COLLATE NOCASE ASC",
@@ -106,10 +108,10 @@ class AlbumLocalStore(context: Context) {
             }
         }
 
-    fun searchAlbums(query: String, limit: Int = DEFAULT_SEARCH_LIMIT): List<PlexAlbum> {
+    fun searchAlbums(sourceId: String, query: String, limit: Int = DEFAULT_SEARCH_LIMIT): List<PlexAlbum> {
         val normalizedQuery = query.trim()
         if (normalizedQuery.isEmpty()) {
-            return getAllAlbums()
+            return getAllAlbums(sourceId)
         }
 
         val escapedQuery = normalizedQuery
@@ -122,10 +124,12 @@ class AlbumLocalStore(context: Context) {
             AlbumDatabaseHelper.TABLE_ALBUMS,
             null,
             """
-            ${AlbumDatabaseHelper.COLUMN_TITLE} LIKE ? ESCAPE '\' OR
-            ${AlbumDatabaseHelper.COLUMN_ARTIST_NAME} LIKE ? ESCAPE '\'
+            ${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ? AND (
+                ${AlbumDatabaseHelper.COLUMN_TITLE} LIKE ? ESCAPE '\' OR
+                ${AlbumDatabaseHelper.COLUMN_ARTIST_NAME} LIKE ? ESCAPE '\'
+            )
             """.trimIndent(),
-            arrayOf(likeArg, likeArg),
+            arrayOf(sourceId, likeArg, likeArg),
             null,
             null,
             "${AlbumDatabaseHelper.COLUMN_TITLE} COLLATE NOCASE ASC",
@@ -139,11 +143,11 @@ class AlbumLocalStore(context: Context) {
         }
     }
 
-    fun replaceAllAlbums(albums: List<PlexAlbum>) {
+    fun replaceAllAlbums(sourceId: String, albums: List<PlexAlbum>) {
         val database = helper.writableDatabase
         database.beginTransaction()
         try {
-            database.delete(AlbumDatabaseHelper.TABLE_ALBUMS, null, null)
+            database.delete(AlbumDatabaseHelper.TABLE_ALBUMS, "${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ?", arrayOf(sourceId))
             albums.forEach { album ->
                 database.insertOrThrow(
                     AlbumDatabaseHelper.TABLE_ALBUMS,
@@ -166,11 +170,11 @@ class AlbumLocalStore(context: Context) {
         )
     }
 
-    fun replaceAllFavoriteTracks(tracks: List<PlexTrackStream>) {
+    fun replaceAllFavoriteTracks(sourceId: String, tracks: List<PlexTrackStream>) {
         val database = helper.writableDatabase
         database.beginTransaction()
         try {
-            database.delete(AlbumDatabaseHelper.TABLE_TRACKS, null, null)
+            database.delete(AlbumDatabaseHelper.TABLE_TRACKS, "${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ?", arrayOf(sourceId))
             tracks.forEach { track ->
                 database.insertOrThrow(
                     AlbumDatabaseHelper.TABLE_TRACKS,
@@ -193,20 +197,20 @@ class AlbumLocalStore(context: Context) {
         )
     }
 
-    fun deleteFavoriteTrack(ratingKey: String) {
+    fun deleteFavoriteTrack(sourceId: String, ratingKey: String) {
         helper.writableDatabase.delete(
             AlbumDatabaseHelper.TABLE_TRACKS,
-            "${AlbumDatabaseHelper.COLUMN_TRACK_RATING_KEY} = ?",
-            arrayOf(ratingKey),
+            "${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ? AND ${AlbumDatabaseHelper.COLUMN_TRACK_RATING_KEY} = ?",
+            arrayOf(sourceId, ratingKey),
         )
     }
 
-    fun getAlbumTracks(albumRatingKey: String): List<PlexTrackStream> =
+    fun getAlbumTracks(sourceId: String, albumRatingKey: String): List<PlexTrackStream> =
         helper.readableDatabase.query(
             AlbumDatabaseHelper.TABLE_ALBUM_TRACKS,
             null,
-            "${AlbumDatabaseHelper.COLUMN_TRACK_ALBUM_RATING_KEY} = ?",
-            arrayOf(albumRatingKey),
+            "${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ? AND ${AlbumDatabaseHelper.COLUMN_TRACK_ALBUM_RATING_KEY} = ?",
+            arrayOf(sourceId, albumRatingKey),
             null,
             null,
             null,
@@ -218,11 +222,11 @@ class AlbumLocalStore(context: Context) {
             }
         }
 
-    fun replaceAllAlbumTracks(albumTracks: Map<String, List<PlexTrackStream>>) {
+    fun replaceAllAlbumTracks(sourceId: String, albumTracks: Map<String, List<PlexTrackStream>>) {
         val database = helper.writableDatabase
         database.beginTransaction()
         try {
-            database.delete(AlbumDatabaseHelper.TABLE_ALBUM_TRACKS, null, null)
+            database.delete(AlbumDatabaseHelper.TABLE_ALBUM_TRACKS, "${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ?", arrayOf(sourceId))
             albumTracks.values.forEach { tracks ->
                 tracks.forEach { track ->
                     database.insertOrThrow(
@@ -238,7 +242,7 @@ class AlbumLocalStore(context: Context) {
         }
     }
 
-    fun updateAlbumTrackFavoriteStatus(ratingKey: String, userRating: Float?) {
+    fun updateAlbumTrackFavoriteStatus(sourceId: String, ratingKey: String, userRating: Float?) {
         val values = ContentValues().apply {
             if (userRating != null) put(AlbumDatabaseHelper.COLUMN_TRACK_USER_RATING, userRating)
             else putNull(AlbumDatabaseHelper.COLUMN_TRACK_USER_RATING)
@@ -246,8 +250,8 @@ class AlbumLocalStore(context: Context) {
         helper.writableDatabase.update(
             AlbumDatabaseHelper.TABLE_ALBUM_TRACKS,
             values,
-            "${AlbumDatabaseHelper.COLUMN_TRACK_RATING_KEY} = ?",
-            arrayOf(ratingKey),
+            "${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ? AND ${AlbumDatabaseHelper.COLUMN_TRACK_RATING_KEY} = ?",
+            arrayOf(sourceId, ratingKey),
         )
     }
 
@@ -275,6 +279,7 @@ class AlbumLocalStore(context: Context) {
                 title = string(AlbumDatabaseHelper.COLUMN_SECTION_TITLE),
                 type = string(AlbumDatabaseHelper.COLUMN_SECTION_TYPE),
             ),
+            sourceId = string(AlbumDatabaseHelper.COLUMN_SOURCE_ID),
         )
     }
 
@@ -297,11 +302,13 @@ class AlbumLocalStore(context: Context) {
             albumTitle = nullableString(AlbumDatabaseHelper.COLUMN_TRACK_ALBUM_TITLE),
             artistName = nullableString(AlbumDatabaseHelper.COLUMN_TRACK_ARTIST_NAME),
             thumbUrl = nullableString(AlbumDatabaseHelper.COLUMN_TRACK_THUMB_URL),
+            sourceId = string(AlbumDatabaseHelper.COLUMN_SOURCE_ID),
         )
     }
 
     private fun PlexAlbum.toContentValues(): ContentValues =
         ContentValues().apply {
+            put(AlbumDatabaseHelper.COLUMN_SOURCE_ID, sourceId)
             put(AlbumDatabaseHelper.COLUMN_RATING_KEY, ratingKey)
             put(AlbumDatabaseHelper.COLUMN_TITLE, title)
             put(AlbumDatabaseHelper.COLUMN_ARTIST_NAME, artistName)
@@ -317,6 +324,7 @@ class AlbumLocalStore(context: Context) {
 
     private fun PlexTrackStream.toContentValues(): ContentValues =
         ContentValues().apply {
+            put(AlbumDatabaseHelper.COLUMN_SOURCE_ID, sourceId)
             put(AlbumDatabaseHelper.COLUMN_TRACK_RATING_KEY, ratingKey)
             put(AlbumDatabaseHelper.COLUMN_TRACK_TITLE, title)
             put(AlbumDatabaseHelper.COLUMN_TRACK_STREAM_URL, streamUrl)
@@ -353,15 +361,24 @@ private class AlbumDatabaseHelper(context: Context) :
         if (oldVersion < 4) {
             createAlbumTracksTable(db)
         }
+        if (oldVersion < 5) {
+            db.execSQL("DROP TABLE IF EXISTS $TABLE_ALBUMS")
+            db.execSQL("DROP TABLE IF EXISTS $TABLE_TRACKS")
+            db.execSQL("DROP TABLE IF EXISTS $TABLE_ALBUM_TRACKS")
+            createAlbumsTable(db)
+            createTracksTable(db)
+            createAlbumTracksTable(db)
+        }
     }
 
     companion object {
         private const val DATABASE_NAME = "plex_album_cache.db"
-        private const val DATABASE_VERSION = 4
+        private const val DATABASE_VERSION = 5
 
         const val TABLE_ALBUMS = "albums"
         const val TABLE_TRACKS = "tracks"
         const val TABLE_ALBUM_TRACKS = "album_tracks"
+        const val COLUMN_SOURCE_ID = "source_id"
         const val COLUMN_RATING_KEY = "rating_key"
         const val COLUMN_TITLE = "title"
         const val COLUMN_ARTIST_NAME = "artist_name"
@@ -389,7 +406,8 @@ private class AlbumDatabaseHelper(context: Context) :
         db.execSQL(
             """
             CREATE TABLE IF NOT EXISTS $TABLE_ALBUMS (
-                $COLUMN_RATING_KEY TEXT PRIMARY KEY,
+                $COLUMN_SOURCE_ID TEXT NOT NULL,
+                $COLUMN_RATING_KEY TEXT NOT NULL,
                 $COLUMN_TITLE TEXT NOT NULL,
                 $COLUMN_ARTIST_NAME TEXT,
                 $COLUMN_YEAR INTEGER,
@@ -399,15 +417,16 @@ private class AlbumDatabaseHelper(context: Context) :
                 $COLUMN_LAST_VIEWED_AT_EPOCH_SECONDS INTEGER,
                 $COLUMN_SECTION_KEY TEXT NOT NULL,
                 $COLUMN_SECTION_TITLE TEXT NOT NULL,
-                $COLUMN_SECTION_TYPE TEXT NOT NULL
+                $COLUMN_SECTION_TYPE TEXT NOT NULL,
+                PRIMARY KEY ($COLUMN_SOURCE_ID, $COLUMN_RATING_KEY)
             )
             """.trimIndent()
         )
         db.execSQL(
-            "CREATE INDEX IF NOT EXISTS index_albums_title ON $TABLE_ALBUMS($COLUMN_TITLE COLLATE NOCASE)"
+            "CREATE INDEX IF NOT EXISTS index_albums_title ON $TABLE_ALBUMS($COLUMN_SOURCE_ID, $COLUMN_TITLE COLLATE NOCASE)"
         )
         db.execSQL(
-            "CREATE INDEX IF NOT EXISTS index_albums_artist_name ON $TABLE_ALBUMS($COLUMN_ARTIST_NAME COLLATE NOCASE)"
+            "CREATE INDEX IF NOT EXISTS index_albums_artist_name ON $TABLE_ALBUMS($COLUMN_SOURCE_ID, $COLUMN_ARTIST_NAME COLLATE NOCASE)"
         )
     }
 
@@ -415,7 +434,8 @@ private class AlbumDatabaseHelper(context: Context) :
         db.execSQL(
             """
             CREATE TABLE IF NOT EXISTS $TABLE_TRACKS (
-                $COLUMN_TRACK_RATING_KEY TEXT PRIMARY KEY,
+                $COLUMN_SOURCE_ID TEXT NOT NULL,
+                $COLUMN_TRACK_RATING_KEY TEXT NOT NULL,
                 $COLUMN_TRACK_TITLE TEXT NOT NULL,
                 $COLUMN_TRACK_STREAM_URL TEXT NOT NULL,
                 $COLUMN_TRACK_PART_KEY TEXT NOT NULL,
@@ -424,15 +444,16 @@ private class AlbumDatabaseHelper(context: Context) :
                 $COLUMN_TRACK_ALBUM_RATING_KEY TEXT,
                 $COLUMN_TRACK_ALBUM_TITLE TEXT,
                 $COLUMN_TRACK_ARTIST_NAME TEXT,
-                $COLUMN_TRACK_THUMB_URL TEXT
+                $COLUMN_TRACK_THUMB_URL TEXT,
+                PRIMARY KEY ($COLUMN_SOURCE_ID, $COLUMN_TRACK_RATING_KEY)
             )
             """.trimIndent()
         )
         db.execSQL(
-            "CREATE INDEX IF NOT EXISTS index_tracks_title ON $TABLE_TRACKS($COLUMN_TRACK_TITLE COLLATE NOCASE)"
+            "CREATE INDEX IF NOT EXISTS index_tracks_title ON $TABLE_TRACKS($COLUMN_SOURCE_ID, $COLUMN_TRACK_TITLE COLLATE NOCASE)"
         )
         db.execSQL(
-            "CREATE INDEX IF NOT EXISTS index_tracks_user_rating ON $TABLE_TRACKS($COLUMN_TRACK_USER_RATING)"
+            "CREATE INDEX IF NOT EXISTS index_tracks_user_rating ON $TABLE_TRACKS($COLUMN_SOURCE_ID, $COLUMN_TRACK_USER_RATING)"
         )
     }
 
@@ -440,7 +461,8 @@ private class AlbumDatabaseHelper(context: Context) :
         db.execSQL(
             """
             CREATE TABLE IF NOT EXISTS $TABLE_ALBUM_TRACKS (
-                $COLUMN_TRACK_RATING_KEY TEXT PRIMARY KEY,
+                $COLUMN_SOURCE_ID TEXT NOT NULL,
+                $COLUMN_TRACK_RATING_KEY TEXT NOT NULL,
                 $COLUMN_TRACK_TITLE TEXT NOT NULL,
                 $COLUMN_TRACK_STREAM_URL TEXT NOT NULL,
                 $COLUMN_TRACK_PART_KEY TEXT NOT NULL,
@@ -449,12 +471,13 @@ private class AlbumDatabaseHelper(context: Context) :
                 $COLUMN_TRACK_ALBUM_RATING_KEY TEXT,
                 $COLUMN_TRACK_ALBUM_TITLE TEXT,
                 $COLUMN_TRACK_ARTIST_NAME TEXT,
-                $COLUMN_TRACK_THUMB_URL TEXT
+                $COLUMN_TRACK_THUMB_URL TEXT,
+                PRIMARY KEY ($COLUMN_SOURCE_ID, $COLUMN_TRACK_RATING_KEY)
             )
             """.trimIndent()
         )
         db.execSQL(
-            "CREATE INDEX IF NOT EXISTS index_album_tracks_album_key ON $TABLE_ALBUM_TRACKS($COLUMN_TRACK_ALBUM_RATING_KEY)"
+            "CREATE INDEX IF NOT EXISTS index_album_tracks_album_key ON $TABLE_ALBUM_TRACKS($COLUMN_SOURCE_ID, $COLUMN_TRACK_ALBUM_RATING_KEY)"
         )
     }
 }

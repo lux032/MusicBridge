@@ -2,6 +2,7 @@ package com.lux032.musicbridge.plex
 
 import android.os.Build
 import android.util.Base64
+import com.lux032.musicbridge.music.MusicSourceClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.w3c.dom.Element
@@ -22,6 +23,7 @@ data class PlexAuthConfig(
     val preferredServer: String?,
     val baseUrl: String?,
     val token: String?,
+    val sourceId: String = "",
     val clientIdentifier: String = UUID.randomUUID().toString(),
 )
 
@@ -39,6 +41,7 @@ data class PlexAlbum(
     val addedAtEpochSeconds: Long?,
     val lastViewedAtEpochSeconds: Long?,
     val section: PlexSection,
+    val sourceId: String = "",
 ) {
     val isFavorite: Boolean
         get() = (userRating ?: 0f) > 0f
@@ -55,6 +58,7 @@ data class PlexTrackStream(
     val albumTitle: String? = null,
     val artistName: String? = null,
     val thumbUrl: String? = null,
+    val sourceId: String = "",
 )
 
 val PlexTrackStream.isFavorite: Boolean
@@ -76,6 +80,7 @@ data class PlexArtist(
     val ratingKey: String,
     val title: String,
     val thumbUrl: String?,
+    val sourceId: String = "",
 )
 
 data class PlexArtistsResult(
@@ -94,6 +99,7 @@ data class PlexPlaylist(
     val title: String,
     val thumbUrl: String?,
     val leafCount: Int,
+    val sourceId: String = "",
 )
 
 data class PlexPlaylistsResult(
@@ -111,7 +117,8 @@ private const val FAVORITE_TRACK_RATING = 10
 private const val PAGED_CONTAINER_SIZE = 200
 private const val FAVORITE_TRACKS_CONTAINER_SIZE = 1000
 
-class PlexClient(private val config: PlexAuthConfig) {
+class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient {
+    override val sourceId: String = config.sourceId
     private val appName = "MusicBridge"
     private val appVersion = "0.1.0"
     private val product = "Android App"
@@ -128,7 +135,7 @@ class PlexClient(private val config: PlexAuthConfig) {
         )
     }
 
-    suspend fun fetchAlbums(): PlexAlbumsResult = withContext(Dispatchers.IO) {
+    override suspend fun fetchAlbums(): PlexAlbumsResult = withContext(Dispatchers.IO) {
         val token = resolveToken()
         val server = resolveServer(token)
         val accessToken = server.accessToken.orEmpty().ifBlank { token }
@@ -149,7 +156,7 @@ class PlexClient(private val config: PlexAuthConfig) {
         )
     }
 
-    suspend fun fetchArtists(): PlexArtistsResult = withContext(Dispatchers.IO) {
+    override suspend fun fetchArtists(): PlexArtistsResult = withContext(Dispatchers.IO) {
         val token = resolveToken()
         val server = resolveServer(token)
         val accessToken = server.accessToken.orEmpty().ifBlank { token }
@@ -176,7 +183,7 @@ class PlexClient(private val config: PlexAuthConfig) {
         )
     }
 
-    suspend fun fetchFavoriteTracks(): List<PlexTrackStream> = withContext(Dispatchers.IO) {
+    override suspend fun fetchFavoriteTracks(): List<PlexTrackStream> = withContext(Dispatchers.IO) {
         val token = resolveToken()
         val server = resolveServer(token)
         val accessToken = server.accessToken.orEmpty().ifBlank { token }
@@ -206,7 +213,7 @@ class PlexClient(private val config: PlexAuthConfig) {
         fetchAlbumTrackStreams(matchedAlbum)
     }
 
-    suspend fun fetchAlbumTrackStreams(album: PlexAlbum): PlexAlbumTracksResult = withContext(Dispatchers.IO) {
+    override suspend fun fetchAlbumTrackStreams(album: PlexAlbum): PlexAlbumTracksResult = withContext(Dispatchers.IO) {
         val token = resolveToken()
         val server = resolveServer(token)
         PlexAlbumTracksResult(
@@ -216,9 +223,9 @@ class PlexClient(private val config: PlexAuthConfig) {
         )
     }
 
-    suspend fun fetchAllAlbumTracks(
+    override suspend fun fetchAllAlbumTracks(
         albums: List<PlexAlbum>,
-        onProgress: (current: Int, total: Int) -> Unit = { _, _ -> },
+        onProgress: (current: Int, total: Int) -> Unit,
     ): Map<String, List<PlexTrackStream>> = withContext(Dispatchers.IO) {
         val token = resolveToken()
         val server = resolveServer(token)
@@ -233,7 +240,7 @@ class PlexClient(private val config: PlexAuthConfig) {
         result
     }
 
-    suspend fun fetchPlaylists(): PlexPlaylistsResult = withContext(Dispatchers.IO) {
+    override suspend fun fetchPlaylists(): PlexPlaylistsResult = withContext(Dispatchers.IO) {
         val token = resolveToken()
         val server = resolveServer(token)
         val accessToken = server.accessToken.orEmpty().ifBlank { token }
@@ -252,13 +259,14 @@ class PlexClient(private val config: PlexAuthConfig) {
                     title = playlist.getAttribute("title"),
                     thumbUrl = playlist.getAttribute("thumb").takeIf { it.isNotBlank() }?.let { "${server.uri}$it?X-Plex-Token=$accessToken" },
                     leafCount = playlist.getAttribute("leafCount").toIntOrNull() ?: 0,
+                    sourceId = config.sourceId,
                 ))
             }
         }
         PlexPlaylistsResult(serverName = server.name, playlists = playlistList)
     }
 
-    suspend fun fetchPlaylistTracks(playlist: PlexPlaylist): PlexPlaylistTracksResult = withContext(Dispatchers.IO) {
+    override suspend fun fetchPlaylistTracks(playlist: PlexPlaylist): PlexPlaylistTracksResult = withContext(Dispatchers.IO) {
         val token = resolveToken()
         val server = resolveServer(token)
         val accessToken = server.accessToken.orEmpty().ifBlank { token }
@@ -286,6 +294,7 @@ class PlexClient(private val config: PlexAuthConfig) {
                     albumTitle = track.getAttribute("parentTitle").trim().ifBlank { null },
                     artistName = track.getAttribute("grandparentTitle").trim().ifBlank { null },
                     thumbUrl = track.trackThumbUrl(server.uri, accessToken),
+                    sourceId = config.sourceId,
                 ))
             }
         }
@@ -309,12 +318,20 @@ class PlexClient(private val config: PlexAuthConfig) {
         )
     }
 
-    suspend fun reportTimeline(
+    override suspend fun setAlbumFavorite(ratingKey: String, isFavorite: Boolean) {
+        setFavorite(ratingKey, isFavorite)
+    }
+
+    override suspend fun setTrackFavorite(ratingKey: String, isFavorite: Boolean) {
+        setFavorite(ratingKey, isFavorite)
+    }
+
+    override suspend fun reportTimeline(
         ratingKey: String,
         state: String,
         timeMillis: Long,
         durationMillis: Long?,
-        continuing: Boolean = false,
+        continuing: Boolean,
     ): Unit = withContext(Dispatchers.IO) {
         val normalizedRatingKey = ratingKey.trim()
         require(normalizedRatingKey.isNotEmpty()) { "缺少 Plex ratingKey。" }
@@ -335,7 +352,11 @@ class PlexClient(private val config: PlexAuthConfig) {
         )
     }
 
-    suspend fun scrobble(ratingKey: String): Unit = withContext(Dispatchers.IO) {
+    override suspend fun scrobble(
+        ratingKey: String,
+        positionMillis: Long,
+        durationMillis: Long?,
+    ): Unit = withContext(Dispatchers.IO) {
         val normalizedRatingKey = ratingKey.trim()
         require(normalizedRatingKey.isNotEmpty()) { "缺少 Plex ratingKey。" }
 
@@ -481,6 +502,7 @@ class PlexClient(private val config: PlexAuthConfig) {
                         addedAtEpochSeconds = directory.getAttribute("addedAt").trim().toLongOrNull(),
                         lastViewedAtEpochSeconds = directory.getAttribute("lastViewedAt").trim().toLongOrNull(),
                         section = section,
+                        sourceId = config.sourceId,
                     )
                 )
             }
@@ -509,6 +531,7 @@ class PlexClient(private val config: PlexAuthConfig) {
                             .trim()
                             .takeIf { it.isNotBlank() }
                             ?.let { buildMediaUrl(server.uri, it, token) },
+                        sourceId = config.sourceId,
                     )
                 )
             }
@@ -547,6 +570,7 @@ class PlexClient(private val config: PlexAuthConfig) {
                         albumTitle = track.getAttribute("parentTitle").trim().ifBlank { null },
                         artistName = track.getAttribute("grandparentTitle").trim().ifBlank { null },
                         thumbUrl = track.trackThumbUrl(server.uri, accessToken),
+                        sourceId = config.sourceId,
                     )
                 )
             }
@@ -573,7 +597,7 @@ class PlexClient(private val config: PlexAuthConfig) {
                 headers = mapOf("X-Plex-Token" to token),
                 accept = "application/json",
             )
-            val pageTracks = parseFavoriteTracksJson(response.body, server.uri, token)
+            val pageTracks = parseFavoriteTracksJson(response.body, server.uri, token, config.sourceId)
             if (pageTracks.isEmpty()) {
                 break
             }
@@ -608,7 +632,7 @@ class PlexClient(private val config: PlexAuthConfig) {
                 headers = mapOf("X-Plex-Token" to token),
             )
             val root = parseXml(response.body)
-            val pageTracks = root.getElementsByTagName("Track").toTrackStreams(server.uri, token)
+            val pageTracks = root.getElementsByTagName("Track").toTrackStreams(server.uri, token, config.sourceId)
             if (pageTracks.isEmpty()) {
                 break
             }
@@ -782,7 +806,7 @@ private fun Element.trackThumbUrl(serverUri: String, token: String): String? {
     return buildMediaUrl(serverUri, mediaPath, token)
 }
 
-private fun org.w3c.dom.NodeList.toTrackStreams(serverUri: String, token: String): List<PlexTrackStream> =
+private fun org.w3c.dom.NodeList.toTrackStreams(serverUri: String, token: String, sourceId: String): List<PlexTrackStream> =
     buildList {
         for (index in 0 until length) {
             val track = item(index) as? Element ?: continue
@@ -806,12 +830,13 @@ private fun org.w3c.dom.NodeList.toTrackStreams(serverUri: String, token: String
                     albumTitle = track.getAttribute("parentTitle").trim().ifBlank { null },
                     artistName = track.getAttribute("grandparentTitle").trim().ifBlank { null },
                     thumbUrl = track.trackThumbUrl(serverUri, token),
+                    sourceId = sourceId,
                 )
             )
         }
     }
 
-private fun parseFavoriteTracksJson(body: String, serverUri: String, token: String): List<PlexTrackStream> {
+private fun parseFavoriteTracksJson(body: String, serverUri: String, token: String, sourceId: String): List<PlexTrackStream> {
     val metadata = JSONObject(body)
         .optJSONObject("MediaContainer")
         ?.optJSONArray("Metadata")
@@ -845,6 +870,7 @@ private fun parseFavoriteTracksJson(body: String, serverUri: String, token: Stri
                     albumTitle = track.optString("parentTitle").trim().ifBlank { null },
                     artistName = track.optString("grandparentTitle").trim().ifBlank { null },
                     thumbUrl = track.optTrackThumbUrl(serverUri, token),
+                    sourceId = sourceId,
                 )
             )
         }

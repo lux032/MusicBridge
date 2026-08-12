@@ -689,8 +689,10 @@ internal fun AsyncAlbumArtwork(
     }
 }
 
-internal fun PlexConnectionPreferences.hasCredentials(): Boolean =
-    token.isNotBlank() || (username.isNotBlank() && password.isNotBlank())
+internal fun MusicServerProfile.hasCredentials(): Boolean = when (type) {
+    MusicServerType.Plex -> token.isNotBlank() || (username.isNotBlank() && password.isNotBlank())
+    MusicServerType.Music032 -> baseUrl.isNotBlank() && token.isNotBlank()
+}
 
 internal fun formatSyncStatus(epochMillis: Long?): String {
     if (epochMillis == null) return Strings.notSynced

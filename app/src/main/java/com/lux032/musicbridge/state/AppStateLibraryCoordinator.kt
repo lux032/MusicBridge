@@ -17,12 +17,16 @@ internal class AppStateLibraryCoordinator(
     private val state: AppState,
 ) {
     suspend fun loadAlbumsFromLocalStore() {
-        state.allAlbums = withContext(Dispatchers.IO) {
-            state.albumLocalStore.getAllAlbums()
+        val sourceId = state.connectionPreferences.id
+        val albums = withContext(Dispatchers.IO) {
+            state.albumLocalStore.getAllAlbums(sourceId)
         }
-        state.favoriteTracks = withContext(Dispatchers.IO) {
-            state.albumLocalStore.getFavoriteTracks()
+        val favorites = withContext(Dispatchers.IO) {
+            state.albumLocalStore.getFavoriteTracks(sourceId)
         }
+        if (state.connectionPreferences.id != sourceId) return
+        state.allAlbums = albums
+        state.favoriteTracks = favorites
         state.hasLoadedLocalAlbums = true
     }
 
@@ -35,14 +39,19 @@ internal class AppStateLibraryCoordinator(
         }
 
         state.isAlbumSearchLoading = true
-        state.albumSearchResults = withContext(Dispatchers.IO) {
-            state.albumLocalStore.searchAlbums(normalizedQuery)
+        val sourceId = state.connectionPreferences.id
+        val results = withContext(Dispatchers.IO) {
+            state.albumLocalStore.searchAlbums(sourceId, normalizedQuery)
         }
+        if (state.connectionPreferences.id != sourceId) return
+        state.albumSearchResults = results
         state.isAlbumSearchLoading = false
     }
 
     suspend fun refreshAlbums(showLoading: Boolean) {
-        if (!state.connectionPreferences.hasCredentials()) {
+        val profile = state.connectionPreferences
+        val sourceId = profile.id
+        if (!profile.hasCredentials()) {
             state.selectedAlbum = null
             state.trackResult = null
             return
@@ -54,28 +63,31 @@ internal class AppStateLibraryCoordinator(
         state.errorMessage = null
         state.actionMessage = null
         try {
-            val fetched = state.client().fetchAlbums()
-            state.allAlbums = fetched.albums
+            val client = state.client(profile)
+            val fetched = client.fetchAlbums()
             withContext(Dispatchers.IO) {
-                state.albumLocalStore.replaceAllAlbums(fetched.albums)
+                state.albumLocalStore.replaceAllAlbums(sourceId, fetched.albums)
             }
+            if (state.connectionPreferences.id != sourceId) return
+            state.allAlbums = fetched.albums
+            loadArtists()
             state.lastAlbumSyncEpochMillis = System.currentTimeMillis()
-            state.appPreferences.saveLastAlbumSyncEpochMillis(state.lastAlbumSyncEpochMillis!!)
-            if (state.selectedAlbum?.ratingKey?.let { key ->
-                    fetched.albums.none { album -> album.ratingKey == key }
+            state.appPreferences.saveLastAlbumSyncEpochMillis(sourceId, state.lastAlbumSyncEpochMillis!!)
+            if (state.selectedAlbum?.let { selected ->
+                    fetched.albums.none { album -> sameAlbum(album, selected) }
                 } == true
             ) {
                 state.selectedAlbum = null
                 state.trackResult = null
             }
             state.actionMessage = "已同步 ${fetched.albums.size} 张专辑，正在同步曲目..."
-            val client = state.client()
             val allTracks = client.fetchAllAlbumTracks(fetched.albums) { current, total ->
-                state.actionMessage = "正在同步曲目 $current/$total"
+                if (state.connectionPreferences.id == sourceId) state.actionMessage = "正在同步曲目 $current/$total"
             }
             withContext(Dispatchers.IO) {
-                state.albumLocalStore.replaceAllAlbumTracks(allTracks)
+                state.albumLocalStore.replaceAllAlbumTracks(sourceId, allTracks)
             }
+            if (state.connectionPreferences.id != sourceId) return
             val totalTrackCount = allTracks.values.sumOf { tracks -> tracks.size }
             state.actionMessage = "已同步 ${fetched.albums.size} 张专辑、${totalTrackCount} 首曲目"
         } catch (cancellation: CancellationException) {
@@ -92,42 +104,13 @@ internal class AppStateLibraryCoordinator(
         }
     }
 
-    fun saveSettings(
-        username: String,
-        password: String,
-        token: String,
-        server: String,
-        baseUrl: String,
-        refreshAfterSave: Boolean,
-    ) {
-        val newPreferences = PlexConnectionPreferences(
-            username = username.trim(),
-            password = password,
-            token = token.trim(),
-            server = server.trim(),
-            baseUrl = baseUrl.trim(),
-        )
-        state.connectionPreferences = newPreferences
-        state.appPreferences.savePlexConnectionPreferences(newPreferences)
-        state.actionMessage = "Plex 连接信息已保存到设置"
-        state.errorMessage = null
-        if (refreshAfterSave) {
-            state.scope.launch {
-                refreshAlbums(showLoading = true)
-                if (state.allAlbums.isNotEmpty()) {
-                    state.switchPrimarySection(AppSection.Home)
-                }
-            }
-        }
-    }
-
     fun openAlbumDetail(album: PlexAlbum) {
         state.errorMessage = null
         state.actionMessage = null
         state.selectedAlbum = album
         state.scope.launch {
             val cachedTracks = withContext(Dispatchers.IO) {
-                state.albumLocalStore.getAlbumTracks(album.ratingKey)
+                state.albumLocalStore.getAlbumTracks(album.sourceId, album.ratingKey)
             }
             if (cachedTracks.isNotEmpty()) {
                 state.trackResult = PlexAlbumTracksResult("", album, cachedTracks)
@@ -135,7 +118,7 @@ internal class AppStateLibraryCoordinator(
             } else {
                 state.isLoading = true
                 runCatching {
-                    state.client().fetchAlbumTrackStreams(album)
+                    state.clientFor(album.sourceId).fetchAlbumTrackStreams(album)
                 }.onSuccess {
                     state.trackResult = it
                     state.navigateTo(AppSection.AlbumDetail)
@@ -169,11 +152,11 @@ internal class AppStateLibraryCoordinator(
             runCatching {
                 val tracks = artist.albums.flatMap { album ->
                     val cachedTracks = withContext(Dispatchers.IO) {
-                        state.albumLocalStore.getAlbumTracks(album.ratingKey)
+                        state.albumLocalStore.getAlbumTracks(album.sourceId, album.ratingKey)
                     }
                     cachedTracks.ifEmpty {
                         runCatching {
-                            state.client().fetchAlbumTrackStreams(album).tracks
+                            state.clientFor(album.sourceId).fetchAlbumTrackStreams(album).tracks
                         }.getOrDefault(emptyList())
                     }
                 }
@@ -188,6 +171,7 @@ internal class AppStateLibraryCoordinator(
                         title = artist.name,
                         thumbUrl = artist.coverUrl,
                         leafCount = tracks.size,
+                        sourceId = tracks.firstOrNull()?.sourceId ?: state.connectionPreferences.id,
                     ),
                     tracks = tracks,
                 )
@@ -202,44 +186,64 @@ internal class AppStateLibraryCoordinator(
     }
 
     fun loadPlaylists() {
+        val profile = state.connectionPreferences
+        if (!profile.hasCredentials()) {
+            state.playlists = emptyList()
+            return
+        }
         state.scope.launch {
             runCatching {
-                val result = withContext(Dispatchers.IO) { state.client().fetchPlaylists() }
-                state.playlists = result.playlists
+                withContext(Dispatchers.IO) { state.client(profile).fetchPlaylists() }
+            }.onSuccess { result ->
+                if (state.connectionPreferences.id == profile.id) state.playlists = result.playlists
             }.onFailure {
-                state.errorMessage = it.message ?: "加载歌单失败"
+                if (state.connectionPreferences.id == profile.id) {
+                    state.errorMessage = it.message ?: "加载歌单失败"
+                }
             }
         }
     }
 
     fun loadFavoriteTracks() {
+        val profile = state.connectionPreferences
         state.scope.launch {
             runCatching {
-                val tracks = loadFavoriteTracksFromCacheOrRemote()
-                state.favoriteTracks = tracks
+                loadFavoriteTracksFromCacheOrRemote(profile)
+            }.onSuccess { tracks ->
+                if (state.connectionPreferences.id == profile.id) state.favoriteTracks = tracks
             }.onFailure {
-                state.errorMessage = it.message ?: "加载收藏单曲失败"
+                if (state.connectionPreferences.id == profile.id) {
+                    state.errorMessage = it.message ?: "加载收藏单曲失败"
+                }
             }
         }
     }
 
     fun openFavoriteTracks() {
+        val profile = state.connectionPreferences
         state.isLoading = true
         state.errorMessage = null
         state.scope.launch {
             runCatching {
-                val tracks = loadFavoriteTracksFromCacheOrRemote()
-                state.favoriteTracks = tracks
+                val tracks = loadFavoriteTracksFromCacheOrRemote(profile)
                 val fakePlaylist = PlexPlaylist(
                     ratingKey = "favorites",
                     title = Strings.myFavoriteTracks,
                     thumbUrl = null,
                     leafCount = tracks.size,
+                    sourceId = profile.id,
                 )
-                state.playlistTrackResult = PlexPlaylistTracksResult("", fakePlaylist, tracks)
-                state.navigateTo(AppSection.PlaylistDetail)
+                PlexPlaylistTracksResult("", fakePlaylist, tracks)
+            }.onSuccess { result ->
+                if (state.connectionPreferences.id == profile.id) {
+                    state.favoriteTracks = result.tracks
+                    state.playlistTrackResult = result
+                    state.navigateTo(AppSection.PlaylistDetail)
+                }
             }.onFailure {
-                state.errorMessage = it.message ?: "加载收藏单曲失败"
+                if (state.connectionPreferences.id == profile.id) {
+                    state.errorMessage = it.message ?: "加载收藏单曲失败"
+                }
             }
             state.isLoading = false
         }
@@ -250,7 +254,7 @@ internal class AppStateLibraryCoordinator(
         state.scope.launch {
             runCatching {
                 state.playlistTrackResult = withContext(Dispatchers.IO) {
-                    state.client().fetchPlaylistTracks(playlist)
+                    state.clientFor(playlist.sourceId).fetchPlaylistTracks(playlist)
                 }
                 state.navigateTo(AppSection.PlaylistDetail)
             }.onFailure {
@@ -261,23 +265,23 @@ internal class AppStateLibraryCoordinator(
 
     fun replaceAlbumInState(updatedAlbum: PlexAlbum) {
         state.allAlbums = state.allAlbums.map { album ->
-            if (album.ratingKey == updatedAlbum.ratingKey) updatedAlbum else album
+            if (sameAlbum(album, updatedAlbum)) updatedAlbum else album
         }
         state.scope.launch(Dispatchers.IO) {
             state.albumLocalStore.upsertAlbum(updatedAlbum)
         }
-        if (state.selectedAlbum?.ratingKey == updatedAlbum.ratingKey) {
+        if (state.selectedAlbum?.let { sameAlbum(it, updatedAlbum) } == true) {
             state.selectedAlbum = updatedAlbum
         }
         state.trackResult = state.trackResult?.let { current ->
-            if (current.album.ratingKey == updatedAlbum.ratingKey) {
+            if (sameAlbum(current.album, updatedAlbum)) {
                 current.copy(album = updatedAlbum)
             } else {
                 current
             }
         }
         state.miniPlayerState = state.miniPlayerState?.let { current ->
-            if (current.album.ratingKey == updatedAlbum.ratingKey) {
+            if (sameAlbum(current.album, updatedAlbum)) {
                 current.copy(album = updatedAlbum)
             } else {
                 current
@@ -287,30 +291,30 @@ internal class AppStateLibraryCoordinator(
 
     fun replaceTrackInState(updatedTrack: PlexTrackStream) {
         state.trackResult = state.trackResult?.let { current ->
-            if (current.tracks.none { it.ratingKey == updatedTrack.ratingKey }) {
+            if (current.tracks.none { sameTrack(it, updatedTrack) }) {
                 current
             } else {
                 current.copy(
                     tracks = current.tracks.map { track ->
-                        if (track.ratingKey == updatedTrack.ratingKey) updatedTrack else track
+                        if (sameTrack(track, updatedTrack)) updatedTrack else track
                     }
                 )
             }
         }
         state.playlistTrackResult = state.playlistTrackResult?.let { current ->
-            if (current.tracks.none { it.ratingKey == updatedTrack.ratingKey }) {
+            if (current.tracks.none { sameTrack(it, updatedTrack) }) {
                 current
             } else {
                 current.copy(
                     tracks = current.tracks.map { track ->
-                        if (track.ratingKey == updatedTrack.ratingKey) updatedTrack else track
+                        if (sameTrack(track, updatedTrack)) updatedTrack else track
                     }
                 )
             }
         }
         state.favoriteTracks = state.favoriteTracks.mapNotNull { track ->
             when {
-                track.ratingKey != updatedTrack.ratingKey -> track
+                !sameTrack(track, updatedTrack) -> track
                 updatedTrack.isFavorite -> updatedTrack
                 else -> null
             }
@@ -319,25 +323,26 @@ internal class AppStateLibraryCoordinator(
             if (updatedTrack.isFavorite) {
                 state.albumLocalStore.upsertFavoriteTrack(updatedTrack)
             } else {
-                state.albumLocalStore.deleteFavoriteTrack(updatedTrack.ratingKey)
+                state.albumLocalStore.deleteFavoriteTrack(updatedTrack.sourceId, updatedTrack.ratingKey)
             }
             state.albumLocalStore.updateAlbumTrackFavoriteStatus(
+                updatedTrack.sourceId,
                 updatedTrack.ratingKey,
                 updatedTrack.userRating,
             )
         }
         state.miniPlayerState = state.miniPlayerState?.let { current ->
-            if (current.tracks.none { it.ratingKey == updatedTrack.ratingKey }) {
+            if (current.tracks.none { sameTrack(it, updatedTrack) }) {
                 current
             } else {
                 current.copy(
                     album = current.tracks
                         .getOrNull(current.currentIndex)
-                        ?.takeIf { it.ratingKey == updatedTrack.ratingKey }
+                        ?.takeIf { sameTrack(it, updatedTrack) }
                         ?.let { resolveAlbumForTrack(updatedTrack, current.album) }
                         ?: current.album,
                     tracks = current.tracks.map { track ->
-                        if (track.ratingKey == updatedTrack.ratingKey) updatedTrack else track
+                        if (sameTrack(track, updatedTrack)) updatedTrack else track
                     }
                 )
             }
@@ -353,7 +358,7 @@ internal class AppStateLibraryCoordinator(
         state.actionMessage = null
         state.scope.launch {
             runCatching {
-                state.client().setFavorite(album.ratingKey, targetFavorite)
+                state.clientFor(album.sourceId).setAlbumFavorite(album.ratingKey, targetFavorite)
             }.onSuccess {
                 replaceAlbumInState(album.copy(userRating = if (targetFavorite) 10f else null))
                 state.actionMessage = if (targetFavorite) {
@@ -377,7 +382,7 @@ internal class AppStateLibraryCoordinator(
         state.actionMessage = null
         state.scope.launch {
             runCatching {
-                state.client().setFavorite(track.ratingKey, targetFavorite)
+                state.clientFor(track.sourceId).setTrackFavorite(track.ratingKey, targetFavorite)
             }.onSuccess {
                 replaceTrackInState(track.copy(userRating = if (targetFavorite) 10f else null))
                 state.actionMessage = if (targetFavorite) {
@@ -393,9 +398,11 @@ internal class AppStateLibraryCoordinator(
     }
 
     suspend fun loadArtists() {
+        val profile = state.connectionPreferences
         val cachedArtists = withContext(Dispatchers.IO) {
-            state.albumLocalStore.getArtistSummaries()
+            state.albumLocalStore.getArtistSummaries(profile.id)
         }
+        if (state.connectionPreferences.id != profile.id) return
         if (cachedArtists.isNotEmpty()) {
             state.artists = cachedArtists.map { info ->
                 ArtistSummary(
@@ -406,9 +413,10 @@ internal class AppStateLibraryCoordinator(
             }
         }
 
-        if (state.connectionPreferences.token.isNullOrBlank()) return
+        if (!profile.hasCredentials()) return
         try {
-            val plexArtists = state.client().fetchArtists().artists
+            val plexArtists = state.client(profile).fetchArtists().artists
+            if (state.connectionPreferences.id != profile.id) return
             val artistInfoMap = cachedArtists.associateBy { it.name }
             state.artists = plexArtists.map { plexArtist ->
                 val info = artistInfoMap[plexArtist.title]
@@ -423,35 +431,36 @@ internal class AppStateLibraryCoordinator(
         }
     }
 
-    private suspend fun loadFavoriteTracksFromCacheOrRemote(): List<PlexTrackStream> {
+    private suspend fun loadFavoriteTracksFromCacheOrRemote(profile: MusicServerProfile): List<PlexTrackStream> {
         val cachedTracks = withContext(Dispatchers.IO) {
-            state.albumLocalStore.getFavoriteTracks()
+            state.albumLocalStore.getFavoriteTracks(profile.id)
         }
         if (cachedTracks.isNotEmpty()) {
-            refreshFavoriteTracksInBackground()
+            refreshFavoriteTracksInBackground(profile)
             return cachedTracks
         }
 
-        val remoteTracks = loadFavoriteTracksInternal()
+        check(profile.hasCredentials()) { "请先完善服务器连接信息。" }
+        val remoteTracks = loadFavoriteTracksInternal(profile)
         withContext(Dispatchers.IO) {
-            state.albumLocalStore.replaceAllFavoriteTracks(remoteTracks)
+            state.albumLocalStore.replaceAllFavoriteTracks(profile.id, remoteTracks)
         }
         return remoteTracks
     }
 
-    private suspend fun loadFavoriteTracksInternal(): List<PlexTrackStream> = withContext(Dispatchers.IO) {
-        state.client().fetchFavoriteTracks()
+    private suspend fun loadFavoriteTracksInternal(profile: MusicServerProfile): List<PlexTrackStream> = withContext(Dispatchers.IO) {
+        state.client(profile).fetchFavoriteTracks()
     }
 
-    private fun refreshFavoriteTracksInBackground() {
+    private fun refreshFavoriteTracksInBackground(profile: MusicServerProfile) {
         state.favoriteTrackSyncJob?.cancel()
         state.favoriteTrackSyncJob = state.scope.launch {
             runCatching {
-                val tracks = loadFavoriteTracksInternal()
+                val tracks = loadFavoriteTracksInternal(profile)
                 withContext(Dispatchers.IO) {
-                    state.albumLocalStore.replaceAllFavoriteTracks(tracks)
+                    state.albumLocalStore.replaceAllFavoriteTracks(profile.id, tracks)
                 }
-                state.favoriteTracks = tracks
+                if (state.connectionPreferences.id == profile.id) state.favoriteTracks = tracks
             }
         }
     }
@@ -461,7 +470,7 @@ internal class AppStateLibraryCoordinator(
         fallbackAlbum: PlexAlbum? = null,
     ): PlexAlbum {
         val matchedAlbum = track.albumRatingKey?.let { ratingKey ->
-            state.allAlbums.firstOrNull { album -> album.ratingKey == ratingKey }
+            state.allAlbums.firstOrNull { album -> album.ratingKey == ratingKey && album.sourceId == track.sourceId }
         }
         if (matchedAlbum != null) {
             return matchedAlbum
@@ -478,6 +487,13 @@ internal class AppStateLibraryCoordinator(
             addedAtEpochSeconds = fallback?.addedAtEpochSeconds,
             lastViewedAtEpochSeconds = fallback?.lastViewedAtEpochSeconds,
             section = fallback?.section ?: PlexSection("", "", ""),
+            sourceId = track.sourceId.ifBlank { fallback?.sourceId.orEmpty() },
         )
     }
+
+    private fun sameAlbum(first: PlexAlbum, second: PlexAlbum): Boolean =
+        first.sourceId == second.sourceId && first.ratingKey == second.ratingKey
+
+    private fun sameTrack(first: PlexTrackStream, second: PlexTrackStream): Boolean =
+        first.sourceId == second.sourceId && first.ratingKey == second.ratingKey
 }
