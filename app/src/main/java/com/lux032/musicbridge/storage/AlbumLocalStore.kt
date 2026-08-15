@@ -170,6 +170,22 @@ class AlbumLocalStore(context: Context) {
         )
     }
 
+    fun deleteServerData(sourceId: String) {
+        if (sourceId.isBlank()) return
+        val database = helper.writableDatabase
+        database.beginTransaction()
+        try {
+            val args = arrayOf(sourceId)
+            val where = "${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ?"
+            database.delete(AlbumDatabaseHelper.TABLE_ALBUMS, where, args)
+            database.delete(AlbumDatabaseHelper.TABLE_TRACKS, where, args)
+            database.delete(AlbumDatabaseHelper.TABLE_ALBUM_TRACKS, where, args)
+            database.setTransactionSuccessful()
+        } finally {
+            database.endTransaction()
+        }
+    }
+
     fun replaceAllFavoriteTracks(sourceId: String, tracks: List<PlexTrackStream>) {
         val database = helper.writableDatabase
         database.beginTransaction()

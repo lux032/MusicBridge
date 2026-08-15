@@ -1431,7 +1431,7 @@ internal fun SettingsSection(
     var draft by remember { mutableStateOf(activeProfile ?: MusicServerProfile(type = MusicServerType.Music032)) }
     var pendingDelete by remember { mutableStateOf<MusicServerProfile?>(null) }
 
-    LaunchedEffect(activeServerId, serverProfiles) {
+    LaunchedEffect(activeServerId) {
         serverProfiles.firstOrNull { it.id == activeServerId }?.let { draft = it }
     }
 
@@ -1494,10 +1494,7 @@ internal fun SettingsSection(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable {
-                            draft = profile
-                            onSwitchServer(profile.id)
-                        }
+                        .clickable { onSwitchServer(profile.id) }
                         .padding(14.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -1538,13 +1535,23 @@ internal fun SettingsSection(
             MusicServerType.values().forEach { type ->
                 FilterChip(
                     selected = draft.type == type,
-                    onClick = { draft = draft.copy(type = type) },
+                    enabled = draft.id.isBlank(),
+                    onClick = {
+                        if (draft.type != type) draft = draft.freshDraftForType(type)
+                    },
                     label = { Text(type.label) },
                     leadingIcon = if (draft.type == type) {
                         { Icon(Icons.Filled.Check, contentDescription = null, modifier = Modifier.size(18.dp)) }
                     } else null,
                 )
             }
+        }
+        if (draft.id.isNotBlank()) {
+            Text(
+                "服务器类型在保存后不可更改。如需使用另一种服务，请点击“添加”创建独立配置。",
+                color = AppColors.TextSecondary,
+                style = MaterialTheme.typography.bodySmall,
+            )
         }
         OutlinedTextField(
             value = draft.name,

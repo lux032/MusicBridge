@@ -80,9 +80,22 @@ internal class AppStateLibraryCoordinator(
                 state.selectedAlbum = null
                 state.trackResult = null
             }
-            state.actionMessage = "已同步 ${fetched.albums.size} 张专辑，正在同步曲目..."
+            if (profile.type == MusicServerType.Music032 && showLoading) {
+                state.isLoading = false
+            }
+            state.actionMessage = if (profile.type == MusicServerType.Music032) {
+                "已同步 ${fetched.albums.size} 张专辑，正在批量同步曲目..."
+            } else {
+                "已同步 ${fetched.albums.size} 张专辑，正在同步曲目..."
+            }
             val allTracks = client.fetchAllAlbumTracks(fetched.albums) { current, total ->
-                if (state.connectionPreferences.id == sourceId) state.actionMessage = "正在同步曲目 $current/$total"
+                if (state.connectionPreferences.id == sourceId) {
+                    state.actionMessage = if (profile.type == MusicServerType.Music032) {
+                        "正在批量同步曲目 $current/$total"
+                    } else {
+                        "正在同步曲目 $current/$total"
+                    }
+                }
             }
             withContext(Dispatchers.IO) {
                 state.albumLocalStore.replaceAllAlbumTracks(sourceId, allTracks)

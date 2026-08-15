@@ -36,7 +36,11 @@ class Music032Client(
     }
 
     override suspend fun fetchAlbums(): PlexAlbumsResult = withContext(Dispatchers.IO) {
-        val albums = fetchPaged("/api/v1/albums") { parseAlbum(it) }
+        val albums = runCatching {
+            fetchCursorPaged("/api/v1/sync/albums") { parseAlbum(it) }
+        }.getOrElse {
+            fetchPaged("/api/v1/albums") { parseAlbum(it) }
+        }
         PlexAlbumsResult(profile.displayName, listOf(section), albums)
     }
 
@@ -68,11 +72,16 @@ class Music032Client(
         albums: List<PlexAlbum>,
         onProgress: (current: Int, total: Int) -> Unit,
     ): Map<String, List<PlexTrackStream>> = withContext(Dispatchers.IO) {
-        buildMap {
-            albums.forEachIndexed { index, album ->
-                runCatching { fetchAlbumTrackStreams(album).tracks }
-                    .onSuccess { put(album.ratingKey, it) }
-                onProgress(index + 1, albums.size)
+        runCatching {
+            val tracks = fetchCursorPaged("/api/v1/sync/tracks", onProgress) { parseTrack(it) }
+            tracks.groupBy { it.albumRatingKey.orEmpty() }.filterKeys(String::isNotBlank)
+        }.getOrElse {
+            buildMap {
+                albums.forEachIndexed { index, album ->
+                    runCatching { fetchAlbumTrackStreams(album).tracks }
+                        .onSuccess { put(album.ratingKey, it) }
+                    onProgress(index + 1, albums.size)
+                }
             }
         }
     }
@@ -171,6 +180,26 @@ class Music032Client(
         sourceId = sourceId,
     )
 
+    private fun <T> fetchCursorPaged(
+        path: String,
+        onProgress: (current: Int, total: Int) -> Unit = { _, _ -> },
+        parser: (JSONObject) -> T,
+    ): List<T> {
+        val result = mutableListOf<T>()
+        var cursor = "0"
+        while (true) {
+            val separator = if ('?' in path) '&' else '?'
+            val root = JSONObject(request("GET", "$path${separator}limit=$SYNC_PAGE_SIZE&cursor=$cursor"))
+            val page = root.optJSONArray("items").toObjects()
+            result += page.map(parser)
+            val total = root.optInt("total", result.size)
+            onProgress(result.size.coerceAtMost(total), total)
+            if (!root.optBoolean("hasMore") || page.isEmpty()) break
+            cursor = root.optString("nextCursor").ifBlank { break }
+        }
+        return result
+    }
+
     private fun <T> fetchPaged(path: String, parser: (JSONObject) -> T): List<T> {
         val result = mutableListOf<T>()
         var offset = 0
@@ -261,5 +290,6 @@ class Music032Client(
 
     private companion object {
         const val PAGE_SIZE = 500
+        const val SYNC_PAGE_SIZE = 1000
     }
 }

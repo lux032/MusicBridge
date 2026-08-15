@@ -32,6 +32,29 @@ data class MusicServerProfile(
         get() = name.trim().ifBlank {
             baseUrl.trim().ifBlank { type.label }
         }
+
+    fun normalizedForStorage(): MusicServerProfile {
+        val common = copy(
+            name = name.trim().ifBlank { type.label },
+            token = token.trim(),
+            baseUrl = baseUrl.trim().trimEnd('/'),
+        )
+        return when (type) {
+            MusicServerType.Plex -> common.copy(
+                username = username.trim(),
+                server = server.trim(),
+                mediaToken = "",
+            )
+            MusicServerType.Music032 -> common.copy(
+                username = "",
+                password = "",
+                server = "",
+                mediaToken = mediaToken.trim(),
+            )
+        }
+    }
+
+    fun freshDraftForType(newType: MusicServerType): MusicServerProfile = MusicServerProfile(type = newType)
 }
 
 class AppPreferences(context: Context) {
@@ -80,6 +103,7 @@ class AppPreferences(context: Context) {
         }
         migrateLegacySourceState(legacy.id)
         saveServerProfiles(listOf(legacy), legacy.id)
+        clearLegacyServerKeys()
         return listOf(legacy)
     }
 
@@ -90,7 +114,8 @@ class AppPreferences(context: Context) {
 
     fun saveServerProfiles(profiles: List<MusicServerProfile>, activeServerId: String?) {
         val array = JSONArray()
-        profiles.forEach { profile ->
+        profiles.forEach { rawProfile ->
+            val profile = rawProfile.normalizedForStorage()
             array.put(
                 JSONObject()
                     .put("id", profile.id)
@@ -139,6 +164,24 @@ class AppPreferences(context: Context) {
     fun saveLastAlbumSyncEpochMillis(sourceId: String, epochMillis: Long) {
         if (sourceId.isBlank()) return
         sharedPreferences.edit { putLong(syncKey(sourceId), epochMillis) }
+    }
+
+    fun clearSourceData(sourceId: String) {
+        if (sourceId.isBlank()) return
+        sharedPreferences.edit {
+            remove(recentKey(sourceId))
+            remove(syncKey(sourceId))
+        }
+    }
+
+    private fun clearLegacyServerKeys() {
+        sharedPreferences.edit {
+            remove(KEY_USERNAME)
+            remove(KEY_PASSWORD)
+            remove(KEY_TOKEN)
+            remove(KEY_SERVER)
+            remove(KEY_BASE_URL)
+        }
     }
 
     private fun recentKey(sourceId: String) = "${KEY_RECENT_PLAYED_ALBUM_KEYS}_$sourceId"

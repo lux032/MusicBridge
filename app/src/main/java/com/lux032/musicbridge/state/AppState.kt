@@ -218,13 +218,7 @@ class AppState(
     fun saveServerProfile(profile: MusicServerProfile, refreshAfterSave: Boolean) {
         val normalized = profile.copy(
             id = profile.id.ifBlank { UUID.randomUUID().toString() },
-            name = profile.name.trim().ifBlank { profile.type.label },
-            username = profile.username.trim(),
-            token = profile.token.trim(),
-            mediaToken = profile.mediaToken.trim(),
-            server = profile.server.trim(),
-            baseUrl = profile.baseUrl.trim().trimEnd('/'),
-        )
+        ).normalizedForStorage()
         val index = serverProfiles.indexOfFirst { it.id == normalized.id }
         if (!normalized.hasCredentials()) {
             errorMessage = when (normalized.type) {
@@ -255,13 +249,19 @@ class AppState(
             PlaybackForegroundService.stop(context)
         }
         serverProfiles.removeAt(index)
-        val next = if (wasActive) serverProfiles.firstOrNull() else connectionPreferences
-        if (next != null && next.id.isNotBlank()) {
-            activateServer(next, refreshAfterSave = false)
+        albumLocalStore.deleteServerData(serverId)
+        appPreferences.clearSourceData(serverId)
+        if (wasActive) {
+            val next = serverProfiles.firstOrNull()
+            if (next != null && next.id.isNotBlank()) {
+                activateServer(next, refreshAfterSave = false)
+            } else {
+                connectionPreferences = MusicServerProfile()
+                clearLibraryForServerChange()
+                appPreferences.saveServerProfiles(serverProfiles, null)
+            }
         } else {
-            connectionPreferences = MusicServerProfile()
-            clearLibraryForServerChange()
-            appPreferences.saveServerProfiles(serverProfiles, null)
+            appPreferences.saveServerProfiles(serverProfiles, connectionPreferences.id)
         }
         actionMessage = "服务器已移除"
     }
