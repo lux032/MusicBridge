@@ -11,6 +11,7 @@ import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.material3.ripple
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.lazy.LazyColumn
@@ -32,8 +33,14 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asComposeRenderEffect
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.font.FontWeight
@@ -46,8 +53,11 @@ import com.lux032.musicbridge.plex.PlexAlbumTracksResult
 import com.lux032.musicbridge.plex.PlexTrackStream
 import com.lux032.musicbridge.plex.isFavorite
 import com.lux032.musicbridge.plex.playbackUrlIdentity
+import coil3.compose.AsyncImage
+import coil3.request.ImageRequest
 import com.lux032.musicbridge.sonos.SonosController
 import com.lux032.musicbridge.sonos.SonosRoom
+import android.os.Build
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
@@ -75,6 +85,9 @@ internal fun PlaybackDetailSection(
     onSelectRoom: (SonosRoom) -> Unit,
     onStartSleepTimer: (Int, Int) -> Unit,
     onCancelSleepTimer: () -> Unit,
+    // How far the backdrop paints beyond the section bounds into the transparent system bars.
+    backdropTopExtension: androidx.compose.ui.unit.Dp = 0.dp,
+    backdropBottomExtension: androidx.compose.ui.unit.Dp = 0.dp,
 ) {
     val currentState = state
     val currentTrack = currentState?.tracks?.getOrNull(currentState.currentIndex)
@@ -89,6 +102,8 @@ internal fun PlaybackDetailSection(
     }
     val displayAlbum = currentTrack.toDisplayAlbum(currentState.album)
     val showAlbumTitle = !displayAlbum.title.equals(currentTrack.title, ignoreCase = true)
+    // Immersive theming: the whole page (backdrop, accents, glow) follows the current cover.
+    val palette = rememberAnimatedArtworkPalette(displayAlbum.thumbUrl)
 
     val trackDurationMillis = currentState.durationMillis?.takeIf { it > 0L } ?: currentTrack.durationMillis
     var isSeeking by remember(currentTrack.ratingKey) { mutableStateOf(false) }
@@ -117,7 +132,10 @@ internal fun PlaybackDetailSection(
                 .height(48.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconCircleButton(onClick = onBack) {
+            IconCircleButton(
+                onClick = onBack,
+                containerColor = Color.White.copy(alpha = 0.10f),
+            ) {
                 Icon(
                     imageVector = Icons.Filled.ArrowBack,
                     contentDescription = Strings.back,
@@ -137,6 +155,7 @@ internal fun PlaybackDetailSection(
             Spacer(modifier = Modifier.size(42.dp))
         }
     }
+    val artworkShape = RoundedCornerShape(26.dp)
     val artworkContent: @Composable (androidx.compose.ui.unit.Dp) -> Unit = { maximumSize ->
         AsyncAlbumArtwork(
             imageUrl = displayAlbum.thumbUrl,
@@ -145,7 +164,15 @@ internal fun PlaybackDetailSection(
                 .widthIn(max = maximumSize)
                 .fillMaxWidth()
                 .aspectRatio(1f)
-                .clip(RoundedCornerShape(16.dp)),
+                // Colored ambient/spot shadow makes the cover glow with the palette accent.
+                .shadow(
+                    elevation = 30.dp,
+                    shape = artworkShape,
+                    clip = false,
+                    ambientColor = palette.accent,
+                    spotColor = palette.accent,
+                )
+                .clip(artworkShape),
             contentScale = ContentScale.Crop,
             thumbnailSize = maximumSize,
         )
@@ -155,7 +182,7 @@ internal fun PlaybackDetailSection(
             modifier = Modifier
                 .widthIn(max = 560.dp)
                 .fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(if (compact) 10.dp else 18.dp),
+            verticalArrangement = Arrangement.spacedBy(if (compact) 10.dp else 14.dp),
         ) {
         Column(
             modifier = Modifier.fillMaxWidth(),
@@ -180,7 +207,7 @@ internal fun PlaybackDetailSection(
             ) {
                 Text(
                     text = displayAlbum.artistName ?: Strings.unknownArtist,
-                    color = AppColors.Accent,
+                    color = palette.accent,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -229,18 +256,18 @@ internal fun PlaybackDetailSection(
                     valueRange = 0f..clampedDuration.toFloat(),
                     enabled = !isLoading,
                     colors = SliderDefaults.colors(
-                        thumbColor = AppColors.Accent,
-                        activeTrackColor = AppColors.Accent,
-                        inactiveTrackColor = AppColors.SurfaceMuted,
+                        thumbColor = palette.accent,
+                        activeTrackColor = palette.accent,
+                        inactiveTrackColor = Color.White.copy(alpha = 0.14f),
                         disabledThumbColor = AppColors.TextTertiary,
                         disabledActiveTrackColor = AppColors.TextTertiary,
-                        disabledInactiveTrackColor = AppColors.SurfaceMuted,
+                        disabledInactiveTrackColor = Color.White.copy(alpha = 0.14f),
                     ),
                     thumb = {
                         Box(
                             modifier = Modifier
                                 .size(14.dp)
-                                .background(AppColors.Accent, CircleShape),
+                                .background(Color.White, CircleShape),
                         )
                     },
                     track = { sliderState ->
@@ -251,14 +278,14 @@ internal fun PlaybackDetailSection(
                                 .fillMaxWidth()
                                 .height(4.dp)
                                 .clip(RoundedCornerShape(2.dp))
-                                .background(AppColors.SurfaceMuted),
+                                .background(Color.White.copy(alpha = 0.14f)),
                         ) {
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth(fraction)
                                     .height(4.dp)
                                     .clip(RoundedCornerShape(2.dp))
-                                    .background(AppColors.Accent),
+                                    .background(palette.accent),
                             )
                         }
                     },
@@ -292,15 +319,18 @@ internal fun PlaybackDetailSection(
                 enabled = currentState.currentIndex > 0 && !isLoading,
                 sizeOverride = if (compact) 46.dp else 56.dp,
                 iconSizeOverride = if (compact) 20.dp else 23.dp,
+                unhighlightedContainerColor = Color.White.copy(alpha = 0.08f),
+                unhighlightedBorderColor = Color.White.copy(alpha = 0.12f),
             )
             Spacer(modifier = Modifier.width(if (compact) 20.dp else 32.dp))
-            PlayerControlButton(
+            GlowPlayerControlButton(
                 icon = if (currentState.isPaused) PlayerIcon.Play else PlayerIcon.Pause,
                 onClick = { onTogglePause(currentState) },
                 enabled = !isLoading,
-                highlighted = true,
-                sizeOverride = if (compact) 54.dp else 72.dp,
-                iconSizeOverride = if (compact) 24.dp else 30.dp,
+                accent = palette.accent,
+                onAccent = palette.onAccent,
+                buttonSize = if (compact) 54.dp else 72.dp,
+                iconSize = if (compact) 24.dp else 30.dp,
             )
             Spacer(modifier = Modifier.width(if (compact) 20.dp else 32.dp))
             PlayerControlButton(
@@ -309,6 +339,8 @@ internal fun PlaybackDetailSection(
                 enabled = currentState.currentIndex < currentState.tracks.lastIndex && !isLoading,
                 sizeOverride = if (compact) 46.dp else 56.dp,
                 iconSizeOverride = if (compact) 20.dp else 23.dp,
+                unhighlightedContainerColor = Color.White.copy(alpha = 0.08f),
+                unhighlightedBorderColor = Color.White.copy(alpha = 0.12f),
             )
         }
         PlaybackActionBar(
@@ -316,6 +348,7 @@ internal fun PlaybackDetailSection(
             playbackMode = playbackMode,
             sleepTimerState = sleepTimerState,
             isFavoriteLoading = isFavoriteLoading,
+            palette = palette,
             compact = compact,
             modifier = Modifier.fillMaxWidth(),
             onShowPlaylist = { isPlaylistSheetVisible = true },
@@ -339,7 +372,7 @@ internal fun PlaybackDetailSection(
         if (sleepTimerState.isActive) {
             Text(
                 text = Strings.sleepTimerRemaining(formatSleepTimerCountdown(sleepTimerState.remainingMillis)),
-                color = AppColors.Accent,
+                color = palette.accent,
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.SemiBold,
             )
@@ -353,7 +386,41 @@ internal fun PlaybackDetailSection(
         val bodyHeight = (maxHeight - topBarHeight).coerceAtLeast(0.dp)
         val compactLandscape = layoutInfo.isLandscape && maxHeight < 500.dp
 
-        Column(modifier = Modifier.fillMaxSize()) {
+        // Full-bleed backdrop: blurred cover cross-fading on track change, dimmed by a
+        // palette-tinted gradient so foreground content stays readable. The layout modifier
+        // extends the paint area (but not the section's layout size) into the status and
+        // navigation bar regions; no parent in the tree clips, so it shows through the
+        // transparent system bars.
+        PlaybackBackdrop(
+            artworkUrl = displayAlbum.thumbUrl,
+            palette = palette,
+            modifier = Modifier
+                .layout { measurable, constraints ->
+                    val topPx = backdropTopExtension.roundToPx()
+                    val bottomPx = backdropBottomExtension.roundToPx()
+                    val extendedMaxHeight = if (constraints.maxHeight == Constraints.Infinity) {
+                        constraints.maxHeight
+                    } else {
+                        constraints.maxHeight + topPx + bottomPx
+                    }
+                    val placeable = measurable.measure(constraints.copy(maxHeight = extendedMaxHeight))
+                    layout(constraints.maxWidth, constraints.maxHeight) {
+                        placeable.place(0, -topPx)
+                    }
+                }
+                .fillMaxSize(),
+        )
+
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(
+                    start = layoutInfo.horizontalPadding,
+                    top = 16.dp,
+                    end = layoutInfo.horizontalPadding,
+                    bottom = 20.dp,
+                ),
+        ) {
             topBar()
 
             if (layoutInfo.isLandscape) {
@@ -404,8 +471,10 @@ internal fun PlaybackDetailSection(
                 }
             } else {
                 val artworkSize = minOf(
-                    availableWidth,
-                    bodyHeight * if (layoutInfo.isTablet) 0.42f else 0.46f,
+                    // Width now measures the full-bleed container (padding moved inside), so
+                    // scale it down explicitly to keep the reference's ~80% width ratio.
+                    availableWidth * if (layoutInfo.isTablet) 0.70f else 0.86f,
+                    bodyHeight * if (layoutInfo.isTablet) 0.42f else 0.44f,
                     if (layoutInfo.isTablet) 420.dp else 360.dp,
                 ).coerceAtLeast(220.dp)
 
@@ -432,8 +501,8 @@ internal fun PlaybackDetailSection(
                                 .fillMaxWidth()
                                 .heightIn(max = bodyHeight)
                                 .verticalScroll(rememberScrollState())
-                                .padding(vertical = 12.dp),
-                            verticalArrangement = Arrangement.spacedBy(22.dp),
+                                .padding(vertical = 8.dp),
+                            verticalArrangement = Arrangement.spacedBy(16.dp),
                             horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
                             Box(modifier = Modifier.width(artworkSize)) {
@@ -729,6 +798,7 @@ private fun PlaybackActionBar(
     playbackMode: PlaybackMode,
     sleepTimerState: SleepTimerState,
     isFavoriteLoading: Boolean,
+    palette: ArtworkPalette,
     compact: Boolean = false,
     modifier: Modifier = Modifier,
     onShowPlaylist: () -> Unit,
@@ -737,100 +807,131 @@ private fun PlaybackActionBar(
     onShowSleepTimer: () -> Unit,
     onShowRoomPicker: () -> Unit,
 ) {
-    val actionIconSize = if (compact) 24.dp else 28.dp
-    val actionSlotHeight = if (compact) 44.dp else 56.dp
-    Row(
+    val actionIconSize = if (compact) 20.dp else 22.dp
+    val actionSlotHeight = if (compact) 50.dp else 58.dp
+    // Glassy pill container with icon + label items, mirroring the reference player UI.
+    Surface(
         modifier = modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(0.dp),
-        verticalAlignment = Alignment.CenterVertically,
+        shape = RoundedCornerShape(28.dp),
+        color = Color.White.copy(alpha = 0.07f),
+        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.10f)),
     ) {
-        PlaybackActionButton(
-            icon = when (playbackMode) {
-                PlaybackMode.Sequential -> Icons.Filled.ArrowForward
-                PlaybackMode.RepeatAll -> Icons.Filled.Repeat
-                PlaybackMode.RepeatOne -> Icons.Filled.RepeatOne
-                PlaybackMode.Shuffle -> Icons.Filled.Shuffle
-            },
-            contentDescription = playbackMode.label,
-            modifier = Modifier.weight(1f),
-            isSelected = playbackMode != PlaybackMode.Sequential,
-            iconSize = actionIconSize,
-            slotHeight = actionSlotHeight,
-            onClick = onShowModePicker,
-        )
-        Box(
+        Row(
             modifier = Modifier
-                .weight(1f)
-                .height(actionSlotHeight),
-            contentAlignment = Alignment.Center,
+                .fillMaxWidth()
+                .padding(vertical = if (compact) 2.dp else 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(0.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            val interactionSource = remember { MutableInteractionSource() }
-            val isPressed by interactionSource.collectIsPressedAsState()
-            val scale by animateFloatAsState(
-                targetValue = if (isPressed) 0.85f else 1f,
-                label = "favorite_scale",
+            PlaybackActionButton(
+                icon = when (playbackMode) {
+                    PlaybackMode.Sequential -> Icons.Filled.ArrowForward
+                    PlaybackMode.RepeatAll -> Icons.Filled.Repeat
+                    PlaybackMode.RepeatOne -> Icons.Filled.RepeatOne
+                    PlaybackMode.Shuffle -> Icons.Filled.Shuffle
+                },
+                label = Strings.playbackModeShort,
+                contentDescription = playbackMode.label,
+                modifier = Modifier.weight(1f),
+                isSelected = playbackMode != PlaybackMode.Sequential,
+                accent = palette.accent,
+                iconSize = actionIconSize,
+                slotHeight = actionSlotHeight,
+                onClick = onShowModePicker,
             )
-            Column(
+            Box(
                 modifier = Modifier
-                    .clickable(
-                        enabled = !isFavoriteLoading,
-                        interactionSource = interactionSource,
-                        indication = ripple(bounded = true),
-                        onClick = onToggleTrackFavorite,
-                    )
-                    .graphicsLayer {
-                        scaleX = scale
-                        scaleY = scale
-                    }
-                    .fillMaxWidth()
+                    .weight(1f)
                     .height(actionSlotHeight),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
+                contentAlignment = Alignment.Center,
             ) {
-                FavoriteIconGraphic(
-                    isFavorite = currentTrack.isFavorite,
-                    tint = if (currentTrack.isFavorite) AppColors.Accent else AppColors.TextSecondary,
-                    baseSize = actionIconSize,
-                    selectedSize = if (compact) 27.dp else 31.dp,
+                val interactionSource = remember { MutableInteractionSource() }
+                val isPressed by interactionSource.collectIsPressedAsState()
+                val scale by animateFloatAsState(
+                    targetValue = if (isPressed) 0.85f else 1f,
+                    label = "favorite_scale",
                 )
+                val favoriteTint by animateColorAsState(
+                    targetValue = if (currentTrack.isFavorite) palette.accent else AppColors.TextSecondary,
+                    label = "favorite_tint",
+                )
+                Column(
+                    modifier = Modifier
+                        .clickable(
+                            enabled = !isFavoriteLoading,
+                            interactionSource = interactionSource,
+                            indication = ripple(bounded = true),
+                            onClick = onToggleTrackFavorite,
+                        )
+                        .graphicsLayer {
+                            scaleX = scale
+                            scaleY = scale
+                        }
+                        .fillMaxWidth()
+                        .height(actionSlotHeight),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    FavoriteIconGraphic(
+                        isFavorite = currentTrack.isFavorite,
+                        tint = favoriteTint,
+                        baseSize = actionIconSize,
+                        selectedSize = actionIconSize + 3.dp,
+                    )
+                    Text(
+                        text = Strings.favoriteAction,
+                        color = favoriteTint,
+                        style = MaterialTheme.typography.labelSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
+            PlaybackActionButton(
+                icon = Icons.Filled.QueueMusic,
+                label = Strings.playlistLabel,
+                contentDescription = Strings.playlistLabel,
+                modifier = Modifier.weight(1f),
+                isSelected = false,
+                accent = palette.accent,
+                iconSize = actionIconSize,
+                slotHeight = actionSlotHeight,
+                onClick = onShowPlaylist,
+            )
+            PlaybackActionButton(
+                icon = Icons.Filled.Bedtime,
+                label = Strings.sleepTimerShort,
+                contentDescription = Strings.sleepTimer,
+                modifier = Modifier.weight(1f),
+                isSelected = sleepTimerState.isActive,
+                accent = palette.accent,
+                iconSize = actionIconSize,
+                slotHeight = actionSlotHeight,
+                onClick = onShowSleepTimer,
+            )
+            PlaybackActionButton(
+                icon = Icons.Filled.Speaker,
+                label = Strings.deviceShort,
+                contentDescription = Strings.castRoom,
+                modifier = Modifier.weight(1f),
+                isSelected = false,
+                accent = palette.accent,
+                iconSize = actionIconSize,
+                slotHeight = actionSlotHeight,
+                onClick = onShowRoomPicker,
+            )
         }
-        PlaybackActionButton(
-            icon = Icons.Filled.QueueMusic,
-            contentDescription = Strings.playlistLabel,
-            modifier = Modifier.weight(1f),
-            isSelected = false,
-            iconSize = actionIconSize,
-            slotHeight = actionSlotHeight,
-            onClick = onShowPlaylist,
-        )
-        PlaybackActionButton(
-            icon = Icons.Filled.Bedtime,
-            contentDescription = Strings.sleepTimer,
-            modifier = Modifier.weight(1f),
-            isSelected = sleepTimerState.isActive,
-            iconSize = actionIconSize,
-            slotHeight = actionSlotHeight,
-            onClick = onShowSleepTimer,
-        )
-        PlaybackActionButton(
-            icon = Icons.Filled.Speaker,
-            contentDescription = Strings.castRoom,
-            modifier = Modifier.weight(1f),
-            isSelected = false,
-            iconSize = actionIconSize,
-            slotHeight = actionSlotHeight,
-            onClick = onShowRoomPicker,
-        )
     }
 }
 
 @Composable
 private fun PlaybackActionButton(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
     contentDescription: String,
     modifier: Modifier = Modifier,
     isSelected: Boolean,
+    accent: Color,
     iconSize: androidx.compose.ui.unit.Dp = 30.dp,
     slotHeight: androidx.compose.ui.unit.Dp = 48.dp,
     onClick: () -> Unit,
@@ -842,7 +943,7 @@ private fun PlaybackActionButton(
         label = "action_button_scale",
     )
     val animatedTint by animateColorAsState(
-        targetValue = if (isSelected) AppColors.Accent else AppColors.TextSecondary,
+        targetValue = if (isSelected) accent else AppColors.TextSecondary,
         label = "action_button_tint",
     )
     Column(
@@ -866,6 +967,158 @@ private fun PlaybackActionButton(
             contentDescription = contentDescription,
             tint = animatedTint,
             modifier = Modifier.size(iconSize),
+        )
+        Text(
+            text = label,
+            color = animatedTint,
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+/**
+ * Play/pause button with a soft accent-colored halo, matching the glowing transport button
+ * in the reference design. The halo fades out when the action is unavailable.
+ */
+@Composable
+private fun GlowPlayerControlButton(
+    icon: PlayerIcon,
+    onClick: () -> Unit,
+    enabled: Boolean,
+    accent: Color,
+    onAccent: Color,
+    buttonSize: androidx.compose.ui.unit.Dp,
+    iconSize: androidx.compose.ui.unit.Dp,
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed) 0.9f else 1f,
+        label = "glow_button_scale",
+    )
+    // The halo is scaled past the button's layout bounds via graphicsLayer, so it never
+    // inflates the surrounding row — that previously pushed the page into scrolling.
+    Box(
+        modifier = Modifier.size(buttonSize),
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .graphicsLayer {
+                    scaleX = 1.9f
+                    scaleY = 1.9f
+                }
+                .background(
+                    Brush.radialGradient(
+                        colors = listOf(
+                            accent.copy(alpha = if (enabled) 0.50f else 0.12f),
+                            accent.copy(alpha = if (enabled) 0.18f else 0.04f),
+                            Color.Transparent,
+                        ),
+                    )
+                ),
+        )
+        Box(
+            modifier = Modifier
+                .size(buttonSize)
+                .graphicsLayer {
+                    scaleX = scale
+                    scaleY = scale
+                }
+                .clip(CircleShape)
+                // White -> accent vertical gradient reads as a lit glass disc, closer to the
+                // reference than a flat accent fill.
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(
+                            Color.White.copy(alpha = if (enabled) 1f else 0.35f),
+                            accent.copy(alpha = if (enabled) 1f else 0.35f),
+                        ),
+                    )
+                )
+                .clickable(
+                    enabled = enabled,
+                    interactionSource = interactionSource,
+                    indication = ripple(bounded = true),
+                    onClick = onClick,
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            PlayerIconGraphic(
+                icon = icon,
+                tint = onAccent.copy(alpha = if (enabled) 1f else 0.35f),
+                modifier = Modifier.size(iconSize),
+            )
+        }
+    }
+}
+
+/**
+ * Immersive player backdrop: the cover is loaded small (256px), blurred with a real gaussian
+ * RenderEffect on API 31+ (older devices fall back to the naturally soft upscaled image),
+ * cross-faded between tracks, then dimmed by a palette-tinted gradient. The gradient stays
+ * translucent enough that the blurred cover colors the whole page instead of collapsing
+ * to black.
+ */
+@Composable
+private fun PlaybackBackdrop(
+    artworkUrl: String?,
+    palette: ArtworkPalette,
+    modifier: Modifier = Modifier,
+) {
+    val context = LocalContext.current
+    val imageLoader = remember(context) { AlbumArtworkImageLoader.get(context) }
+    val blurSupported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+    Box(modifier = modifier.background(palette.backgroundBottom)) {
+        Crossfade(targetState = artworkUrl, label = "backdrop_crossfade") { url ->
+            if (url != null) {
+                val request = remember(url) {
+                    ImageRequest.Builder(context)
+                        .data(plexThumbnailUrl(url, 256))
+                        .build()
+                }
+                AsyncImage(
+                    model = request,
+                    contentDescription = null,
+                    imageLoader = imageLoader,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .then(
+                            if (blurSupported) {
+                                Modifier.graphicsLayer {
+                                    renderEffect = android.graphics.RenderEffect
+                                        .createBlurEffect(50f, 50f, android.graphics.Shader.TileMode.CLAMP)
+                                        .asComposeRenderEffect()
+                                }
+                            } else {
+                                Modifier
+                            }
+                        ),
+                    contentScale = ContentScale.Crop,
+                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(palette.backgroundBottom),
+                )
+            }
+        }
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(
+                            palette.backgroundTop.copy(alpha = 0.45f),
+                            palette.backgroundBottom.copy(alpha = 0.72f),
+                            palette.backgroundBottom.copy(alpha = 0.94f),
+                        ),
+                    )
+                ),
         )
     }
 }
@@ -1275,6 +1528,8 @@ internal fun BottomMiniPlayer(
 ) {
     val currentTrack = state.tracks.getOrNull(state.currentIndex) ?: return
     val displayAlbum = currentTrack.toDisplayAlbum(state.album)
+    // Subtle bridge to the immersive player: tint the bar with a dimmed cover color.
+    val palette = rememberAnimatedArtworkPalette(displayAlbum.thumbUrl)
     val artistName = currentTrack.artistName ?: displayAlbum.artistName ?: Strings.unknownArtist
     val durationMillis = state.durationMillis ?: currentTrack.durationMillis
     val progress = if (durationMillis != null && durationMillis > 0L) {
@@ -1285,7 +1540,7 @@ internal fun BottomMiniPlayer(
     Surface(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(24.dp),
-        color = AppColors.SurfaceStrong,
+        color = palette.backgroundTop,
         border = BorderStroke(1.dp, AppColors.BorderStrong),
         shadowElevation = 10.dp,
     ) {
@@ -1350,14 +1605,14 @@ internal fun BottomMiniPlayer(
                     .padding(start = 16.dp, end = 16.dp, bottom = 12.dp)
                     .height(3.dp)
                     .clip(RoundedCornerShape(2.dp))
-                    .background(AppColors.SurfaceMuted),
+                    .background(Color.White.copy(alpha = 0.14f)),
             ) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth(progress)
                         .height(3.dp)
                         .clip(RoundedCornerShape(2.dp))
-                        .background(AppColors.Accent),
+                        .background(palette.accent),
                 )
             }
         }
@@ -1372,10 +1627,14 @@ internal fun PlayerControlButton(
     highlighted: Boolean = false,
     sizeOverride: androidx.compose.ui.unit.Dp? = null,
     iconSizeOverride: androidx.compose.ui.unit.Dp? = null,
+    highlightedContainerColor: Color = AppColors.Accent,
+    highlightedContentColor: Color = AppColors.SurfaceStrong,
+    unhighlightedContainerColor: Color = AppColors.SurfaceMuted,
+    unhighlightedBorderColor: Color = AppColors.Border,
 ) {
-    val containerColor = if (highlighted) AppColors.Accent else AppColors.SurfaceMuted
-    val contentColor = if (highlighted) AppColors.SurfaceStrong else AppColors.TextPrimary
-    val borderColor = if (highlighted) Color.Transparent else AppColors.Border
+    val containerColor = if (highlighted) highlightedContainerColor else unhighlightedContainerColor
+    val contentColor = if (highlighted) highlightedContentColor else AppColors.TextPrimary
+    val borderColor = if (highlighted) Color.Transparent else unhighlightedBorderColor
     val buttonSize = sizeOverride ?: if (highlighted) 64.dp else 52.dp
     val iconSize = iconSizeOverride ?: if (highlighted) 26.dp else 22.dp
     val interactionSource = remember { MutableInteractionSource() }

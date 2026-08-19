@@ -64,6 +64,9 @@ dependencies {
     implementation(libs.androidx.compose.material.icons.extended)
     implementation(libs.coil.compose)
     implementation(libs.coil.network.okhttp)
+    // Extracts dominant/vibrant colors from album artwork so the player screen can tint
+    // its background and accents after the current cover.
+    implementation(libs.androidx.palette.ktx)
     // Installs the baseline profiles shipped inside Compose artifacts so release builds get
     // AOT-compiled scroll/animation hot paths instead of warming up through JIT.
     implementation(libs.androidx.profileinstaller)

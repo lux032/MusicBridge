@@ -73,6 +73,7 @@ internal fun IconCircleButton(
     enabled: Boolean = true,
     modifier: Modifier = Modifier,
     highlighted: Boolean = false,
+    containerColor: Color? = null,
     content: @Composable BoxScope.() -> Unit,
 ) {
     val interactionSource = remember { MutableInteractionSource() }
@@ -95,7 +96,7 @@ internal fun IconCircleButton(
                 onClick = onClick,
             ),
         shape = CircleShape,
-        color = if (highlighted) AppColors.SurfaceStrong else AppColors.SurfaceMuted,
+        color = if (highlighted) AppColors.SurfaceStrong else (containerColor ?: AppColors.SurfaceMuted),
         border = BorderStroke(
             1.dp,
             if (highlighted) AppColors.BorderStrong else AppColors.Border,
@@ -528,8 +529,10 @@ internal fun FavoriteIconGraphic(
         targetValue = if (isFavorite) selectedSize else baseSize,
         label = "favorite_size",
     )
+    // Honor the caller-provided tint for the favorite state so the playback screen can
+    // recolor the heart with the artwork palette accent.
     val animatedTint by animateColorAsState(
-        targetValue = if (isFavorite) AppColors.Accent else AppColors.TextSecondary,
+        targetValue = if (isFavorite) tint else AppColors.TextSecondary,
         label = "favorite_tint",
     )
     if (isFavorite) {

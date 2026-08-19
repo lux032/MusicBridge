@@ -81,7 +81,11 @@ class MainActivity : ComponentActivity() {
                     containerColor = androidx.compose.ui.graphics.Color.Transparent,
                 ) { innerPadding ->
                     PlexAlbumScreen(
-                        modifier = Modifier.padding(innerPadding)
+                        modifier = Modifier.padding(innerPadding),
+                        // Raw system-bar insets let the playback screen paint its artwork
+                        // backdrop edge-to-edge behind the transparent status/navigation bars.
+                        systemBarTopPadding = innerPadding.calculateTopPadding(),
+                        systemBarBottomPadding = innerPadding.calculateBottomPadding(),
                     )
                 }
             }
@@ -114,7 +118,11 @@ class MainActivity : ComponentActivity() {
     }
 }
 @Composable
-fun PlexAlbumScreen(modifier: Modifier = Modifier) {
+fun PlexAlbumScreen(
+    modifier: Modifier = Modifier,
+    systemBarTopPadding: androidx.compose.ui.unit.Dp = 0.dp,
+    systemBarBottomPadding: androidx.compose.ui.unit.Dp = 0.dp,
+) {
     val context = LocalContext.current
     val activity = context as? MainActivity
     val scope = rememberCoroutineScope()
@@ -384,14 +392,16 @@ fun PlexAlbumScreen(modifier: Modifier = Modifier) {
                     }
                 } else if (currentSection == AppSection.PlaybackDetail) {
                     val sleepTimerState by state.sleepTimerState.collectAsState()
+                    // No outer padding: the player draws its own full-bleed artwork-tinted
+                    // backdrop and applies content padding internally.
                     Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(start = layoutInfo.horizontalPadding, top = 16.dp, end = layoutInfo.horizontalPadding, bottom = contentBottomPadding),
+                        modifier = Modifier.fillMaxSize(),
                     ) {
                         PlaybackDetailSection(
                             state = state.miniPlayerState,
                             rooms = state.sonosRooms,
+                            backdropTopExtension = systemBarTopPadding,
+                            backdropBottomExtension = systemBarBottomPadding,
                             playbackMode = state.playbackMode,
                             sleepTimerState = sleepTimerState,
                             isLoading = state.isPlaybackCommandLoading,
