@@ -1,0 +1,353 @@
+package com.lux032.musicbridge.plex
+
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import java.io.BufferedReader
+import java.io.File
+import java.io.InputStreamReader
+import java.io.RandomAccessFile
+import java.net.HttpURLConnection
+import java.net.Inet4Address
+import java.net.NetworkInterface
+import java.net.ServerSocket
+import java.net.Socket
+import java.net.URL
+import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
+
+/**
+ * Materializes Plex's chunked FLAC transcode and exposes it as a finite, byte-range capable
+ * HTTP resource. Sonos requires file semantics for reliable FLAC playback and seeking.
+ */
+internal class PlexTranscodeProxy private constructor(context: Context) {
+    private val appContext = context.applicationContext
+    private val cacheDirectory = File(appContext.cacheDir, CACHE_DIRECTORY_NAME).apply {
+        mkdirs()
+        listFiles()?.forEach(File::delete)
+    }
+    private val prepareMutex = Mutex()
+    private val resources = ConcurrentHashMap<String, CachedResource>()
+    private val cacheEntries = LinkedHashMap<String, CachedResource>(MAX_CACHE_FILES, 0.75f, true)
+    private val serverLock = Any()
+    private val acceptExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "MusicBridge-FlacProxy-Accept").apply { isDaemon = true }
+    }
+    private val clientExecutor = Executors.newCachedThreadPool { runnable ->
+        Thread(runnable, "MusicBridge-FlacProxy-Client").apply { isDaemon = true }
+    }
+
+    @Volatile
+    private var serverSocket: ServerSocket? = null
+
+    suspend fun preparePlaybackUrl(track: PlexTrackStream): String {
+        if (!track.sourceAudioCodec.equals("opus", ignoreCase = true) ||
+            !track.playbackMimeType.equals(FLAC_MIME_TYPE, ignoreCase = true)
+        ) {
+            return track.streamUrl
+        }
+
+        return withContext(Dispatchers.IO) {
+            prepareMutex.withLock {
+                val cacheKey = buildCacheKey(track)
+                val existing = cacheEntries[cacheKey]
+                    ?.takeIf { it.file.isFile && it.file.length() > 0L }
+                val resource = existing ?: downloadTranscode(track, cacheKey).also {
+                    cacheEntries[cacheKey] = it
+                    resources[it.publicToken] = it
+                    trimCache(it)
+                }
+                val port = ensureServerStarted()
+                val localAddress = resolveWifiIpv4Address()
+                    ?: error("无法确定手机的 Wi-Fi IPv4 地址，不能向 Sonos 提供 FLAC 缓存。")
+                "http://$localAddress:$port/flac/${resource.publicToken}.flac"
+            }
+        }
+    }
+
+    private suspend fun downloadTranscode(track: PlexTrackStream, cacheKey: String): CachedResource {
+        val finalFile = File(cacheDirectory, "$cacheKey.flac")
+        val temporaryFile = File(cacheDirectory, "$cacheKey.part")
+        temporaryFile.delete()
+
+        val connection = (URL(track.streamUrl).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            instanceFollowRedirects = true
+            connectTimeout = CONNECT_TIMEOUT_MILLIS
+            readTimeout = READ_TIMEOUT_MILLIS
+            setRequestProperty("Accept", FLAC_MIME_TYPE)
+            setRequestProperty("Accept-Encoding", "identity")
+        }
+
+        try {
+            val status = connection.responseCode
+            if (status !in 200..299) {
+                val message = connection.errorStream
+                    ?.bufferedReader(StandardCharsets.UTF_8)
+                    ?.use { it.readText().take(300) }
+                    .orEmpty()
+                error("Plex FLAC 转码下载失败：HTTP $status ${message.ifBlank { "无响应内容" }}")
+            }
+
+            val declaredLength = connection.contentLengthLong
+            if (declaredLength > MAX_CACHE_FILE_BYTES) {
+                error("Plex FLAC 转码文件过大：${declaredLength / (1024L * 1024L)} MB。")
+            }
+
+            var downloadedBytes = 0L
+            connection.inputStream.use { input ->
+                temporaryFile.outputStream().buffered().use { output ->
+                    val buffer = ByteArray(COPY_BUFFER_SIZE)
+                    while (true) {
+                        currentCoroutineContext().ensureActive()
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        downloadedBytes += count
+                        if (downloadedBytes > MAX_CACHE_FILE_BYTES) {
+                            error("Plex FLAC 转码文件超过 ${MAX_CACHE_FILE_BYTES / (1024L * 1024L)} MB 限制。")
+                        }
+                        output.write(buffer, 0, count)
+                    }
+                }
+            }
+            check(downloadedBytes > 0L) { "Plex 返回了空的 FLAC 转码文件。" }
+
+            if (!temporaryFile.renameTo(finalFile)) {
+                temporaryFile.copyTo(finalFile, overwrite = true)
+                temporaryFile.delete()
+            }
+            return CachedResource(
+                cacheKey = cacheKey,
+                publicToken = UUID.randomUUID().toString().replace("-", ""),
+                file = finalFile,
+            )
+        } finally {
+            connection.disconnect()
+            if (!finalFile.isFile) temporaryFile.delete()
+        }
+    }
+
+    private fun ensureServerStarted(): Int = synchronized(serverLock) {
+        serverSocket?.takeUnless(ServerSocket::isClosed)?.localPort?.let { return@synchronized it }
+        val socket = ServerSocket(0).apply { reuseAddress = true }
+        serverSocket = socket
+        acceptExecutor.execute {
+            while (!socket.isClosed) {
+                val client = try {
+                    socket.accept()
+                } catch (_: Exception) {
+                    break
+                }
+                clientExecutor.execute { handleClient(client) }
+            }
+        }
+        socket.localPort
+    }
+
+    private fun handleClient(socket: Socket) {
+        socket.use { client ->
+            client.soTimeout = CLIENT_READ_TIMEOUT_MILLIS
+            runCatching {
+                val reader = BufferedReader(InputStreamReader(client.getInputStream(), StandardCharsets.US_ASCII))
+                val requestLine = reader.readLine().orEmpty()
+                val requestParts = requestLine.split(' ')
+                if (requestParts.size < 2) {
+                    writeError(client, 400, "Bad Request")
+                    return
+                }
+                val method = requestParts[0].uppercase()
+                if (method != "GET" && method != "HEAD") {
+                    writeError(client, 405, "Method Not Allowed")
+                    return
+                }
+
+                val headers = mutableMapOf<String, String>()
+                while (true) {
+                    val line = reader.readLine() ?: break
+                    if (line.isEmpty()) break
+                    val separator = line.indexOf(':')
+                    if (separator > 0) {
+                        headers[line.substring(0, separator).trim().lowercase()] =
+                            line.substring(separator + 1).trim()
+                    }
+                }
+
+                val token = requestParts[1]
+                    .substringBefore('?')
+                    .substringAfterLast('/')
+                    .removeSuffix(".flac")
+                val resource = resources[token]?.takeIf { it.file.isFile }
+                if (resource == null) {
+                    writeError(client, 404, "Not Found")
+                    return
+                }
+                serveFile(client, method, resource.file, headers["range"])
+            }.onFailure {
+                runCatching { writeError(client, 500, "Internal Server Error") }
+            }
+        }
+    }
+
+    private fun serveFile(socket: Socket, method: String, file: File, rangeHeader: String?) {
+        val fileLength = file.length()
+        val requestedRange = parseRange(rangeHeader, fileLength)
+        if (rangeHeader != null && requestedRange == null) {
+            writeHeaders(
+                socket = socket,
+                status = "416 Range Not Satisfiable",
+                contentLength = 0L,
+                extraHeaders = listOf("Content-Range: bytes */$fileLength"),
+            )
+            return
+        }
+
+        val start = requestedRange?.first ?: 0L
+        val endInclusive = requestedRange?.last ?: (fileLength - 1L)
+        val responseLength = (endInclusive - start + 1L).coerceAtLeast(0L)
+        val extraHeaders = buildList {
+            add("Accept-Ranges: bytes")
+            if (requestedRange != null) add("Content-Range: bytes $start-$endInclusive/$fileLength")
+        }
+        writeHeaders(
+            socket = socket,
+            status = if (requestedRange == null) "200 OK" else "206 Partial Content",
+            contentLength = responseLength,
+            extraHeaders = extraHeaders,
+        )
+        if (method == "HEAD" || responseLength == 0L) return
+
+        RandomAccessFile(file, "r").use { input ->
+            input.seek(start)
+            val output = socket.getOutputStream()
+            val buffer = ByteArray(COPY_BUFFER_SIZE)
+            var remaining = responseLength
+            while (remaining > 0L) {
+                val count = input.read(buffer, 0, minOf(buffer.size.toLong(), remaining).toInt())
+                if (count < 0) break
+                output.write(buffer, 0, count)
+                remaining -= count
+            }
+            output.flush()
+        }
+    }
+
+    private fun parseRange(header: String?, fileLength: Long): LongRange? {
+        if (header == null) return null
+        if (!header.startsWith("bytes=", ignoreCase = true) || fileLength <= 0L) return null
+        val value = header.substringAfter('=').substringBefore(',').trim()
+        val parts = value.split('-', limit = 2)
+        if (parts.size != 2) return null
+
+        val start: Long
+        val endInclusive: Long
+        if (parts[0].isBlank()) {
+            val suffixLength = parts[1].toLongOrNull()?.takeIf { it > 0L } ?: return null
+            start = (fileLength - suffixLength).coerceAtLeast(0L)
+            endInclusive = fileLength - 1L
+        } else {
+            start = parts[0].toLongOrNull() ?: return null
+            endInclusive = parts[1].toLongOrNull() ?: (fileLength - 1L)
+        }
+        if (start < 0L || start >= fileLength || endInclusive < start) return null
+        return start..minOf(endInclusive, fileLength - 1L)
+    }
+
+    private fun writeError(socket: Socket, code: Int, reason: String) {
+        writeHeaders(socket, "$code $reason", 0L, emptyList())
+    }
+
+    private fun writeHeaders(
+        socket: Socket,
+        status: String,
+        contentLength: Long,
+        extraHeaders: List<String>,
+    ) {
+        val response = buildString {
+            append("HTTP/1.1 $status\r\n")
+            append("Content-Type: $FLAC_MIME_TYPE\r\n")
+            append("Content-Length: $contentLength\r\n")
+            append("Cache-Control: no-store\r\n")
+            append("Connection: close\r\n")
+            extraHeaders.forEach { append(it).append("\r\n") }
+            append("\r\n")
+        }
+        socket.getOutputStream().write(response.toByteArray(StandardCharsets.US_ASCII))
+        socket.getOutputStream().flush()
+    }
+
+    private fun resolveWifiIpv4Address(): String? {
+        val connectivityManager = appContext.getSystemService(ConnectivityManager::class.java)
+        connectivityManager?.allNetworks
+            ?.firstOrNull { network ->
+                connectivityManager.getNetworkCapabilities(network)
+                    ?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
+            }
+            ?.let(connectivityManager::getLinkProperties)
+            ?.linkAddresses
+            ?.firstOrNull { address -> address.address is Inet4Address && !address.address.isLoopbackAddress }
+            ?.address
+            ?.hostAddress
+            ?.let { return it }
+
+        return NetworkInterface.getNetworkInterfaces().toList()
+            .sortedByDescending { it.name.equals("wlan0", ignoreCase = true) }
+            .asSequence()
+            .flatMap { it.inetAddresses.toList().asSequence() }
+            .filterIsInstance<Inet4Address>()
+            .firstOrNull { !it.isLoopbackAddress && it.isSiteLocalAddress }
+            ?.hostAddress
+    }
+
+    private fun trimCache(protectedResource: CachedResource) {
+        while (cacheEntries.size > MAX_CACHE_FILES || totalCacheBytes() > MAX_TOTAL_CACHE_BYTES) {
+            val entry = cacheEntries.entries.firstOrNull { it.value !== protectedResource } ?: break
+            cacheEntries.remove(entry.key)
+            resources.remove(entry.value.publicToken)
+            entry.value.file.delete()
+        }
+    }
+
+    private fun totalCacheBytes(): Long = cacheEntries.values.sumOf { it.file.length() }
+
+    private fun buildCacheKey(track: PlexTrackStream): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest("${track.sourceId}:${track.ratingKey}:${track.streamUrl}".toByteArray(StandardCharsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+        return digest.take(24)
+    }
+
+    private data class CachedResource(
+        val cacheKey: String,
+        val publicToken: String,
+        val file: File,
+    )
+
+    companion object {
+        private const val CACHE_DIRECTORY_NAME = "plex_flac_proxy"
+        private const val FLAC_MIME_TYPE = "audio/flac"
+        private const val CONNECT_TIMEOUT_MILLIS = 15_000
+        private const val READ_TIMEOUT_MILLIS = 120_000
+        private const val CLIENT_READ_TIMEOUT_MILLIS = 15_000
+        private const val COPY_BUFFER_SIZE = 64 * 1024
+        private const val MAX_CACHE_FILES = 3
+        private const val MAX_CACHE_FILE_BYTES = 512L * 1024L * 1024L
+        private const val MAX_TOTAL_CACHE_BYTES = 384L * 1024L * 1024L
+
+        @Volatile
+        private var instance: PlexTranscodeProxy? = null
+
+        fun getInstance(context: Context): PlexTranscodeProxy =
+            instance ?: synchronized(this) {
+                instance ?: PlexTranscodeProxy(context).also { instance = it }
+            }
+    }
+}

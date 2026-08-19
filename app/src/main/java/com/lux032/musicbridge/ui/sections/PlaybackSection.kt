@@ -45,6 +45,7 @@ import com.lux032.musicbridge.plex.PlexAlbum
 import com.lux032.musicbridge.plex.PlexAlbumTracksResult
 import com.lux032.musicbridge.plex.PlexTrackStream
 import com.lux032.musicbridge.plex.isFavorite
+import com.lux032.musicbridge.plex.playbackUrlIdentity
 import com.lux032.musicbridge.sonos.SonosController
 import com.lux032.musicbridge.sonos.SonosRoom
 import kotlinx.coroutines.delay
@@ -1648,6 +1649,7 @@ internal suspend fun playAlbumSequentially(
     trackResult: PlexAlbumTracksResult,
     startIndex: Int = 0,
     initialPositionMillis: Long = 0L,
+    prepareTrackUrl: suspend (PlexTrackStream) -> String = { it.streamUrl },
     getTracks: () -> List<PlexTrackStream> = { trackResult.tracks },
     getNextIndex: (Int) -> Int?,
     onTrackChanged: (Int, PlexTrackStream, Long) -> Unit,
@@ -1665,11 +1667,13 @@ internal suspend fun playAlbumSequentially(
         val track = tracks[index]
         val startPositionMillis = if (isFirstTrack) initialPositionMillis.coerceAtLeast(0L) else 0L
         isFirstTrack = false
+        val playbackUrl = prepareTrackUrl(track)
         sonosController.playTrack(
             room = room,
-            trackUrl = track.streamUrl,
+            trackUrl = playbackUrl,
             title = track.title,
             albumTitle = track.albumTitle ?: trackResult.album.title,
+            mimeType = track.playbackMimeType,
         )
         if (startPositionMillis > 0L) {
             sonosController.seek(room, (startPositionMillis / 1_000L).toInt())
@@ -1681,7 +1685,7 @@ internal suspend fun playAlbumSequentially(
         waitForTrackToFinish(
             sonosController = sonosController,
             room = room,
-            expectedTrackUrl = track.streamUrl,
+            expectedTrackUrl = playbackUrl,
             expectedDurationMillis = track.durationMillis,
         )
 
@@ -1713,8 +1717,8 @@ internal suspend fun waitForTrackToFinish(
         delay(1_000)
         val status = sonosController.getPlaybackStatus(room)
         val currentUri = status.currentTrackUri.orEmpty()
-        val normalizedExpected = expectedTrackUrl.substringBefore('?')
-        val normalizedCurrent = currentUri.substringBefore('?')
+        val normalizedExpected = playbackUrlIdentity(expectedTrackUrl)
+        val normalizedCurrent = playbackUrlIdentity(currentUri)
 
         if (normalizedCurrent.isNotBlank() && normalizedCurrent != normalizedExpected) {
             return

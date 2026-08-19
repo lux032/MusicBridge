@@ -260,13 +260,20 @@ class SonosDiscovery(private val context: Context) {
 }
 
 class SonosController {
-    suspend fun playTrack(room: SonosRoom, trackUrl: String, title: String, albumTitle: String) = withContext(Dispatchers.IO) {
+    suspend fun playTrack(
+        room: SonosRoom,
+        trackUrl: String,
+        title: String,
+        albumTitle: String,
+        mimeType: String? = null,
+    ) = withContext(Dispatchers.IO) {
         val controlUrl = "${room.coordinatorBaseUrl}/MediaRenderer/AVTransport/Control"
         val serviceType = "urn:schemas-upnp-org:service:AVTransport:1"
         val didl = buildTrackMetadata(
             trackUrl = trackUrl,
             title = title,
             albumTitle = albumTitle,
+            mimeType = mimeType,
         )
 
         soapRequest(
@@ -399,9 +406,10 @@ private fun buildTrackMetadata(
     trackUrl: String,
     title: String,
     albumTitle: String,
+    mimeType: String? = null,
     creator: String? = null,
 ): String = buildString {
-    val protocolInfo = "http-get:*:${guessMimeType(trackUrl)}:*"
+    val protocolInfo = "http-get:*:${mimeType?.takeIf { it.isNotBlank() } ?: guessMimeType(trackUrl)}:*"
     append("""<DIDL-Lite xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/" xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/">""")
     append("""<item id="0" parentID="0" restricted="1">""")
     append("<dc:title>${xmlEscape(title)}</dc:title>")

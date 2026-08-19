@@ -318,6 +318,8 @@ class AlbumLocalStore(context: Context) {
             albumTitle = nullableString(AlbumDatabaseHelper.COLUMN_TRACK_ALBUM_TITLE),
             artistName = nullableString(AlbumDatabaseHelper.COLUMN_TRACK_ARTIST_NAME),
             thumbUrl = nullableString(AlbumDatabaseHelper.COLUMN_TRACK_THUMB_URL),
+            sourceAudioCodec = nullableString(AlbumDatabaseHelper.COLUMN_TRACK_SOURCE_AUDIO_CODEC),
+            playbackMimeType = nullableString(AlbumDatabaseHelper.COLUMN_TRACK_PLAYBACK_MIME_TYPE),
             sourceId = string(AlbumDatabaseHelper.COLUMN_SOURCE_ID),
         )
     }
@@ -351,6 +353,8 @@ class AlbumLocalStore(context: Context) {
             put(AlbumDatabaseHelper.COLUMN_TRACK_ALBUM_TITLE, albumTitle)
             put(AlbumDatabaseHelper.COLUMN_TRACK_ARTIST_NAME, artistName)
             put(AlbumDatabaseHelper.COLUMN_TRACK_THUMB_URL, thumbUrl)
+            put(AlbumDatabaseHelper.COLUMN_TRACK_SOURCE_AUDIO_CODEC, sourceAudioCodec)
+            put(AlbumDatabaseHelper.COLUMN_TRACK_PLAYBACK_MIME_TYPE, playbackMimeType)
         }
 
     private companion object {
@@ -385,11 +389,19 @@ private class AlbumDatabaseHelper(context: Context) :
             createTracksTable(db)
             createAlbumTracksTable(db)
         }
+        if (oldVersion >= 5 && oldVersion < 6) {
+            // Existing rows do not contain codec metadata, so keeping them would let cached
+            // Opus tracks bypass the new Plex transcode path until the next full refresh.
+            db.execSQL("DROP TABLE IF EXISTS $TABLE_TRACKS")
+            db.execSQL("DROP TABLE IF EXISTS $TABLE_ALBUM_TRACKS")
+            createTracksTable(db)
+            createAlbumTracksTable(db)
+        }
     }
 
     companion object {
         private const val DATABASE_NAME = "plex_album_cache.db"
-        private const val DATABASE_VERSION = 5
+        private const val DATABASE_VERSION = 6
 
         const val TABLE_ALBUMS = "albums"
         const val TABLE_TRACKS = "tracks"
@@ -416,6 +428,8 @@ private class AlbumDatabaseHelper(context: Context) :
         const val COLUMN_TRACK_ALBUM_TITLE = "album_title"
         const val COLUMN_TRACK_ARTIST_NAME = "artist_name"
         const val COLUMN_TRACK_THUMB_URL = "thumb_url"
+        const val COLUMN_TRACK_SOURCE_AUDIO_CODEC = "source_audio_codec"
+        const val COLUMN_TRACK_PLAYBACK_MIME_TYPE = "playback_mime_type"
     }
 
     private fun createAlbumsTable(db: SQLiteDatabase) {
@@ -461,6 +475,8 @@ private class AlbumDatabaseHelper(context: Context) :
                 $COLUMN_TRACK_ALBUM_TITLE TEXT,
                 $COLUMN_TRACK_ARTIST_NAME TEXT,
                 $COLUMN_TRACK_THUMB_URL TEXT,
+                $COLUMN_TRACK_SOURCE_AUDIO_CODEC TEXT,
+                $COLUMN_TRACK_PLAYBACK_MIME_TYPE TEXT,
                 PRIMARY KEY ($COLUMN_SOURCE_ID, $COLUMN_TRACK_RATING_KEY)
             )
             """.trimIndent()
@@ -488,6 +504,8 @@ private class AlbumDatabaseHelper(context: Context) :
                 $COLUMN_TRACK_ALBUM_TITLE TEXT,
                 $COLUMN_TRACK_ARTIST_NAME TEXT,
                 $COLUMN_TRACK_THUMB_URL TEXT,
+                $COLUMN_TRACK_SOURCE_AUDIO_CODEC TEXT,
+                $COLUMN_TRACK_PLAYBACK_MIME_TYPE TEXT,
                 PRIMARY KEY ($COLUMN_SOURCE_ID, $COLUMN_TRACK_RATING_KEY)
             )
             """.trimIndent()
@@ -496,4 +514,5 @@ private class AlbumDatabaseHelper(context: Context) :
             "CREATE INDEX IF NOT EXISTS index_album_tracks_album_key ON $TABLE_ALBUM_TRACKS($COLUMN_SOURCE_ID, $COLUMN_TRACK_ALBUM_RATING_KEY)"
         )
     }
+
 }

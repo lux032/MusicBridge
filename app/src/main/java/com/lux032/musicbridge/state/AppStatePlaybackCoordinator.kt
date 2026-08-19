@@ -5,6 +5,7 @@ import com.lux032.musicbridge.plex.PlexAlbumTracksResult
 import com.lux032.musicbridge.plex.PlexPlaylistTracksResult
 import com.lux032.musicbridge.plex.PlexSection
 import com.lux032.musicbridge.plex.PlexTrackStream
+import com.lux032.musicbridge.plex.playbackUrlIdentity
 import com.lux032.musicbridge.service.PlaybackForegroundService
 import com.lux032.musicbridge.sonos.SonosDiscovery
 import com.lux032.musicbridge.sonos.SonosPlaybackStatus
@@ -66,11 +67,16 @@ internal class AppStatePlaybackCoordinator(
         state.actionMessage = null
         state.scope.launch {
             runCatching {
+                if (targetTrack.sourceAudioCodec.equals("opus", ignoreCase = true)) {
+                    state.actionMessage = "正在准备 FLAC 缓存：${targetTrack.title}"
+                }
+                val playbackUrl = state.plexTranscodeProxy.preparePlaybackUrl(targetTrack)
                 state.sonosController.playTrack(
                     room = room,
-                    trackUrl = targetTrack.streamUrl,
+                    trackUrl = playbackUrl,
                     title = targetTrack.title,
                     albumTitle = targetTrack.albumTitle ?: displayAlbum.title,
+                    mimeType = targetTrack.playbackMimeType,
                 )
                 if (initialPositionMillis > 0L) {
                     state.sonosController.seek(room, (initialPositionMillis / 1_000L).toInt())
@@ -128,6 +134,7 @@ internal class AppStatePlaybackCoordinator(
                     trackResult = albumTrackResult,
                     startIndex = startIndex,
                     initialPositionMillis = initialPositionMillis,
+                    prepareTrackUrl = state.plexTranscodeProxy::preparePlaybackUrl,
                     getTracks = { state.miniPlayerState?.tracks ?: albumTrackResult.tracks },
                     getNextIndex = { currentIndex ->
                         resolveNextPlaybackIndex(
@@ -273,6 +280,7 @@ internal class AppStatePlaybackCoordinator(
                     trackResult = PlexAlbumTracksResult("", fakeAlbum, tracks),
                     startIndex = 0,
                     initialPositionMillis = 0L,
+                    prepareTrackUrl = state.plexTranscodeProxy::preparePlaybackUrl,
                     getTracks = { state.miniPlayerState?.tracks ?: tracks },
                     getNextIndex = { currentIndex ->
                         val queueSize = state.miniPlayerState?.tracks?.size ?: tracks.size
@@ -683,9 +691,9 @@ internal class AppStatePlaybackCoordinator(
         latestMiniPlayerState: MiniPlayerState,
         status: SonosPlaybackStatus,
     ): PlexTrackStream? {
-        val normalizedCurrentUri = status.currentTrackUri.orEmpty().substringBefore('?')
+        val normalizedCurrentUri = playbackUrlIdentity(status.currentTrackUri.orEmpty())
         if (normalizedCurrentUri.isNotBlank()) {
-            tracks.firstOrNull { it.streamUrl.substringBefore('?') == normalizedCurrentUri }?.let { return it }
+            tracks.firstOrNull { playbackUrlIdentity(it.streamUrl) == normalizedCurrentUri }?.let { return it }
         }
         return tracks.getOrNull(latestMiniPlayerState.currentIndex)
     }

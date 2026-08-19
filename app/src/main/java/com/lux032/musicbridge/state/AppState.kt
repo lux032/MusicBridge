@@ -17,6 +17,7 @@ import com.lux032.musicbridge.plex.PlexClient
 import com.lux032.musicbridge.plex.PlexPlaylist
 import com.lux032.musicbridge.plex.PlexPlaylistTracksResult
 import com.lux032.musicbridge.plex.PlexTrackStream
+import com.lux032.musicbridge.plex.PlexTranscodeProxy
 import com.lux032.musicbridge.plex.isFavorite
 import com.lux032.musicbridge.music.Music032Client
 import com.lux032.musicbridge.music.MusicSourceClient
@@ -39,8 +40,10 @@ class AppState(
     internal val context = application.applicationContext
     internal val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     internal val appPreferences = AppPreferences(context)
+    private val plexClientIdentifier = appPreferences.loadOrCreatePlexClientIdentifier()
     internal val albumLocalStore = AlbumLocalStore(context)
     internal val sonosController = SonosController()
+    internal val plexTranscodeProxy = PlexTranscodeProxy.getInstance(context)
 
     private val initialProfiles = appPreferences.loadServerProfiles()
     private val initialActiveServerId = appPreferences.loadActiveServerId(initialProfiles)
@@ -197,6 +200,7 @@ class AppState(
                     baseUrl = preferences.baseUrl,
                     token = preferences.token,
                     sourceId = preferences.id,
+                    clientIdentifier = plexClientIdentifier,
                 )
             )
             MusicServerType.Music032 -> Music032Client(preferences)
