@@ -37,8 +37,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asComposeRenderEffect
-import androidx.compose.ui.layout.layout
-import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -85,9 +84,10 @@ internal fun PlaybackDetailSection(
     onSelectRoom: (SonosRoom) -> Unit,
     onStartSleepTimer: (Int, Int) -> Unit,
     onCancelSleepTimer: () -> Unit,
-    // How far the backdrop paints beyond the section bounds into the transparent system bars.
-    backdropTopExtension: androidx.compose.ui.unit.Dp = 0.dp,
-    backdropBottomExtension: androidx.compose.ui.unit.Dp = 0.dp,
+    // The playback screen lays out edge-to-edge; these insets keep foreground content inside
+    // the safe area while the backdrop paints behind the transparent system bars.
+    topSystemBarInset: androidx.compose.ui.unit.Dp = 0.dp,
+    bottomSystemBarInset: androidx.compose.ui.unit.Dp = 0.dp,
 ) {
     val currentState = state
     val currentTrack = currentState?.tracks?.getOrNull(currentState.currentIndex)
@@ -164,14 +164,9 @@ internal fun PlaybackDetailSection(
                 .widthIn(max = maximumSize)
                 .fillMaxWidth()
                 .aspectRatio(1f)
-                // Colored ambient/spot shadow makes the cover glow with the palette accent.
-                .shadow(
-                    elevation = 30.dp,
-                    shape = artworkShape,
-                    clip = false,
-                    ambientColor = palette.accent,
-                    spotColor = palette.accent,
-                )
+                // Subtle black depth shadow only — the blurred backdrop already provides the
+                // ambiance, and a strong colored glow reads as a dark band above the cover.
+                .shadow(10.dp, artworkShape, clip = false)
                 .clip(artworkShape),
             contentScale = ContentScale.Crop,
             thumbnailSize = maximumSize,
@@ -387,28 +382,12 @@ internal fun PlaybackDetailSection(
         val compactLandscape = layoutInfo.isLandscape && maxHeight < 500.dp
 
         // Full-bleed backdrop: blurred cover cross-fading on track change, dimmed by a
-        // palette-tinted gradient so foreground content stays readable. The layout modifier
-        // extends the paint area (but not the section's layout size) into the status and
-        // navigation bar regions; no parent in the tree clips, so it shows through the
-        // transparent system bars.
+        // palette-tinted gradient so foreground content stays readable. The section itself is
+        // laid out edge-to-edge, so this naturally paints behind the system bars.
         PlaybackBackdrop(
             artworkUrl = displayAlbum.thumbUrl,
             palette = palette,
-            modifier = Modifier
-                .layout { measurable, constraints ->
-                    val topPx = backdropTopExtension.roundToPx()
-                    val bottomPx = backdropBottomExtension.roundToPx()
-                    val extendedMaxHeight = if (constraints.maxHeight == Constraints.Infinity) {
-                        constraints.maxHeight
-                    } else {
-                        constraints.maxHeight + topPx + bottomPx
-                    }
-                    val placeable = measurable.measure(constraints.copy(maxHeight = extendedMaxHeight))
-                    layout(constraints.maxWidth, constraints.maxHeight) {
-                        placeable.place(0, -topPx)
-                    }
-                }
-                .fillMaxSize(),
+            modifier = Modifier.fillMaxSize(),
         )
 
         Column(
@@ -416,9 +395,9 @@ internal fun PlaybackDetailSection(
                 .fillMaxSize()
                 .padding(
                     start = layoutInfo.horizontalPadding,
-                    top = 16.dp,
+                    top = 16.dp + topSystemBarInset,
                     end = layoutInfo.horizontalPadding,
-                    bottom = 20.dp,
+                    bottom = 20.dp + bottomSystemBarInset,
                 ),
         ) {
             topBar()
@@ -998,12 +977,14 @@ private fun GlowPlayerControlButton(
         targetValue = if (isPressed) 0.9f else 1f,
         label = "glow_button_scale",
     )
-    // The halo is scaled past the button's layout bounds via graphicsLayer, so it never
-    // inflates the surrounding row — that previously pushed the page into scrolling.
+    // The glow layers are scaled past the button's layout bounds via graphicsLayer, so they
+    // never inflate the surrounding row — that previously pushed the page into scrolling.
     Box(
         modifier = Modifier.size(buttonSize),
         contentAlignment = Alignment.Center,
     ) {
+        // Soft ambient halo spilling onto the background — kept weak so the top arc reads
+        // as the dominant glow element, like the reference design.
         Box(
             modifier = Modifier
                 .matchParentSize()
@@ -1013,13 +994,24 @@ private fun GlowPlayerControlButton(
                 }
                 .background(
                     Brush.radialGradient(
-                        colors = listOf(
-                            accent.copy(alpha = if (enabled) 0.50f else 0.12f),
-                            accent.copy(alpha = if (enabled) 0.18f else 0.04f),
-                            Color.Transparent,
+                        colorStops = arrayOf(
+                            0.0f to accent.copy(alpha = if (enabled) 0.06f else 0.02f),
+                            0.52f to accent.copy(alpha = if (enabled) 0.14f else 0.04f),
+                            1.0f to Color.Transparent,
                         ),
                     )
                 ),
+        )
+        // Luminous arc hugging the top of the button edge, like the reference design — the
+        // glow is brightest above the button and fades out towards the bottom.
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .graphicsLayer {
+                    scaleX = 1.6f
+                    scaleY = 1.6f
+                }
+                .background(ArcRingGlowBrush(color = accent, enabled = enabled)),
         )
         Box(
             modifier = Modifier
@@ -1053,6 +1045,66 @@ private fun GlowPlayerControlButton(
                 modifier = Modifier.size(iconSize),
             )
         }
+    }
+}
+
+/**
+ * Top-arc ring glow for the play button. A radial band profile (ring shape peaking just
+ * outside the button edge) multiplied by an angular falloff (brightest at 12 o'clock, fading
+ * to nothing at the bottom) produces the reference design's half-ring halo.
+ *
+ * SweepGradient angles run clockwise from 3 o'clock, so fraction 0.75 is straight up.
+ */
+private class ArcRingGlowBrush(
+    private val color: Color,
+    private val enabled: Boolean,
+) : androidx.compose.ui.graphics.ShaderBrush() {
+    override fun createShader(size: androidx.compose.ui.geometry.Size): android.graphics.Shader {
+        val cx = size.width / 2f
+        val cy = size.height / 2f
+        val radius = size.minDimension / 2f
+        val strength = if (enabled) 1f else 0.25f
+
+        fun withAlpha(argb: Int, alpha: Float): Int =
+            androidx.core.graphics.ColorUtils.setAlphaComponent(
+                argb,
+                (alpha.coerceIn(0f, 1f) * 255).toInt(),
+            )
+
+        val ringColor = color.toArgb()
+        val white = android.graphics.Color.WHITE
+        val transparent = android.graphics.Color.TRANSPARENT
+
+        // Ring band: the button covers the inner 1/1.6 ≈ 0.62 of this box's radius; a narrow,
+        // bright peak just outside the edge reads as a crisp arc line rather than a fog ring.
+        val radial = android.graphics.RadialGradient(
+            cx, cy, radius,
+            intArrayOf(
+                transparent,
+                transparent,
+                withAlpha(ringColor, 0.90f * strength),
+                withAlpha(ringColor, 0.28f * strength),
+                transparent,
+            ),
+            floatArrayOf(0.00f, 0.59f, 0.645f, 0.72f, 0.82f),
+            android.graphics.Shader.TileMode.CLAMP,
+        )
+        // Angular falloff: full strength at the top (0.75), fully gone around the bottom.
+        val sweep = android.graphics.SweepGradient(
+            cx, cy,
+            intArrayOf(
+                withAlpha(white, 0.10f),
+                withAlpha(white, 0.00f),
+                withAlpha(white, 0.00f),
+                withAlpha(white, 0.10f),
+                withAlpha(white, 0.55f),
+                withAlpha(white, 1.00f),
+                withAlpha(white, 0.55f),
+                withAlpha(white, 0.10f),
+            ),
+            floatArrayOf(0.00f, 0.13f, 0.25f, 0.37f, 0.63f, 0.75f, 0.87f, 1.00f),
+        )
+        return android.graphics.ComposeShader(radial, sweep, android.graphics.PorterDuff.Mode.MULTIPLY)
     }
 }
 
@@ -1111,11 +1163,15 @@ private fun PlaybackBackdrop(
             modifier = Modifier
                 .fillMaxSize()
                 .background(
+                    // Non-uniform stops keep the upper half translucent so the blurred cover
+                    // shows through, then deepen smoothly towards the bottom. Evenly spaced
+                    // stops created a visible mid-screen "layer" transition.
                     Brush.verticalGradient(
-                        colors = listOf(
-                            palette.backgroundTop.copy(alpha = 0.45f),
-                            palette.backgroundBottom.copy(alpha = 0.72f),
-                            palette.backgroundBottom.copy(alpha = 0.94f),
+                        colorStops = arrayOf(
+                            0.00f to palette.backgroundTop.copy(alpha = 0.58f),
+                            0.30f to palette.backgroundTop.copy(alpha = 0.42f),
+                            0.65f to palette.backgroundBottom.copy(alpha = 0.74f),
+                            1.00f to palette.backgroundBottom.copy(alpha = 0.95f),
                         ),
                     )
                 ),

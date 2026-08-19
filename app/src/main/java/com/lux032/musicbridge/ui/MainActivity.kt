@@ -19,6 +19,7 @@ import androidx.compose.foundation.LocalOverscrollFactory
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -81,9 +82,9 @@ class MainActivity : ComponentActivity() {
                     containerColor = androidx.compose.ui.graphics.Color.Transparent,
                 ) { innerPadding ->
                     PlexAlbumScreen(
-                        modifier = Modifier.padding(innerPadding),
-                        // Raw system-bar insets let the playback screen paint its artwork
-                        // backdrop edge-to-edge behind the transparent status/navigation bars.
+                        // Applied per-section inside: the playback screen goes edge-to-edge so
+                        // its artwork backdrop paints behind the transparent system bars.
+                        contentPadding = innerPadding,
                         systemBarTopPadding = innerPadding.calculateTopPadding(),
                         systemBarBottomPadding = innerPadding.calculateBottomPadding(),
                     )
@@ -120,6 +121,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun PlexAlbumScreen(
     modifier: Modifier = Modifier,
+    contentPadding: PaddingValues = PaddingValues(),
     systemBarTopPadding: androidx.compose.ui.unit.Dp = 0.dp,
     systemBarBottomPadding: androidx.compose.ui.unit.Dp = 0.dp,
 ) {
@@ -253,6 +255,12 @@ fun PlexAlbumScreen(
     Row(
         modifier = modifier
             .fillMaxSize()
+            // The playback detail screen lays out edge-to-edge and paints its own backdrop
+            // under the system bars; every other section keeps the scaffold's safe padding.
+            .then(
+                if (activeSection == AppSection.PlaybackDetail) Modifier
+                else Modifier.padding(contentPadding)
+            )
             .background(
                 brush = Brush.verticalGradient(
                     colors = listOf(AppColors.BackgroundTop, AppColors.BackgroundBottom),
@@ -400,8 +408,8 @@ fun PlexAlbumScreen(
                         PlaybackDetailSection(
                             state = state.miniPlayerState,
                             rooms = state.sonosRooms,
-                            backdropTopExtension = systemBarTopPadding,
-                            backdropBottomExtension = systemBarBottomPadding,
+                            topSystemBarInset = systemBarTopPadding,
+                            bottomSystemBarInset = systemBarBottomPadding,
                             playbackMode = state.playbackMode,
                             sleepTimerState = sleepTimerState,
                             isLoading = state.isPlaybackCommandLoading,
