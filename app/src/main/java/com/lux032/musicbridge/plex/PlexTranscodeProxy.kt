@@ -3,9 +3,8 @@ package com.lux032.musicbridge.plex
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import android.util.Log
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -24,6 +23,9 @@ import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 
 /**
  * Materializes Plex's chunked FLAC transcode and exposes it as a finite, byte-range capable
@@ -45,6 +47,9 @@ internal class PlexTranscodeProxy private constructor(context: Context) {
     private val clientExecutor = Executors.newCachedThreadPool { runnable ->
         Thread(runnable, "MusicBridge-FlacProxy-Client").apply { isDaemon = true }
     }
+    private val downloadExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "MusicBridge-FlacProxy-Download").apply { isDaemon = true }
+    }
 
     @Volatile
     private var serverSocket: ServerSocket? = null
@@ -59,13 +64,17 @@ internal class PlexTranscodeProxy private constructor(context: Context) {
         return withContext(Dispatchers.IO) {
             prepareMutex.withLock {
                 val cacheKey = buildCacheKey(track)
-                val existing = cacheEntries[cacheKey]
-                    ?.takeIf { it.file.isFile && it.file.length() > 0L }
-                val resource = existing ?: downloadTranscode(track, cacheKey).also {
+                val existing = cacheEntries[cacheKey]?.takeIf {
+                    it.file.isFile && it.failureMessage == null
+                }
+                Log.i(LOG_TAG, "prepare cache=${if (existing == null) "miss" else "hit"} key=$cacheKey")
+                val resource = existing ?: createProgressiveResource(cacheKey).also {
                     cacheEntries[cacheKey] = it
                     resources[it.publicToken] = it
-                    trimCache(it)
+                    downloadExecutor.execute { downloadTranscode(track, it) }
                 }
+                waitForInitialBuffer(resource)
+                trimCache(resource)
                 val port = ensureServerStarted()
                 val localAddress = resolveWifiIpv4Address()
                     ?: error("无法确定手机的 Wi-Fi IPv4 地址，不能向 Sonos 提供 FLAC 缓存。")
@@ -74,11 +83,7 @@ internal class PlexTranscodeProxy private constructor(context: Context) {
         }
     }
 
-    private suspend fun downloadTranscode(track: PlexTrackStream, cacheKey: String): CachedResource {
-        val finalFile = File(cacheDirectory, "$cacheKey.flac")
-        val temporaryFile = File(cacheDirectory, "$cacheKey.part")
-        temporaryFile.delete()
-
+    private fun downloadTranscode(track: PlexTrackStream, resource: CachedResource) {
         val connection = (URL(track.streamUrl).openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             instanceFollowRedirects = true
@@ -89,6 +94,7 @@ internal class PlexTranscodeProxy private constructor(context: Context) {
         }
 
         try {
+            Log.i(LOG_TAG, "download start key=${resource.cacheKey}")
             val status = connection.responseCode
             if (status !in 200..299) {
                 val message = connection.errorStream
@@ -105,10 +111,9 @@ internal class PlexTranscodeProxy private constructor(context: Context) {
 
             var downloadedBytes = 0L
             connection.inputStream.use { input ->
-                temporaryFile.outputStream().buffered().use { output ->
+                resource.file.outputStream().use { output ->
                     val buffer = ByteArray(COPY_BUFFER_SIZE)
                     while (true) {
-                        currentCoroutineContext().ensureActive()
                         val count = input.read(buffer)
                         if (count < 0) break
                         downloadedBytes += count
@@ -116,30 +121,55 @@ internal class PlexTranscodeProxy private constructor(context: Context) {
                             error("Plex FLAC 转码文件超过 ${MAX_CACHE_FILE_BYTES / (1024L * 1024L)} MB 限制。")
                         }
                         output.write(buffer, 0, count)
+                        resource.signalDataAvailable()
                     }
                 }
             }
             check(downloadedBytes > 0L) { "Plex 返回了空的 FLAC 转码文件。" }
-
-            if (!temporaryFile.renameTo(finalFile)) {
-                temporaryFile.copyTo(finalFile, overwrite = true)
-                temporaryFile.delete()
-            }
-            return CachedResource(
-                cacheKey = cacheKey,
-                publicToken = UUID.randomUUID().toString().replace("-", ""),
-                file = finalFile,
-            )
+            resource.isComplete = true
+            resource.signalDataAvailable()
+            Log.i(LOG_TAG, "download complete key=${resource.cacheKey} bytes=$downloadedBytes")
+        } catch (error: Throwable) {
+            resource.failureMessage = error.message ?: error.javaClass.simpleName
+            resource.signalDataAvailable()
+            Log.w(LOG_TAG, "download failed key=${resource.cacheKey}: ${resource.failureMessage}")
         } finally {
             connection.disconnect()
-            if (!finalFile.isFile) temporaryFile.delete()
         }
+    }
+
+    private fun createProgressiveResource(cacheKey: String): CachedResource {
+        val file = File(cacheDirectory, "$cacheKey.flac")
+        file.delete()
+        file.createNewFile()
+        return CachedResource(
+            cacheKey = cacheKey,
+            publicToken = UUID.randomUUID().toString().replace("-", ""),
+            file = file,
+        )
+    }
+
+    private fun waitForInitialBuffer(resource: CachedResource) {
+        resource.lock.withLock {
+            while (resource.file.length() < INITIAL_BUFFER_BYTES &&
+                !resource.isComplete && resource.failureMessage == null
+            ) {
+                resource.dataAvailable.await(250L, TimeUnit.MILLISECONDS)
+            }
+        }
+        resource.failureMessage?.let { error("Plex FLAC 转码下载失败：$it") }
+        check(resource.file.length() > 0L) { "Plex 返回了空的 FLAC 转码文件。" }
+        Log.i(
+            LOG_TAG,
+            "initial buffer ready key=${resource.cacheKey} bytes=${resource.file.length()} complete=${resource.isComplete}",
+        )
     }
 
     private fun ensureServerStarted(): Int = synchronized(serverLock) {
         serverSocket?.takeUnless(ServerSocket::isClosed)?.localPort?.let { return@synchronized it }
         val socket = ServerSocket(0).apply { reuseAddress = true }
         serverSocket = socket
+        Log.i(LOG_TAG, "server started port=${socket.localPort}")
         acceptExecutor.execute {
             while (!socket.isClosed) {
                 val client = try {
@@ -187,20 +217,92 @@ internal class PlexTranscodeProxy private constructor(context: Context) {
                     .removeSuffix(".flac")
                 val resource = resources[token]?.takeIf { it.file.isFile }
                 if (resource == null) {
+                    Log.i(LOG_TAG, "request method=$method range=${headers["range"] ?: "none"} response=404")
                     writeError(client, 404, "Not Found")
                     return
                 }
-                serveFile(client, method, resource.file, headers["range"])
-            }.onFailure {
+                Log.i(
+                    LOG_TAG,
+                    "request method=$method range=${headers["range"] ?: "none"} " +
+                        "userAgent=${headers["user-agent"] ?: "none"} fileBytes=${resource.file.length()} " +
+                        "complete=${resource.isComplete}",
+                )
+                serveResource(client, method, resource, headers["range"])
+            }.onFailure { error ->
+                Log.w(LOG_TAG, "request failed: ${error.javaClass.simpleName}: ${error.message}")
                 runCatching { writeError(client, 500, "Internal Server Error") }
             }
         }
     }
 
-    private fun serveFile(socket: Socket, method: String, file: File, rangeHeader: String?) {
+    private fun serveResource(
+        socket: Socket,
+        method: String,
+        resource: CachedResource,
+        rangeHeader: String?,
+    ) {
+        if (!resource.isComplete && rangeHeader == null) {
+            serveProgressive(socket, method, resource)
+            return
+        }
+        if (!resource.isComplete) waitForDownloadCompletion(resource)
+        serveFiniteFile(socket, method, resource.file, rangeHeader)
+    }
+
+    private fun serveProgressive(socket: Socket, method: String, resource: CachedResource) {
+        Log.i(LOG_TAG, "response status=200 mode=progressive contentLength=unknown")
+        writeHeaders(
+            socket = socket,
+            status = "200 OK",
+            contentLength = null,
+            extraHeaders = listOf("Accept-Ranges: none"),
+        )
+        if (method == "HEAD") return
+
+        var deliveredBytes = 0L
+        RandomAccessFile(resource.file, "r").use { input ->
+            val output = socket.getOutputStream()
+            val buffer = ByteArray(COPY_BUFFER_SIZE)
+            while (true) {
+                val availableBytes = input.length() - deliveredBytes
+                if (availableBytes > 0L) {
+                    val count = input.read(
+                        buffer,
+                        0,
+                        minOf(buffer.size.toLong(), availableBytes).toInt(),
+                    )
+                    if (count > 0) {
+                        output.write(buffer, 0, count)
+                        deliveredBytes += count
+                        continue
+                    }
+                }
+
+                resource.failureMessage?.let { error("Plex FLAC 转码下载失败：$it") }
+                if (resource.isComplete && deliveredBytes >= resource.file.length()) break
+                resource.lock.withLock {
+                    resource.dataAvailable.await(250L, TimeUnit.MILLISECONDS)
+                }
+            }
+            output.flush()
+        }
+        Log.i(LOG_TAG, "progressive response complete deliveredBytes=$deliveredBytes")
+    }
+
+    private fun waitForDownloadCompletion(resource: CachedResource) {
+        resource.lock.withLock {
+            while (!resource.isComplete && resource.failureMessage == null) {
+                resource.dataAvailable.await(250L, TimeUnit.MILLISECONDS)
+            }
+        }
+        resource.failureMessage?.let { error("Plex FLAC 转码下载失败：$it") }
+    }
+
+    private fun serveFiniteFile(socket: Socket, method: String, file: File, rangeHeader: String?) {
         val fileLength = file.length()
         val requestedRange = parseRange(rangeHeader, fileLength)
         if (rangeHeader != null && requestedRange == null) {
+            Log.i(LOG_TAG, "response status=416 contentLength=0 totalBytes=$fileLength")
             writeHeaders(
                 socket = socket,
                 status = "416 Range Not Satisfiable",
@@ -217,6 +319,11 @@ internal class PlexTranscodeProxy private constructor(context: Context) {
             add("Accept-Ranges: bytes")
             if (requestedRange != null) add("Content-Range: bytes $start-$endInclusive/$fileLength")
         }
+        Log.i(
+            LOG_TAG,
+            "response status=${if (requestedRange == null) 200 else 206} " +
+                "start=$start end=$endInclusive contentLength=$responseLength totalBytes=$fileLength",
+        )
         writeHeaders(
             socket = socket,
             status = if (requestedRange == null) "200 OK" else "206 Partial Content",
@@ -268,13 +375,13 @@ internal class PlexTranscodeProxy private constructor(context: Context) {
     private fun writeHeaders(
         socket: Socket,
         status: String,
-        contentLength: Long,
+        contentLength: Long?,
         extraHeaders: List<String>,
     ) {
         val response = buildString {
             append("HTTP/1.1 $status\r\n")
             append("Content-Type: $FLAC_MIME_TYPE\r\n")
-            append("Content-Length: $contentLength\r\n")
+            contentLength?.let { append("Content-Length: $it\r\n") }
             append("Cache-Control: no-store\r\n")
             append("Connection: close\r\n")
             extraHeaders.forEach { append(it).append("\r\n") }
@@ -325,19 +432,34 @@ internal class PlexTranscodeProxy private constructor(context: Context) {
         return digest.take(24)
     }
 
-    private data class CachedResource(
+    private class CachedResource(
         val cacheKey: String,
         val publicToken: String,
         val file: File,
-    )
+    ) {
+        val lock = ReentrantLock()
+        val dataAvailable = lock.newCondition()
+
+        @Volatile
+        var isComplete: Boolean = false
+
+        @Volatile
+        var failureMessage: String? = null
+
+        fun signalDataAvailable() {
+            lock.withLock { dataAvailable.signalAll() }
+        }
+    }
 
     companion object {
         private const val CACHE_DIRECTORY_NAME = "plex_flac_proxy"
+        private const val LOG_TAG = "MBFlacProxy"
         private const val FLAC_MIME_TYPE = "audio/flac"
         private const val CONNECT_TIMEOUT_MILLIS = 15_000
         private const val READ_TIMEOUT_MILLIS = 120_000
         private const val CLIENT_READ_TIMEOUT_MILLIS = 15_000
         private const val COPY_BUFFER_SIZE = 64 * 1024
+        private const val INITIAL_BUFFER_BYTES = 512L * 1024L
         private const val MAX_CACHE_FILES = 3
         private const val MAX_CACHE_FILE_BYTES = 512L * 1024L * 1024L
         private const val MAX_TOTAL_CACHE_BYTES = 384L * 1024L * 1024L
