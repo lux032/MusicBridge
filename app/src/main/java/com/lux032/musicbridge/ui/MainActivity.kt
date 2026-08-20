@@ -665,6 +665,8 @@ fun PlexAlbumScreen(
                                 discoveryAttempted = state.sonosDiscoveryAttempted,
                                 serverProfiles = state.serverProfiles,
                                 activeServerId = state.connectionPreferences.id,
+                                opusTranscodeMode = state.opusTranscodeMode,
+                                onOpusTranscodeModeChange = state::updateOpusTranscodeMode,
                                 onDiscoverSonos = state::refreshSonosRooms,
                                 onSelectRoom = state::selectSonosRoom,
                                 onSaveServer = state::saveServerProfile,

@@ -57,6 +57,7 @@ import coil3.request.ImageRequest
 import com.lux032.musicbridge.sonos.SonosController
 import com.lux032.musicbridge.sonos.SonosRoom
 import android.os.Build
+import android.util.Log
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
@@ -1736,6 +1737,8 @@ internal fun SettingsSection(
     discoveryAttempted: Boolean,
     serverProfiles: List<MusicServerProfile>,
     activeServerId: String,
+    opusTranscodeMode: OpusTranscodeMode = OpusTranscodeMode.DEFAULT,
+    onOpusTranscodeModeChange: (OpusTranscodeMode) -> Unit = {},
     onDiscoverSonos: () -> Unit,
     onSelectRoom: (SonosRoom) -> Unit,
     onSaveServer: (MusicServerProfile, Boolean) -> Unit,
@@ -1779,6 +1782,11 @@ internal fun SettingsSection(
             discoveryAttempted = discoveryAttempted,
             onDiscover = onDiscoverSonos,
             onSelectRoom = onSelectRoom,
+        )
+        HorizontalDivider(color = AppColors.Border)
+        OpusTranscodeStrategyCard(
+            currentMode = opusTranscodeMode,
+            onModeChange = onOpusTranscodeModeChange,
         )
         HorizontalDivider(color = AppColors.Border)
         Row(
@@ -1958,6 +1966,140 @@ internal fun SettingsSection(
     }
 }
 
+@Composable
+internal fun OpusTranscodeStrategyCard(
+    currentMode: OpusTranscodeMode,
+    onModeChange: (OpusTranscodeMode) -> Unit,
+) {
+    Surface(
+        shape = RoundedCornerShape(26.dp),
+        color = AppColors.Surface,
+        border = BorderStroke(1.dp, AppColors.Border),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Text(
+                text = "🎵 " + Strings.opusTranscodeModeTitle,
+                style = MaterialTheme.typography.titleLarge,
+                color = AppColors.TextPrimary,
+            )
+            Text(
+                text = Strings.opusTranscodeModeDesc,
+                color = AppColors.TextSecondary,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+
+            // Direct MP3
+            val isDirectMp3 = currentMode == OpusTranscodeMode.DIRECT_MP3
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(18.dp))
+                    .clickable { onModeChange(OpusTranscodeMode.DIRECT_MP3) },
+                shape = RoundedCornerShape(18.dp),
+                color = if (isDirectMp3) AppColors.SurfaceMuted else AppColors.SurfaceAlt,
+                border = BorderStroke(1.dp, if (isDirectMp3) AppColors.BorderStrong else AppColors.Border),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(14.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.Top,
+                ) {
+                    RadioButton(
+                        selected = isDirectMp3,
+                        onClick = { onModeChange(OpusTranscodeMode.DIRECT_MP3) },
+                        colors = RadioButtonDefaults.colors(
+                            selectedColor = AppColors.Accent,
+                            unselectedColor = AppColors.TextSecondary,
+                        ),
+                    )
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = Strings.opusModeDirectMp3,
+                                fontWeight = FontWeight.SemiBold,
+                                color = AppColors.TextPrimary,
+                            )
+                            AssistChip(
+                                onClick = { onModeChange(OpusTranscodeMode.DIRECT_MP3) },
+                                label = { Text(Strings.opusModeDirectMp3Badge) },
+                                colors = AssistChipDefaults.assistChipColors(
+                                    labelColor = AppColors.Accent,
+                                ),
+                                border = AssistChipDefaults.assistChipBorder(
+                                    enabled = true,
+                                    borderColor = AppColors.Accent.copy(alpha = 0.5f),
+                                ),
+                            )
+                        }
+                        Text(
+                            text = Strings.opusModeDirectMp3Desc,
+                            color = AppColors.TextSecondary,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+            }
+
+            // Proxy FLAC
+            val isProxyFlac = currentMode == OpusTranscodeMode.PROXY_FLAC
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(18.dp))
+                    .clickable { onModeChange(OpusTranscodeMode.PROXY_FLAC) },
+                shape = RoundedCornerShape(18.dp),
+                color = if (isProxyFlac) AppColors.SurfaceMuted else AppColors.SurfaceAlt,
+                border = BorderStroke(1.dp, if (isProxyFlac) AppColors.BorderStrong else AppColors.Border),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(14.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.Top,
+                ) {
+                    RadioButton(
+                        selected = isProxyFlac,
+                        onClick = { onModeChange(OpusTranscodeMode.PROXY_FLAC) },
+                        colors = RadioButtonDefaults.colors(
+                            selectedColor = AppColors.Accent,
+                            unselectedColor = AppColors.TextSecondary,
+                        ),
+                    )
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Text(
+                            text = Strings.opusModeProxyFlac,
+                            fontWeight = FontWeight.SemiBold,
+                            color = AppColors.TextPrimary,
+                        )
+                        Text(
+                            text = Strings.opusModeProxyFlacDesc,
+                            color = AppColors.TextSecondary,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
 internal suspend fun playAlbumSequentially(
     sonosController: SonosController,
     room: SonosRoom,
@@ -1968,6 +2110,7 @@ internal suspend fun playAlbumSequentially(
     getTracks: () -> List<PlexTrackStream> = { trackResult.tracks },
     getNextIndex: (Int) -> Int?,
     onTrackChanged: (Int, PlexTrackStream, Long) -> Unit,
+    preparePlayback: (suspend (PlexTrackStream) -> Pair<String, String?>)? = null,
 ) {
     val initialTracks = getTracks()
     require(initialTracks.isNotEmpty()) { "专辑里没有可播放的单曲。" }
@@ -1982,13 +2125,17 @@ internal suspend fun playAlbumSequentially(
         val track = tracks[index]
         val startPositionMillis = if (isFirstTrack) initialPositionMillis.coerceAtLeast(0L) else 0L
         isFirstTrack = false
-        val playbackUrl = prepareTrackUrl(track)
+        val (playbackUrl, mimeType) = if (preparePlayback != null) {
+            preparePlayback(track)
+        } else {
+            prepareTrackUrl(track) to track.playbackMimeType
+        }
         sonosController.playTrack(
             room = room,
             trackUrl = playbackUrl,
             title = track.title,
             albumTitle = track.albumTitle ?: trackResult.album.title,
-            mimeType = track.playbackMimeType,
+            mimeType = mimeType,
         )
         if (startPositionMillis > 0L) {
             sonosController.seek(room, (startPositionMillis / 1_000L).toInt())
@@ -2027,6 +2174,8 @@ internal suspend fun waitForTrackToFinish(
     val expectedDurationSeconds = expectedDurationMillis?.div(1_000)?.toInt()
     var stableProgressSeen = false
     var stoppedNoProgressCount = 0
+    var stoppedAfterProgressCount = 0
+    var uriMismatchCount = 0
 
     while (true) {
         delay(1_000)
@@ -2036,26 +2185,50 @@ internal suspend fun waitForTrackToFinish(
         val normalizedCurrent = playbackUrlIdentity(currentUri)
 
         if (normalizedCurrent.isNotBlank() && normalizedCurrent != normalizedExpected) {
-            return
+            uriMismatchCount += 1
+            if (uriMismatchCount >= 2) {
+                Log.w(
+                    PLAYBACK_LOG_TAG,
+                    "Sonos track URI changed state=${status.transportState} " +
+                        "expected=$normalizedExpected current=$normalizedCurrent",
+                )
+                return
+            }
+        } else {
+            uriMismatchCount = 0
         }
 
         val relTimeSeconds = status.relTimeSeconds
-        val trackDurationSeconds = status.trackDurationSeconds ?: expectedDurationSeconds
+        // Sonos commonly reports 00:00:00 while a Plex transcode is starting. A zero
+        // duration is unknown, not a completed zero-length track; prefer Plex metadata
+        // until Sonos publishes a positive duration.
+        val trackDurationSeconds = resolvePlaybackDurationSeconds(
+            sonosDurationSeconds = status.trackDurationSeconds,
+            expectedDurationSeconds = expectedDurationSeconds,
+        )
 
         if (relTimeSeconds != null && relTimeSeconds > 0) {
             stableProgressSeen = true
             stoppedNoProgressCount = 0
+            stoppedAfterProgressCount = 0
         }
 
-        if (status.transportState.equals("STOPPED", ignoreCase = true) && stableProgressSeen) {
-            return
-        }
-
-        if (status.transportState.equals("STOPPED", ignoreCase = true) && !stableProgressSeen) {
-            stoppedNoProgressCount += 1
-            if (stoppedNoProgressCount >= 5) {
-                return
+        if (status.transportState.equals("STOPPED", ignoreCase = true)) {
+            if (stableProgressSeen) {
+                stoppedAfterProgressCount += 1
+                if (stoppedAfterProgressCount >= 3) return
+            } else {
+                stoppedNoProgressCount += 1
+                if (stoppedNoProgressCount >= 5) {
+                    Log.w(
+                        PLAYBACK_LOG_TAG,
+                        "Sonos stream did not start expected=$normalizedExpected",
+                    )
+                    return
+                }
             }
+        } else {
+            stoppedAfterProgressCount = 0
         }
 
         if (relTimeSeconds != null && trackDurationSeconds != null && relTimeSeconds >= trackDurationSeconds - 1) {
@@ -2063,6 +2236,15 @@ internal suspend fun waitForTrackToFinish(
         }
     }
 }
+
+internal fun resolvePlaybackDurationSeconds(
+    sonosDurationSeconds: Int?,
+    expectedDurationSeconds: Int?,
+): Int? = sonosDurationSeconds
+    ?.takeIf { it > 0 }
+    ?: expectedDurationSeconds?.takeIf { it > 0 }
+
+private const val PLAYBACK_LOG_TAG = "MBPlayback"
 
 private fun formatSleepTimerCountdown(remainingMillis: Long): String {
     val totalSeconds = (remainingMillis / 1_000L).coerceAtLeast(0L)

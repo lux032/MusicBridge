@@ -137,4 +137,11 @@ object Strings {
     val backToPlaylists get() = if (isZhCN) "返回歌单页" else "Back to Playlists"
     val myFavoriteTracks get() = if (isZhCN) "我的收藏" else "My Favorites"
     val myFavoriteTracksDesc get() = if (isZhCN) "收藏的满分单曲" else "Favorite tracks with full rating"
+    val opusTranscodeModeTitle get() = if (isZhCN) "Opus 投播策略" else "Opus Transcode Strategy"
+    val opusTranscodeModeDesc get() = if (isZhCN) "选择针对 Sonos 无法直放的 Opus 音轨的处理方式" else "Choose how Opus audio tracks are handled for Sonos playback."
+    val opusModeDirectMp3 get() = if (isZhCN) "直连秒播 (MP3 320k)" else "Direct Play (MP3 320k)"
+    val opusModeDirectMp3Badge get() = if (isZhCN) "推荐" else "Recommended"
+    val opusModeDirectMp3Desc get() = if (isZhCN) "Plex 实时转为 320kbps MP3 直投音箱。秒播起播，零手机耗电，手机锁屏/离线不影响播放。" else "Plex transcodes to 320kbps MP3 directly to speaker. Instant start, zero battery drain, unaffected by screen lock or offline."
+    val opusModeProxyFlac get() = if (isZhCN) "无损中继 (FLAC 本地缓存)" else "Lossless Relay (FLAC Local Cache)"
+    val opusModeProxyFlacDesc get() = if (isZhCN) "Plex 转为 FLAC 并由手机代理转发。理论无损，但起播需缓冲数秒，且播放期间手机需保持在网。" else "Plex transcodes to FLAC relayed by phone proxy. Lossless PCM, but requires buffering and phone must stay connected."
 }

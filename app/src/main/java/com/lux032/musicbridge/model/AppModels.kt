@@ -79,6 +79,20 @@ enum class ArtistPresentation {
     List,
 }
 
+enum class OpusTranscodeMode(val id: String, val mimeType: String) {
+    /** 直连秒播：Plex 实时转码 MP3 320k 直投 Sonos，绕过手机代理 */
+    DIRECT_MP3("direct_mp3", "audio/mpeg"),
+
+    /** 无损中继：Plex 实时转码 FLAC，通过手机本地 PlexTranscodeProxy 代理投送 */
+    PROXY_FLAC("proxy_flac", "audio/flac");
+
+    companion object {
+        val DEFAULT = DIRECT_MP3
+        fun fromId(id: String?): OpusTranscodeMode =
+            entries.firstOrNull { it.id == id } ?: DEFAULT
+    }
+}
+
 enum class NavIcon {
     Home,
     Artists,

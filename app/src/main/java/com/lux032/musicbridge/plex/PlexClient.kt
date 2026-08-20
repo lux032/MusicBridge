@@ -2,6 +2,7 @@ package com.lux032.musicbridge.plex
 
 import android.os.Build
 import android.util.Base64
+import com.lux032.musicbridge.OpusTranscodeMode
 import com.lux032.musicbridge.music.MusicSourceClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -10,8 +11,9 @@ import org.json.JSONObject
 import java.io.ByteArrayInputStream
 import java.io.InputStream
 import java.net.HttpURLConnection
-import java.net.URLEncoder
 import java.net.URL
+import java.net.URLDecoder
+import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import javax.xml.XMLConstants
 import javax.xml.parsers.DocumentBuilderFactory
@@ -24,6 +26,7 @@ data class PlexAuthConfig(
     val token: String?,
     val clientIdentifier: String,
     val sourceId: String = "",
+    val opusTranscodeMode: OpusTranscodeMode = OpusTranscodeMode.DEFAULT,
 )
 
 data class PlexServer(val name: String, val uri: String, val accessToken: String?)
@@ -297,6 +300,7 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient {
                         sourceAudioCodec = sourceAudioCodec,
                         token = accessToken,
                         clientIdentifier = config.clientIdentifier,
+                        opusMode = config.opusTranscodeMode,
                     ),
                     partKey = partKey,
                     durationMillis = track.getAttribute("duration").toLongOrNull(),
@@ -306,7 +310,7 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient {
                     artistName = track.getAttribute("grandparentTitle").trim().ifBlank { null },
                     thumbUrl = track.trackThumbUrl(server.uri, accessToken),
                     sourceAudioCodec = sourceAudioCodec,
-                    playbackMimeType = sourceAudioCodec.transcodedPlaybackMimeType(),
+                    playbackMimeType = sourceAudioCodec.transcodedPlaybackMimeType(config.opusTranscodeMode),
                     sourceId = config.sourceId,
                 ))
             }
@@ -584,6 +588,7 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient {
                             sourceAudioCodec = sourceAudioCodec,
                             token = accessToken,
                             clientIdentifier = config.clientIdentifier,
+                            opusMode = config.opusTranscodeMode,
                         ),
                         durationMillis = durationMillis,
                         userRating = track.getAttribute("userRating").trim().toFloatOrNull(),
@@ -592,7 +597,7 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient {
                         artistName = track.getAttribute("grandparentTitle").trim().ifBlank { null },
                         thumbUrl = track.trackThumbUrl(server.uri, accessToken),
                         sourceAudioCodec = sourceAudioCodec,
-                        playbackMimeType = sourceAudioCodec.transcodedPlaybackMimeType(),
+                        playbackMimeType = sourceAudioCodec.transcodedPlaybackMimeType(config.opusTranscodeMode),
                         sourceId = config.sourceId,
                     )
                 )
@@ -626,6 +631,7 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient {
                 token = token,
                 sourceId = config.sourceId,
                 clientIdentifier = config.clientIdentifier,
+                opusMode = config.opusTranscodeMode,
             )
             if (pageTracks.isEmpty()) {
                 break
@@ -666,6 +672,7 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient {
                 token = token,
                 sourceId = config.sourceId,
                 clientIdentifier = config.clientIdentifier,
+                opusMode = config.opusTranscodeMode,
             )
             if (pageTracks.isEmpty()) {
                 break
@@ -763,47 +770,167 @@ private fun buildStreamUrl(serverUri: String, partKey: String, token: String): S
     return "${serverUri.trimEnd('/')}$partKey$separator${"X-Plex-Token"}=$token"
 }
 
-private fun buildPlaybackUrl(
+internal const val PLEX_MP3_320K_TRANSCODE_PROFILE =
+    "add-transcode-target(type=musicProfile&context=streaming&protocol=http&container=mp3&audioCodec=mp3&maxAudioBitrate=320&replace=true)"
+
+internal const val PLEX_FLAC_TRANSCODE_PROFILE =
+    "add-transcode-target(type=musicProfile&context=streaming&protocol=http&container=flac&audioCodec=flac&replace=true)"
+
+internal fun buildPlaybackUrl(
     serverUri: String,
     ratingKey: String,
     partKey: String,
     sourceAudioCodec: String?,
     token: String,
     clientIdentifier: String,
+    opusMode: OpusTranscodeMode = OpusTranscodeMode.DEFAULT,
 ): String = if (sourceAudioCodec.equals("opus", ignoreCase = true)) {
-    buildPlexUrl(
-        serverUri = serverUri,
-        path = "/music/:/transcode/universal/start.flac",
-        queryParameters = listOf(
-            "path" to "/library/metadata/$ratingKey",
-            "mediaIndex" to "0",
-            "partIndex" to "0",
-            "protocol" to "http",
-            "offset" to "0",
-            "directPlay" to "0",
-            "directStream" to "0",
-            "directStreamAudio" to "0",
-            "audioChannelCount" to "2",
-            "location" to "lan",
-            "X-Plex-Client-Identifier" to clientIdentifier,
-            "X-Plex-Client-Profile-Name" to "generic",
-            "X-Plex-Client-Profile-Extra" to PLEX_FLAC_TRANSCODE_PROFILE,
-            "X-Plex-Product" to "MusicBridge",
-            "X-Plex-Version" to "0.1.0",
-            "X-Plex-Platform" to "Android",
-            "X-Plex-Device-Name" to "MusicBridge",
-            "X-Plex-Token" to token,
-        ),
-    )
+    when (opusMode) {
+        OpusTranscodeMode.DIRECT_MP3 -> buildPlexUrl(
+            serverUri = serverUri,
+            path = "/music/:/transcode/universal/start.mp3",
+            queryParameters = listOf(
+                "path" to "/library/metadata/$ratingKey",
+                "mediaIndex" to "0",
+                "partIndex" to "0",
+                "protocol" to "http",
+                "offset" to "0",
+                "directPlay" to "0",
+                "directStream" to "0",
+                "directStreamAudio" to "0",
+                "audioCodec" to "mp3",
+                "maxAudioBitrate" to "320",
+                "audioChannelCount" to "2",
+                "location" to "lan",
+                "X-Plex-Client-Identifier" to clientIdentifier,
+                "X-Plex-Client-Profile-Name" to "generic",
+                "X-Plex-Client-Profile-Extra" to PLEX_MP3_320K_TRANSCODE_PROFILE,
+                "X-Plex-Product" to "MusicBridge",
+                "X-Plex-Version" to "0.1.0",
+                "X-Plex-Platform" to "Android",
+                "X-Plex-Device-Name" to "MusicBridge",
+                "X-Plex-Token" to token,
+            ),
+        )
+        OpusTranscodeMode.PROXY_FLAC -> buildPlexUrl(
+            serverUri = serverUri,
+            path = "/music/:/transcode/universal/start.flac",
+            queryParameters = listOf(
+                "path" to "/library/metadata/$ratingKey",
+                "mediaIndex" to "0",
+                "partIndex" to "0",
+                "protocol" to "http",
+                "offset" to "0",
+                "directPlay" to "0",
+                "directStream" to "0",
+                "directStreamAudio" to "0",
+                "audioChannelCount" to "2",
+                "location" to "lan",
+                "X-Plex-Client-Identifier" to clientIdentifier,
+                "X-Plex-Client-Profile-Name" to "generic",
+                "X-Plex-Client-Profile-Extra" to PLEX_FLAC_TRANSCODE_PROFILE,
+                "X-Plex-Product" to "MusicBridge",
+                "X-Plex-Version" to "0.1.0",
+                "X-Plex-Platform" to "Android",
+                "X-Plex-Device-Name" to "MusicBridge",
+                "X-Plex-Token" to token,
+            ),
+        )
+    }
 } else {
     buildStreamUrl(serverUri, partKey, token)
 }
 
-private const val PLEX_FLAC_TRANSCODE_PROFILE =
-    "add-transcode-target(type=musicProfile&context=streaming&protocol=http&container=flac&audioCodec=flac&replace=true)"
+internal fun String?.transcodedPlaybackMimeType(opusMode: OpusTranscodeMode = OpusTranscodeMode.DEFAULT): String? =
+    if (equals("opus", ignoreCase = true)) opusMode.mimeType else null
 
-private fun String?.transcodedPlaybackMimeType(): String? =
-    if (equals("opus", ignoreCase = true)) "audio/flac" else null
+internal fun PlexTrackStream.withOpusTranscodeMode(
+    targetMode: OpusTranscodeMode,
+    clientIdentifier: String = "",
+): PlexTrackStream {
+    if (!sourceAudioCodec.equals("opus", ignoreCase = true)) {
+        return this
+    }
+    val targetMime = targetMode.mimeType
+    val updatedUrl = when (targetMode) {
+        OpusTranscodeMode.DIRECT_MP3 -> {
+            if (streamUrl.contains("/music/:/transcode/universal/start.mp3")) {
+                streamUrl
+            } else if (streamUrl.contains("/music/:/transcode/universal/start.flac")) {
+                val base = streamUrl
+                    .replace("/music/:/transcode/universal/start.flac", "/music/:/transcode/universal/start.mp3")
+                    .replace(PLEX_FLAC_TRANSCODE_PROFILE.urlEncode(), PLEX_MP3_320K_TRANSCODE_PROFILE.urlEncode())
+                    .replace(PLEX_FLAC_TRANSCODE_PROFILE, PLEX_MP3_320K_TRANSCODE_PROFILE)
+                if (!base.contains("audioCodec=")) {
+                    val separator = if (base.contains("?")) "&" else "?"
+                    "$base${separator}audioCodec=mp3&maxAudioBitrate=320"
+                } else {
+                    base
+                }
+            } else {
+                val baseUrl = streamUrl.substringBefore('?')
+                val query = streamUrl.substringAfter('?', "")
+                val token = query.split('&')
+                    .firstOrNull { it.startsWith("X-Plex-Token=") }
+                    ?.substringAfter("X-Plex-Token=").orEmpty()
+                val serverUri = baseUrl.substringBefore("/library/parts")
+                if (serverUri.isNotBlank() && token.isNotBlank()) {
+                    buildPlaybackUrl(
+                        serverUri = serverUri,
+                        ratingKey = ratingKey,
+                        partKey = partKey,
+                        sourceAudioCodec = sourceAudioCodec,
+                        token = token,
+                        clientIdentifier = clientIdentifier,
+                        opusMode = targetMode,
+                    )
+                } else {
+                    streamUrl
+                }
+            }
+        }
+        OpusTranscodeMode.PROXY_FLAC -> {
+            if (streamUrl.contains("/music/:/transcode/universal/start.flac")) {
+                streamUrl
+            } else if (streamUrl.contains("/music/:/transcode/universal/start.mp3")) {
+                streamUrl
+                    .replace("/music/:/transcode/universal/start.mp3", "/music/:/transcode/universal/start.flac")
+                    .replace(PLEX_MP3_320K_TRANSCODE_PROFILE.urlEncode(), PLEX_FLAC_TRANSCODE_PROFILE.urlEncode())
+                    .replace(PLEX_MP3_320K_TRANSCODE_PROFILE, PLEX_FLAC_TRANSCODE_PROFILE)
+                    .replace("&audioCodec=mp3", "")
+                    .replace("audioCodec=mp3&", "")
+                    .replace("?audioCodec=mp3", "?")
+                    .replace("&maxAudioBitrate=320", "")
+                    .replace("maxAudioBitrate=320&", "")
+                    .replace("?maxAudioBitrate=320", "?")
+            } else {
+                val baseUrl = streamUrl.substringBefore('?')
+                val query = streamUrl.substringAfter('?', "")
+                val token = query.split('&')
+                    .firstOrNull { it.startsWith("X-Plex-Token=") }
+                    ?.substringAfter("X-Plex-Token=").orEmpty()
+                val serverUri = baseUrl.substringBefore("/library/parts")
+                if (serverUri.isNotBlank() && token.isNotBlank()) {
+                    buildPlaybackUrl(
+                        serverUri = serverUri,
+                        ratingKey = ratingKey,
+                        partKey = partKey,
+                        sourceAudioCodec = sourceAudioCodec,
+                        token = token,
+                        clientIdentifier = clientIdentifier,
+                        opusMode = targetMode,
+                    )
+                } else {
+                    streamUrl
+                }
+            }
+        }
+    }
+    return copy(
+        streamUrl = updatedUrl,
+        playbackMimeType = targetMime,
+    )
+}
 
 private fun buildMediaUrl(serverUri: String, mediaPath: String, token: String): String {
     val separator = if (mediaPath.contains("?")) "&" else "?"
@@ -903,6 +1030,7 @@ private fun org.w3c.dom.NodeList.toTrackStreams(
     token: String,
     sourceId: String,
     clientIdentifier: String,
+    opusMode: OpusTranscodeMode = OpusTranscodeMode.DEFAULT,
 ): List<PlexTrackStream> =
     buildList {
         for (index in 0 until length) {
@@ -927,6 +1055,7 @@ private fun org.w3c.dom.NodeList.toTrackStreams(
                         sourceAudioCodec = sourceAudioCodec,
                         token = token,
                         clientIdentifier = clientIdentifier,
+                        opusMode = opusMode,
                     ),
                     partKey = partKey,
                     durationMillis = durationMillis,
@@ -936,7 +1065,7 @@ private fun org.w3c.dom.NodeList.toTrackStreams(
                     artistName = track.getAttribute("grandparentTitle").trim().ifBlank { null },
                     thumbUrl = track.trackThumbUrl(serverUri, token),
                     sourceAudioCodec = sourceAudioCodec,
-                    playbackMimeType = sourceAudioCodec.transcodedPlaybackMimeType(),
+                    playbackMimeType = sourceAudioCodec.transcodedPlaybackMimeType(opusMode),
                     sourceId = sourceId,
                 )
             )
@@ -949,6 +1078,7 @@ private fun parseFavoriteTracksJson(
     token: String,
     sourceId: String,
     clientIdentifier: String,
+    opusMode: OpusTranscodeMode = OpusTranscodeMode.DEFAULT,
 ): List<PlexTrackStream> {
     val metadata = JSONObject(body)
         .optJSONObject("MediaContainer")
@@ -983,6 +1113,7 @@ private fun parseFavoriteTracksJson(
                         sourceAudioCodec = sourceAudioCodec,
                         token = token,
                         clientIdentifier = clientIdentifier,
+                        opusMode = opusMode,
                     ),
                     partKey = partKey,
                     durationMillis = track.optLongOrNull("duration"),
@@ -992,7 +1123,7 @@ private fun parseFavoriteTracksJson(
                     artistName = track.optString("grandparentTitle").trim().ifBlank { null },
                     thumbUrl = track.optTrackThumbUrl(serverUri, token),
                     sourceAudioCodec = sourceAudioCodec,
-                    playbackMimeType = sourceAudioCodec.transcodedPlaybackMimeType(),
+                    playbackMimeType = sourceAudioCodec.transcodedPlaybackMimeType(opusMode),
                     sourceId = sourceId,
                 )
             )
@@ -1019,13 +1150,23 @@ internal fun playbackUrlIdentity(url: String): String {
     if (!baseUrl.contains("/:/transcode/universal/start", ignoreCase = true)) {
         return baseUrl
     }
-    val encodedPath = url.substringAfter('?', "")
+    val path = url.substringAfter('?', "")
         .split('&')
         .firstOrNull { it.substringBefore('=').equals("path", ignoreCase = true) }
         ?.substringAfter('=', "")
         ?.takeIf { it.isNotBlank() }
-    return encodedPath?.let { "$baseUrl?path=$it" } ?: baseUrl
+        ?.let(::decodeUrlComponent)
+    return path?.let { "$baseUrl?path=$it" } ?: baseUrl
 }
+
+/**
+ * Sonos may expose a percent-decoded TrackURI even when SetAVTransportURI received
+ * Plex's encoded query string. Compare the decoded media path so these equivalent
+ * representations do not look like a track change.
+ */
+private fun decodeUrlComponent(value: String): String =
+    runCatching { URLDecoder.decode(value, StandardCharsets.UTF_8.name()) }
+        .getOrDefault(value)
 
 private fun JSONObject.optTrackThumbUrl(serverUri: String, token: String): String? {
     val mediaPath = optString("thumb")

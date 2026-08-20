@@ -183,6 +183,21 @@ class AppPreferences(context: Context) {
         sharedPreferences.edit { putLong(syncKey(sourceId), epochMillis) }
     }
 
+    fun loadOpusTranscodeMode(): OpusTranscodeMode {
+        val raw = sharedPreferences.getString(KEY_OPUS_TRANSCODE_MODE, null)
+        return OpusTranscodeMode.fromId(raw)
+    }
+
+    fun getOpusTranscodeMode(): OpusTranscodeMode = loadOpusTranscodeMode()
+
+    fun saveOpusTranscodeMode(mode: OpusTranscodeMode) {
+        sharedPreferences.edit {
+            putString(KEY_OPUS_TRANSCODE_MODE, mode.id)
+        }
+    }
+
+    fun setOpusTranscodeMode(mode: OpusTranscodeMode) = saveOpusTranscodeMode(mode)
+
     fun clearSourceData(sourceId: String) {
         if (sourceId.isBlank()) return
         sharedPreferences.edit {
@@ -213,18 +228,25 @@ class AppPreferences(context: Context) {
         }
     }
 
-    private companion object {
-        const val KEY_USERNAME = "username"
-        const val KEY_PASSWORD = "password"
-        const val KEY_TOKEN = "token"
-        const val KEY_SERVER = "server"
-        const val KEY_BASE_URL = "base_url"
-        const val KEY_SERVER_PROFILES = "music_server_profiles_v1"
-        const val KEY_ACTIVE_SERVER_ID = "active_music_server_id"
-        const val KEY_PLEX_CLIENT_IDENTIFIER = "plex_client_identifier_v1"
-        const val KEY_RECENT_PLAYED_ALBUM_KEYS = "recent_played_album_keys"
-        const val KEY_LAST_ALBUM_SYNC_EPOCH_MILLIS = "last_album_sync_epoch_millis"
-        const val RECENT_PLAYED_SEPARATOR = "|"
-        const val MAX_RECENT_PLAYED = 100
+    companion object {
+        const val KEY_OPUS_TRANSCODE_MODE = "opus_transcode_mode_v1"
+        private const val KEY_USERNAME = "username"
+        private const val KEY_PASSWORD = "password"
+        private const val KEY_TOKEN = "token"
+        private const val KEY_SERVER = "server"
+        private const val KEY_BASE_URL = "base_url"
+        private const val KEY_SERVER_PROFILES = "music_server_profiles_v1"
+        private const val KEY_ACTIVE_SERVER_ID = "active_music_server_id"
+        private const val KEY_PLEX_CLIENT_IDENTIFIER = "plex_client_identifier_v1"
+        private const val KEY_RECENT_PLAYED_ALBUM_KEYS = "recent_played_album_keys"
+        private const val KEY_LAST_ALBUM_SYNC_EPOCH_MILLIS = "last_album_sync_epoch_millis"
+        private const val RECENT_PLAYED_SEPARATOR = "|"
+        private const val MAX_RECENT_PLAYED = 100
+
+        fun getOpusTranscodeMode(context: Context): OpusTranscodeMode =
+            AppPreferences(context).getOpusTranscodeMode()
+
+        fun setOpusTranscodeMode(context: Context, mode: OpusTranscodeMode) =
+            AppPreferences(context).setOpusTranscodeMode(mode)
     }
 }

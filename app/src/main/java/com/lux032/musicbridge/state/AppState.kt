@@ -40,10 +40,12 @@ class AppState(
     internal val context = application.applicationContext
     internal val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     internal val appPreferences = AppPreferences(context)
-    private val plexClientIdentifier = appPreferences.loadOrCreatePlexClientIdentifier()
+    internal val plexClientIdentifier = appPreferences.loadOrCreatePlexClientIdentifier()
     internal val albumLocalStore = AlbumLocalStore(context)
     internal val sonosController = SonosController()
     internal val plexTranscodeProxy = PlexTranscodeProxy.getInstance(context)
+
+    var opusTranscodeMode by mutableStateOf(appPreferences.getOpusTranscodeMode())
 
     private val initialProfiles = appPreferences.loadServerProfiles()
     private val initialActiveServerId = appPreferences.loadActiveServerId(initialProfiles)
@@ -201,10 +203,20 @@ class AppState(
                     token = preferences.token,
                     sourceId = preferences.id,
                     clientIdentifier = plexClientIdentifier,
+                    opusTranscodeMode = opusTranscodeMode,
                 )
             )
             MusicServerType.Music032 -> Music032Client(preferences)
         }
+
+    fun updateOpusTranscodeMode(mode: OpusTranscodeMode) {
+        opusTranscodeMode = mode
+        appPreferences.setOpusTranscodeMode(mode)
+        actionMessage = when (mode) {
+            OpusTranscodeMode.DIRECT_MP3 -> "已切换为 Opus 直连秒播 (MP3 320k)"
+            OpusTranscodeMode.PROXY_FLAC -> "已切换为 Opus 无损中继 (FLAC 本地缓存)"
+        }
+    }
 
     internal fun clientFor(sourceId: String): MusicSourceClient =
         client(

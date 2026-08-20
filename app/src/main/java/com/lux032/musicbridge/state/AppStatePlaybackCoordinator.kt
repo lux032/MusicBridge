@@ -6,19 +6,25 @@ import com.lux032.musicbridge.plex.PlexPlaylistTracksResult
 import com.lux032.musicbridge.plex.PlexSection
 import com.lux032.musicbridge.plex.PlexTrackStream
 import com.lux032.musicbridge.plex.playbackUrlIdentity
+import com.lux032.musicbridge.plex.withOpusTranscodeMode
 import com.lux032.musicbridge.service.PlaybackForegroundService
 import com.lux032.musicbridge.sonos.SonosDiscovery
 import com.lux032.musicbridge.sonos.SonosPlaybackStatus
 import com.lux032.musicbridge.sonos.SonosRoom
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.random.Random
 
 internal class AppStatePlaybackCoordinator(
     private val state: AppState,
 ) {
+    private val playbackRequestGeneration = AtomicLong(0L)
+
     init {
         PlaybackForegroundService.onSleepTimerExpired = {
+            playbackRequestGeneration.incrementAndGet()
             state.albumPlaybackJob?.cancel()
             state.playbackReportingJob?.cancel()
             state.scope.launch {
@@ -38,6 +44,7 @@ internal class AppStatePlaybackCoordinator(
         initialPositionMillis: Long,
     ) {
         val targetTrack = tracks.getOrNull(trackIndex) ?: return
+        val requestGeneration = nextPlaybackRequestGeneration()
         val displayAlbum = resolveAlbumForTrack(targetTrack, album)
         state.albumPlaybackJob?.cancel()
         state.playbackReportingJob?.cancel()
@@ -67,27 +74,45 @@ internal class AppStatePlaybackCoordinator(
         state.actionMessage = null
         state.scope.launch {
             runCatching {
-                if (targetTrack.sourceAudioCodec.equals("opus", ignoreCase = true)) {
-                    state.actionMessage = "正在准备 FLAC 缓存：${targetTrack.title}"
+                val effectiveTrack = targetTrack.withOpusTranscodeMode(state.opusTranscodeMode, state.plexClientIdentifier)
+                val isOpus = effectiveTrack.sourceAudioCodec.equals("opus", ignoreCase = true)
+                if (isOpus && state.opusTranscodeMode == OpusTranscodeMode.PROXY_FLAC) {
+                    state.actionMessage = "正在准备 FLAC 缓存：${effectiveTrack.title}"
                 }
-                val playbackUrl = state.plexTranscodeProxy.preparePlaybackUrl(targetTrack)
+                val playbackUrl = if (isOpus && state.opusTranscodeMode == OpusTranscodeMode.DIRECT_MP3) {
+                    state.plexTranscodeProxy.cancelPendingDownload()
+                    effectiveTrack.streamUrl
+                } else {
+                    state.plexTranscodeProxy.preparePlaybackUrl(effectiveTrack)
+                }
+                ensureCurrentPlaybackRequest(requestGeneration)
                 state.sonosController.playTrack(
                     room = room,
                     trackUrl = playbackUrl,
-                    title = targetTrack.title,
-                    albumTitle = targetTrack.albumTitle ?: displayAlbum.title,
-                    mimeType = targetTrack.playbackMimeType,
+                    title = effectiveTrack.title,
+                    albumTitle = effectiveTrack.albumTitle ?: displayAlbum.title,
+                    mimeType = effectiveTrack.playbackMimeType,
                 )
                 if (initialPositionMillis > 0L) {
                     state.sonosController.seek(room, (initialPositionMillis / 1_000L).toInt())
                 }
             }.onSuccess {
-                startPlaybackReporting(room, tracks, trackIndex, initialPositionMillis)
-                state.actionMessage = "已将 ${targetTrack.title} 推送到 ${room.roomName}"
-            }.onFailure {
-                state.errorMessage = it.message ?: "未知错误"
+                if (isCurrentPlaybackRequest(requestGeneration)) {
+                    startPlaybackReporting(
+                        room,
+                        tracks,
+                        trackIndex,
+                        initialPositionMillis,
+                        autoAdvanceWhenStopped = true,
+                    )
+                    state.actionMessage = "已将 ${targetTrack.title} 推送到 ${room.roomName}"
+                }
+            }.onFailure { error ->
+                if (error !is CancellationException && isCurrentPlaybackRequest(requestGeneration)) {
+                    state.errorMessage = error.message ?: "未知错误"
+                }
             }
-            state.isPlaybackCommandLoading = false
+            if (isCurrentPlaybackRequest(requestGeneration)) state.isPlaybackCommandLoading = false
         }
     }
 
@@ -97,6 +122,7 @@ internal class AppStatePlaybackCoordinator(
         startIndex: Int,
         initialPositionMillis: Long,
     ) {
+        val requestGeneration = nextPlaybackRequestGeneration()
         state.albumPlaybackJob?.cancel()
         state.playbackReportingJob?.cancel()
         state.appPreferences.markAlbumPlayed(albumTrackResult.album.sourceId, albumTrackResult.album.ratingKey)
@@ -134,7 +160,23 @@ internal class AppStatePlaybackCoordinator(
                     trackResult = albumTrackResult,
                     startIndex = startIndex,
                     initialPositionMillis = initialPositionMillis,
-                    prepareTrackUrl = state.plexTranscodeProxy::preparePlaybackUrl,
+                    preparePlayback = { track ->
+                        val effectiveTrack = track.withOpusTranscodeMode(state.opusTranscodeMode, state.plexClientIdentifier)
+                        val isOpus = effectiveTrack.sourceAudioCodec.equals("opus", ignoreCase = true)
+                        if (isOpus && state.opusTranscodeMode == OpusTranscodeMode.PROXY_FLAC) {
+                            state.actionMessage = "正在准备 FLAC 缓存：${effectiveTrack.title}"
+                        }
+                        val playbackUrl = if (isOpus && state.opusTranscodeMode == OpusTranscodeMode.DIRECT_MP3) {
+                            ensureCurrentPlaybackRequest(requestGeneration)
+                            state.plexTranscodeProxy.cancelPendingDownload()
+                            effectiveTrack.streamUrl
+                        } else {
+                            state.plexTranscodeProxy.preparePlaybackUrl(effectiveTrack).also {
+                                ensureCurrentPlaybackRequest(requestGeneration)
+                            }
+                        }
+                        playbackUrl to effectiveTrack.playbackMimeType
+                    },
                     getTracks = { state.miniPlayerState?.tracks ?: albumTrackResult.tracks },
                     getNextIndex = { currentIndex ->
                         resolveNextPlaybackIndex(
@@ -146,7 +188,13 @@ internal class AppStatePlaybackCoordinator(
                         if (!didStartFirstTrack) {
                             didStartFirstTrack = true
                             state.isPlaybackCommandLoading = false
-                            startPlaybackReporting(room, albumTrackResult.tracks, index, startPositionMillis)
+                            startPlaybackReporting(
+                                room,
+                                albumTrackResult.tracks,
+                                index,
+                                startPositionMillis,
+                                autoAdvanceWhenStopped = false,
+                            )
                         }
                         state.miniPlayerState = state.miniPlayerState?.copy(
                             currentIndex = index,
@@ -159,10 +207,14 @@ internal class AppStatePlaybackCoordinator(
                     },
                 )
             }.onSuccess {
-                state.actionMessage = "专辑播放结束：${albumTrackResult.album.title}"
-            }.onFailure {
-                state.errorMessage = it.message ?: "未知错误"
-                state.isPlaybackCommandLoading = false
+                if (isCurrentPlaybackRequest(requestGeneration)) {
+                    state.actionMessage = "专辑播放结束：${albumTrackResult.album.title}"
+                }
+            }.onFailure { error ->
+                if (error !is CancellationException && isCurrentPlaybackRequest(requestGeneration)) {
+                    state.errorMessage = error.message ?: "未知错误"
+                    state.isPlaybackCommandLoading = false
+                }
             }
         }
     }
@@ -235,6 +287,7 @@ internal class AppStatePlaybackCoordinator(
         shuffle: Boolean,
     ) {
         if (playlistResult.tracks.isEmpty()) return
+        val requestGeneration = nextPlaybackRequestGeneration()
         state.albumPlaybackJob?.cancel()
         state.playbackReportingJob?.cancel()
         state.selectedSonosRoom = room
@@ -280,7 +333,23 @@ internal class AppStatePlaybackCoordinator(
                     trackResult = PlexAlbumTracksResult("", fakeAlbum, tracks),
                     startIndex = 0,
                     initialPositionMillis = 0L,
-                    prepareTrackUrl = state.plexTranscodeProxy::preparePlaybackUrl,
+                    preparePlayback = { track ->
+                        val effectiveTrack = track.withOpusTranscodeMode(state.opusTranscodeMode, state.plexClientIdentifier)
+                        val isOpus = effectiveTrack.sourceAudioCodec.equals("opus", ignoreCase = true)
+                        if (isOpus && state.opusTranscodeMode == OpusTranscodeMode.PROXY_FLAC) {
+                            state.actionMessage = "正在准备 FLAC 缓存：${effectiveTrack.title}"
+                        }
+                        val playbackUrl = if (isOpus && state.opusTranscodeMode == OpusTranscodeMode.DIRECT_MP3) {
+                            ensureCurrentPlaybackRequest(requestGeneration)
+                            state.plexTranscodeProxy.cancelPendingDownload()
+                            effectiveTrack.streamUrl
+                        } else {
+                            state.plexTranscodeProxy.preparePlaybackUrl(effectiveTrack).also {
+                                ensureCurrentPlaybackRequest(requestGeneration)
+                            }
+                        }
+                        playbackUrl to effectiveTrack.playbackMimeType
+                    },
                     getTracks = { state.miniPlayerState?.tracks ?: tracks },
                     getNextIndex = { currentIndex ->
                         val queueSize = state.miniPlayerState?.tracks?.size ?: tracks.size
@@ -295,7 +364,13 @@ internal class AppStatePlaybackCoordinator(
                         if (!didStartFirstTrack) {
                             didStartFirstTrack = true
                             state.isPlaybackCommandLoading = false
-                            startPlaybackReporting(room, tracks, index, positionMillis)
+                            startPlaybackReporting(
+                                room,
+                                tracks,
+                                index,
+                                positionMillis,
+                                autoAdvanceWhenStopped = false,
+                            )
                         }
                         state.miniPlayerState = state.miniPlayerState?.copy(
                             album = resolveAlbumForTrack(track, fakeAlbum),
@@ -305,9 +380,11 @@ internal class AppStatePlaybackCoordinator(
                         )
                     },
                 )
-            }.onFailure {
-                state.errorMessage = it.message ?: "播放失败"
-                state.isPlaybackCommandLoading = false
+            }.onFailure { error ->
+                if (error !is CancellationException && isCurrentPlaybackRequest(requestGeneration)) {
+                    state.errorMessage = error.message ?: "播放失败"
+                    state.isPlaybackCommandLoading = false
+                }
             }
         }
     }
@@ -472,6 +549,7 @@ internal class AppStatePlaybackCoordinator(
         tracks: List<PlexTrackStream>,
         initialTrackIndex: Int,
         initialPositionMillis: Long = 0L,
+        autoAdvanceWhenStopped: Boolean,
     ) {
         val normalizedInitialIndex = initialTrackIndex.coerceIn(0, tracks.lastIndex)
         state.playbackReportingJob?.cancel()
@@ -505,6 +583,7 @@ internal class AppStatePlaybackCoordinator(
             var lastReportedState: String? = null
             var lastTimelineReportAt = 0L
             var stoppedPollCount = 0
+            var hasObservedPlayback = initialPositionMillis > 0L
 
             reportTimelineSafely(
                 track = currentTrack,
@@ -549,6 +628,7 @@ internal class AppStatePlaybackCoordinator(
                     lastReportedState = null
                     lastTimelineReportAt = 0L
                     stoppedPollCount = 0
+                    hasObservedPlayback = false
                 }
 
                 if (positionMillis > 0L || playbackState != "stopped") {
@@ -556,6 +636,9 @@ internal class AppStatePlaybackCoordinator(
                 }
                 if (durationMillis != null) {
                     currentTrackDurationMillis = durationMillis
+                }
+                if (playbackState != "stopped" || positionMillis > 0L) {
+                    hasObservedPlayback = true
                 }
 
                 state.miniPlayerState = latestMiniPlayerState.copy(
@@ -598,7 +681,14 @@ internal class AppStatePlaybackCoordinator(
 
                 if (playbackState == "stopped") {
                     stoppedPollCount += 1
-                    if (stoppedPollCount >= 3) {
+                    val trackFinished = stoppedPollCount == 3 && hasObservedPlayback
+                    // Sonos never started playing (e.g. the stream URL was rejected):
+                    // surface the failure instead of polling forever.
+                    val playbackNeverStarted = stoppedPollCount == 10 && !hasObservedPlayback
+                    if (trackFinished || playbackNeverStarted) {
+                        if (playbackNeverStarted) {
+                            state.errorMessage = "Sonos 未能开始播放：${currentTrack.title}"
+                        }
                         reportStoppedTrackIfNeeded(
                             track = currentTrack,
                             timeMillis = currentTrackTimeMillis,
@@ -611,7 +701,9 @@ internal class AppStatePlaybackCoordinator(
                             timeMillis = currentTrackTimeMillis,
                             durationMillis = currentTrackDurationMillis,
                         )
-                        // Try to advance to next track instead of stopping
+                        if (!autoAdvanceWhenStopped) continue
+
+                        // Standalone queues do not have a sequential playback owner.
                         val currentIndex = currentQueue.indexOfFirst { it.ratingKey == currentTrack.ratingKey && it.sourceId == currentTrack.sourceId }
                             .takeIf { it >= 0 } ?: break
                         val nextIndex = resolveNextPlaybackIndex(currentQueue.size, currentIndex)
@@ -630,6 +722,19 @@ internal class AppStatePlaybackCoordinator(
                 PlaybackForegroundService.onPlaybackAction = null
                 PlaybackForegroundService.stop(state.context)
             }
+        }
+    }
+
+    private fun nextPlaybackRequestGeneration(): Long {
+        return playbackRequestGeneration.incrementAndGet()
+    }
+
+    private fun isCurrentPlaybackRequest(generation: Long): Boolean =
+        playbackRequestGeneration.get() == generation
+
+    private fun ensureCurrentPlaybackRequest(generation: Long) {
+        if (!isCurrentPlaybackRequest(generation)) {
+            throw CancellationException("播放请求已被新的操作取代。")
         }
     }
 

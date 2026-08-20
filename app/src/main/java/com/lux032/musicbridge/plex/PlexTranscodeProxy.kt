@@ -21,6 +21,7 @@ import java.net.URL
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.util.UUID
+import java.util.concurrent.CancellationException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -28,8 +29,8 @@ import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 
 /**
- * Materializes Plex's chunked FLAC transcode and exposes it as a finite, byte-range capable
- * HTTP resource. Sonos requires file semantics for reliable FLAC playback and seeking.
+ * Buffers Plex's chunked FLAC transcode into a growing file. Sonos can begin with a
+ * close-delimited response; completed cache entries retain finite byte-range semantics.
  */
 internal class PlexTranscodeProxy private constructor(context: Context) {
     private val appContext = context.applicationContext
@@ -47,9 +48,11 @@ internal class PlexTranscodeProxy private constructor(context: Context) {
     private val clientExecutor = Executors.newCachedThreadPool { runnable ->
         Thread(runnable, "MusicBridge-FlacProxy-Client").apply { isDaemon = true }
     }
-    private val downloadExecutor = Executors.newSingleThreadExecutor { runnable ->
+    private val downloadExecutor = Executors.newCachedThreadPool { runnable ->
         Thread(runnable, "MusicBridge-FlacProxy-Download").apply { isDaemon = true }
     }
+
+    private var latestRequestedResource: CachedResource? = null
 
     @Volatile
     private var serverSocket: ServerSocket? = null
@@ -58,29 +61,62 @@ internal class PlexTranscodeProxy private constructor(context: Context) {
         if (!track.sourceAudioCodec.equals("opus", ignoreCase = true) ||
             !track.playbackMimeType.equals(FLAC_MIME_TYPE, ignoreCase = true)
         ) {
+            val resourceToCancel = prepareMutex.withLock {
+                latestRequestedResource.also {
+                    latestRequestedResource = null
+                }
+            }
+            resourceToCancel?.cancelDownload("已切换到无需转码的曲目。")
             return track.streamUrl
         }
 
         return withContext(Dispatchers.IO) {
-            prepareMutex.withLock {
+            var resourceToCancel: CachedResource? = null
+            val resource = prepareMutex.withLock {
                 val cacheKey = buildCacheKey(track)
+                cacheEntries[cacheKey]
+                    ?.takeIf { it.failureMessage != null }
+                    ?.let { failed ->
+                        cacheEntries.remove(cacheKey)
+                        resources.remove(failed.publicToken)
+                        failed.file.delete()
+                    }
                 val existing = cacheEntries[cacheKey]?.takeIf {
                     it.file.isFile && it.failureMessage == null
                 }
                 Log.i(LOG_TAG, "prepare cache=${if (existing == null) "miss" else "hit"} key=$cacheKey")
-                val resource = existing ?: createProgressiveResource(cacheKey).also {
+                val selectedResource = existing ?: createProgressiveResource(cacheKey).also {
                     cacheEntries[cacheKey] = it
                     resources[it.publicToken] = it
                     downloadExecutor.execute { downloadTranscode(track, it) }
                 }
-                waitForInitialBuffer(resource)
-                trimCache(resource)
-                val port = ensureServerStarted()
-                val localAddress = resolveWifiIpv4Address()
-                    ?: error("无法确定手机的 Wi-Fi IPv4 地址，不能向 Sonos 提供 FLAC 缓存。")
-                "http://$localAddress:$port/flac/${resource.publicToken}.flac"
+                if (latestRequestedResource !== selectedResource) {
+                    resourceToCancel = latestRequestedResource
+                    latestRequestedResource = selectedResource
+                }
+                trimCache(selectedResource)
+                selectedResource
+            }
+            resourceToCancel?.cancelDownload("已被新的播放请求取代。")
+            waitForInitialBuffer(resource)
+            val port = ensureServerStarted()
+            val localAddress = resolveWifiIpv4Address()
+                ?: error("无法确定手机的 Wi-Fi IPv4 地址，不能向 Sonos 提供 FLAC 缓存。")
+            "http://$localAddress:$port/flac/${resource.publicToken}.flac"
+        }
+    }
+
+    /**
+     * Cancels any in-flight transcode download. Call when playback bypasses this proxy
+     * entirely (e.g. Opus DIRECT_MP3 mode), where [preparePlaybackUrl] is never invoked.
+     */
+    suspend fun cancelPendingDownload() {
+        val resourceToCancel = prepareMutex.withLock {
+            latestRequestedResource.also {
+                latestRequestedResource = null
             }
         }
+        resourceToCancel?.cancelDownload("已切换为 Opus 直连秒播，无需本地缓存。")
     }
 
     private fun downloadTranscode(track: PlexTrackStream, resource: CachedResource) {
@@ -93,7 +129,9 @@ internal class PlexTranscodeProxy private constructor(context: Context) {
             setRequestProperty("Accept-Encoding", "identity")
         }
 
+        resource.connection = connection
         try {
+            if (resource.isCancelled) throw CancellationException(resource.failureMessage)
             Log.i(LOG_TAG, "download start key=${resource.cacheKey}")
             val status = connection.responseCode
             if (status !in 200..299) {
@@ -114,6 +152,7 @@ internal class PlexTranscodeProxy private constructor(context: Context) {
                 resource.file.outputStream().use { output ->
                     val buffer = ByteArray(COPY_BUFFER_SIZE)
                     while (true) {
+                        if (resource.isCancelled) throw CancellationException(resource.failureMessage)
                         val count = input.read(buffer)
                         if (count < 0) break
                         downloadedBytes += count
@@ -130,21 +169,24 @@ internal class PlexTranscodeProxy private constructor(context: Context) {
             resource.signalDataAvailable()
             Log.i(LOG_TAG, "download complete key=${resource.cacheKey} bytes=$downloadedBytes")
         } catch (error: Throwable) {
-            resource.failureMessage = error.message ?: error.javaClass.simpleName
+            if (resource.failureMessage == null) {
+                resource.failureMessage = error.message ?: error.javaClass.simpleName
+            }
             resource.signalDataAvailable()
             Log.w(LOG_TAG, "download failed key=${resource.cacheKey}: ${resource.failureMessage}")
         } finally {
+            resource.connection = null
             connection.disconnect()
         }
     }
 
     private fun createProgressiveResource(cacheKey: String): CachedResource {
-        val file = File(cacheDirectory, "$cacheKey.flac")
-        file.delete()
+        val publicToken = UUID.randomUUID().toString().replace("-", "")
+        val file = File(cacheDirectory, "$cacheKey-${publicToken.take(8)}.flac")
         file.createNewFile()
         return CachedResource(
             cacheKey = cacheKey,
-            publicToken = UUID.randomUUID().toString().replace("-", ""),
+            publicToken = publicToken,
             file = file,
         )
     }
@@ -446,8 +488,23 @@ internal class PlexTranscodeProxy private constructor(context: Context) {
         @Volatile
         var failureMessage: String? = null
 
+        @Volatile
+        var isCancelled: Boolean = false
+
+        @Volatile
+        var connection: HttpURLConnection? = null
+
         fun signalDataAvailable() {
             lock.withLock { dataAvailable.signalAll() }
+        }
+
+        fun cancelDownload(reason: String) {
+            if (isComplete || failureMessage != null) return
+            isCancelled = true
+            failureMessage = reason
+            connection?.disconnect()
+            signalDataAvailable()
+            Log.i(LOG_TAG, "download cancelled key=$cacheKey reason=$reason")
         }
     }
 
