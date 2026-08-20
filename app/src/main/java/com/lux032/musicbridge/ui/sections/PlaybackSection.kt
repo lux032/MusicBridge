@@ -28,6 +28,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -36,7 +37,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -382,13 +382,17 @@ internal fun PlaybackDetailSection(
         val bodyHeight = (maxHeight - topBarHeight).coerceAtLeast(0.dp)
         val compactLandscape = layoutInfo.isLandscape && maxHeight < 500.dp
 
-        // Full-bleed backdrop: blurred cover cross-fading on track change, dimmed by a
-        // palette-tinted gradient so foreground content stays readable. The section itself is
-        // laid out edge-to-edge, so this naturally paints behind the system bars.
-        PlaybackBackdrop(
-            artworkUrl = displayAlbum.thumbUrl,
-            palette = palette,
-            modifier = Modifier.fillMaxSize(),
+        // Full-bleed background: the same plain palette gradient the home page uses, so the
+        // player and every other page share one consistent colouring. The section is laid out
+        // edge-to-edge, so this naturally paints behind the system bars.
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    brush = Brush.verticalGradient(
+                        colors = listOf(palette.backgroundTop, palette.backgroundBottom),
+                    )
+                ),
         )
 
         Column(
@@ -1109,77 +1113,6 @@ private class ArcRingGlowBrush(
     }
 }
 
-/**
- * Immersive player backdrop: the cover is loaded small (256px), blurred with a real gaussian
- * RenderEffect on API 31+ (older devices fall back to the naturally soft upscaled image),
- * cross-faded between tracks, then dimmed by a palette-tinted gradient. The gradient stays
- * translucent enough that the blurred cover colors the whole page instead of collapsing
- * to black.
- */
-@Composable
-private fun PlaybackBackdrop(
-    artworkUrl: String?,
-    palette: ArtworkPalette,
-    modifier: Modifier = Modifier,
-) {
-    val context = LocalContext.current
-    val imageLoader = remember(context) { AlbumArtworkImageLoader.get(context) }
-    val blurSupported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
-    Box(modifier = modifier.background(palette.backgroundBottom)) {
-        Crossfade(targetState = artworkUrl, label = "backdrop_crossfade") { url ->
-            if (url != null) {
-                val request = remember(url) {
-                    ImageRequest.Builder(context)
-                        .data(plexThumbnailUrl(url, 256))
-                        .build()
-                }
-                AsyncImage(
-                    model = request,
-                    contentDescription = null,
-                    imageLoader = imageLoader,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .then(
-                            if (blurSupported) {
-                                Modifier.graphicsLayer {
-                                    renderEffect = android.graphics.RenderEffect
-                                        .createBlurEffect(50f, 50f, android.graphics.Shader.TileMode.CLAMP)
-                                        .asComposeRenderEffect()
-                                }
-                            } else {
-                                Modifier
-                            }
-                        ),
-                    contentScale = ContentScale.Crop,
-                )
-            } else {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(palette.backgroundBottom),
-                )
-            }
-        }
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(
-                    // Non-uniform stops keep the upper half translucent so the blurred cover
-                    // shows through, then deepen smoothly towards the bottom. Evenly spaced
-                    // stops created a visible mid-screen "layer" transition.
-                    Brush.verticalGradient(
-                        colorStops = arrayOf(
-                            0.00f to palette.backgroundTop.copy(alpha = 0.58f),
-                            0.30f to palette.backgroundTop.copy(alpha = 0.42f),
-                            0.65f to palette.backgroundBottom.copy(alpha = 0.74f),
-                            1.00f to palette.backgroundBottom.copy(alpha = 0.95f),
-                        ),
-                    )
-                ),
-        )
-    }
-}
-
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun AlbumDetailSection(
@@ -1211,6 +1144,9 @@ internal fun AlbumDetailSection(
     }
 
     val layoutInfo = LocalAppLayoutInfo.current
+    // Shares the root now-playing tint so this page stays consistent with the mini player
+    // and bottom bar.
+    val palette = LocalArtworkPalette.current
     val artworkMaximumWidth = if (layoutInfo.isWide) 300.dp else layoutInfo.detailArtworkMaximumWidth
     var showAlbumQueueMenu by remember { mutableStateOf(false) }
     val albumSummary: @Composable ColumnScope.() -> Unit = {
@@ -1261,7 +1197,7 @@ internal fun AlbumDetailSection(
             ) {
                 Text(
                     text = artistName,
-                    color = AppColors.Accent,
+                    color = palette.accent,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
@@ -1296,11 +1232,11 @@ internal fun AlbumDetailSection(
                 IconCircleButton(
                     onClick = { selectedRoom?.let { onPlayAlbum(currentTrackResult, it) } },
                     enabled = selectedRoom != null && !isPlaybackLoading,
-                    highlighted = true,
+                    containerColor = if (selectedRoom != null) palette.accent else null,
                 ) {
                     PlayerIconGraphic(
                         icon = PlayerIcon.Play,
-                        tint = if (selectedRoom != null) AppColors.TextPrimary else AppColors.TextTertiary,
+                        tint = if (selectedRoom != null) palette.onAccent else AppColors.TextTertiary,
                         modifier = Modifier.size(22.dp),
                     )
                 }
@@ -1308,9 +1244,24 @@ internal fun AlbumDetailSection(
         }
     }
 
+    Column(modifier = modifier.fillMaxSize()) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(
+                    start = layoutInfo.horizontalPadding,
+                    top = 12.dp,
+                    end = layoutInfo.horizontalPadding,
+                    bottom = 4.dp,
+                ),
+        ) {
+            BackCircleButton(onClick = onReturnHome, contentDescription = Strings.backToHome)
+        }
     if (layoutInfo.isWide) {
         Row(
-            modifier = modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = layoutInfo.horizontalPadding),
             horizontalArrangement = Arrangement.spacedBy(28.dp),
             verticalAlignment = Alignment.Top,
         ) {
@@ -1353,8 +1304,12 @@ internal fun AlbumDetailSection(
     } else {
         LazyColumn(
             state = trackListState,
-            modifier = modifier.fillMaxSize(),
-            contentPadding = PaddingValues(bottom = bottomContentPadding),
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(
+                start = layoutInfo.horizontalPadding,
+                end = layoutInfo.horizontalPadding,
+                bottom = bottomContentPadding,
+            ),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             item(key = "album-summary", contentType = "album-summary") {
@@ -1382,6 +1337,7 @@ internal fun AlbumDetailSection(
                 )
             }
         }
+    }
     }
 }
 

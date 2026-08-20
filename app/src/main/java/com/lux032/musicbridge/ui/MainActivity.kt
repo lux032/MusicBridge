@@ -139,6 +139,18 @@ fun PlexAlbumScreen(
         derivedStateOf { state.miniPlayerState != null }
     }
 
+    // Global Plexamp-style tint: the whole app background and accent highlights follow the
+    // now-playing artwork. Null when nothing is playing -> DefaultArtworkPalette, i.e. the
+    // original neutral dark look. Every page (including detail pages) shares this one tint.
+    val nowPlayingArtworkUrl by remember(state) {
+        derivedStateOf {
+            val playerState = state.miniPlayerState ?: return@derivedStateOf null
+            playerState.tracks.getOrNull(playerState.currentIndex)?.thumbUrl
+                ?: playerState.album.thumbUrl
+        }
+    }
+    val nowPlayingPalette = rememberAnimatedArtworkPalette(nowPlayingArtworkUrl)
+
     val activeSection = state.activeSection
     val bottomNavigationHeight = 84.dp
     val isNavigationRailVisible = layoutInfo.useNavigationRail && activeSection != AppSection.PlaybackDetail
@@ -248,23 +260,31 @@ fun PlexAlbumScreen(
             else -> true
         }
 
+    // Only the player lays out edge-to-edge (it applies the system bar insets itself);
+    // every other section sits inside the scaffold's safe padding while the root gradient
+    // below paints full-bleed behind the transparent system bars.
+    val isEdgeToEdgeSection = activeSection == AppSection.PlaybackDetail
+
     CompositionLocalProvider(
         LocalAppLayoutInfo provides layoutInfo,
         LocalOverscrollFactory provides null,
+        LocalArtworkPalette provides nowPlayingPalette,
     ) {
-    Row(
+    Box(
         modifier = modifier
             .fillMaxSize()
-            // The playback detail screen lays out edge-to-edge and paints its own backdrop
-            // under the system bars; every other section keeps the scaffold's safe padding.
-            .then(
-                if (activeSection == AppSection.PlaybackDetail) Modifier
-                else Modifier.padding(contentPadding)
-            )
             .background(
                 brush = Brush.verticalGradient(
-                    colors = listOf(AppColors.BackgroundTop, AppColors.BackgroundBottom),
+                    colors = listOf(nowPlayingPalette.backgroundTop, nowPlayingPalette.backgroundBottom),
                 )
+            ),
+    ) {
+    Row(
+        modifier = Modifier
+            .fillMaxSize()
+            .then(
+                if (isEdgeToEdgeSection) Modifier
+                else Modifier.padding(contentPadding)
             )
     ) {
         if (isNavigationRailVisible) {
@@ -359,15 +379,14 @@ fun PlexAlbumScreen(
                     }
                 } else if (currentSection == AppSection.PlaylistDetail) {
                     Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(start = layoutInfo.horizontalPadding, top = 16.dp, end = layoutInfo.horizontalPadding, bottom = contentBottomPadding),
+                        modifier = Modifier.fillMaxSize(),
                     ) {
                         PlaylistDetailSection(
                             playlistResult = state.playlistTrackResult,
                             selectedRoom = state.selectedSonosRoom,
                             isPlaybackLoading = state.isPlaybackCommandLoading,
                             isFavoriteLoading = state.isFavoriteMutationLoading,
+                            bottomContentPadding = contentBottomPadding,
                             onBack = state::navigateBack,
                             onToggleTrackFavorite = state::toggleTrackFavorite,
                             onQueueTrack = state::enqueueTrack,
@@ -462,9 +481,7 @@ fun PlexAlbumScreen(
                         }
                     }
                     Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(start = layoutInfo.horizontalPadding, top = 16.dp, end = layoutInfo.horizontalPadding),
+                        modifier = Modifier.fillMaxSize(),
                     ) {
                         ArtistAlbumsSection(
                             artist = state.selectedArtist,
@@ -495,9 +512,7 @@ fun PlexAlbumScreen(
                         }
                     }
                     Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(start = layoutInfo.horizontalPadding, top = 16.dp, end = layoutInfo.horizontalPadding),
+                        modifier = Modifier.fillMaxSize(),
                     ) {
                         AlbumCollectionSection(
                             title = Strings.favoriteAlbumsCollection,
@@ -527,9 +542,7 @@ fun PlexAlbumScreen(
                         }
                     }
                     Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(start = layoutInfo.horizontalPadding, top = 16.dp, end = layoutInfo.horizontalPadding),
+                        modifier = Modifier.fillMaxSize(),
                     ) {
                         AlbumCollectionSection(
                             title = Strings.recentAdded100,
@@ -546,13 +559,7 @@ fun PlexAlbumScreen(
                 } else if (currentSection == AppSection.AlbumDetail) {
                     val albumTrackListState = rememberLazyListState()
                     Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(
-                                start = layoutInfo.horizontalPadding,
-                                top = 16.dp,
-                                end = layoutInfo.horizontalPadding,
-                            ),
+                        modifier = Modifier.fillMaxSize(),
                     ) {
                         AlbumDetailSection(
                             trackResult = state.trackResult,
@@ -738,6 +745,7 @@ fun PlexAlbumScreen(
         }
 
         }
+    }
     }
     }
 }

@@ -11,6 +11,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.LazyItemScope
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -99,7 +100,7 @@ private fun FavoriteTracksCard(
             }
             FavoriteIconGraphic(
                 isFavorite = true,
-                tint = AppColors.Accent,
+                tint = LocalArtworkPalette.current.accent,
                 modifier = Modifier.size(24.dp),
             )
         }
@@ -160,6 +161,7 @@ internal fun PlaylistDetailSection(
     selectedRoom: SonosRoom?,
     isPlaybackLoading: Boolean,
     isFavoriteLoading: Boolean,
+    bottomContentPadding: androidx.compose.ui.unit.Dp,
     onBack: () -> Unit,
     onToggleTrackFavorite: (PlexTrackStream) -> Unit,
     onQueueTrack: (PlexTrackStream, QueuePlacement) -> Unit,
@@ -178,15 +180,22 @@ internal fun PlaylistDetailSection(
         return
     }
     val layoutInfo = LocalAppLayoutInfo.current
+    // Shares the root now-playing tint so this page stays consistent with the mini player
+    // and bottom bar.
+    val palette = LocalArtworkPalette.current
 
     LazyColumn(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(
+            start = layoutInfo.horizontalPadding,
+            top = 12.dp,
+            end = layoutInfo.horizontalPadding,
+            bottom = bottomContentPadding,
+        ),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         item {
-            OutlinedButton(onClick = onBack) {
-                Text(Strings.backToPlaylists)
-            }
+            BackCircleButton(onClick = onBack, contentDescription = Strings.backToPlaylists)
         }
 
         item {
@@ -235,11 +244,11 @@ internal fun PlaylistDetailSection(
                     IconCircleButton(
                         onClick = { selectedRoom?.let { onPlayPlaylist(currentResult, it) } },
                         enabled = selectedRoom != null && !isPlaybackLoading,
-                        highlighted = true,
+                        containerColor = if (selectedRoom != null) palette.accent else null,
                     ) {
                         PlayerIconGraphic(
                             icon = PlayerIcon.Play,
-                            tint = if (selectedRoom != null) AppColors.TextPrimary else AppColors.TextTertiary,
+                            tint = if (selectedRoom != null) palette.onAccent else AppColors.TextTertiary,
                             modifier = Modifier.size(22.dp),
                         )
                     }

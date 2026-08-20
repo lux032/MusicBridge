@@ -3,6 +3,7 @@ package com.lux032.musicbridge
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.*
@@ -21,6 +22,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -28,6 +30,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
@@ -426,7 +429,7 @@ internal fun BoxScope.VerticalIndexBar(
                         .clip(RoundedCornerShape(10.dp))
                         .clickable { onSelect(label) }
                         .padding(vertical = if (compact) 0.dp else 2.dp),
-                    color = if (label == activeLabel) AppColors.SurfaceStrong else AppColors.TextPrimary,
+                    color = if (label == activeLabel) LocalArtworkPalette.current.accent else AppColors.TextPrimary,
                     textAlign = TextAlign.Center,
                     style = if (compact) {
                         MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, lineHeight = 11.sp)
@@ -465,87 +468,123 @@ internal fun ArtistAlbumsSection(
         return
     }
 
-    val heroAlbum = currentArtist.albums.firstOrNull()
+    // Shares the root now-playing tint so this page stays consistent with the mini player
+    // and bottom bar.
+    val palette = LocalArtworkPalette.current
+    // Reference layout shows newest releases first.
+    val sortedAlbums = remember(currentArtist.albums) {
+        currentArtist.albums.sortedByDescending { it.year ?: Int.MIN_VALUE }
+    }
 
     LazyVerticalGrid(
         state = gridState,
         columns = GridCells.Adaptive(layoutInfo.albumGridMinimumWidth),
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(bottom = bottomContentPadding),
+        contentPadding = PaddingValues(
+            start = layoutInfo.horizontalPadding,
+            top = 12.dp,
+            end = layoutInfo.horizontalPadding,
+            bottom = bottomContentPadding,
+        ),
         horizontalArrangement = Arrangement.spacedBy(14.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         item(span = { GridItemSpan(maxLineSpan) }, contentType = "back") {
-            OutlinedButton(onClick = onBack) {
-                Text(Strings.backToArtists)
-            }
+            BackCircleButton(onClick = onBack, contentDescription = Strings.backToArtists)
         }
-        if (heroAlbum != null) {
-            item(span = { GridItemSpan(maxLineSpan) }, contentType = "hero") {
-                Box(
-                    modifier = Modifier.fillMaxWidth(),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    AsyncAlbumArtwork(
-                        imageUrl = currentArtist.coverUrl ?: heroAlbum.thumbUrl,
-                        title = currentArtist.name,
+                item(span = { GridItemSpan(maxLineSpan) }, contentType = "hero") {
+                    Row(
                         modifier = Modifier
-                            .widthIn(max = layoutInfo.collectionHeroMaximumWidth)
                             .fillMaxWidth()
-                            .aspectRatio(1f)
-                            .clip(RoundedCornerShape(24.dp)),
-                        thumbnailSize = layoutInfo.collectionHeroMaximumWidth,
+                            .padding(top = 12.dp, bottom = 10.dp),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Text(
+                                text = currentArtist.name,
+                                style = MaterialTheme.typography.headlineMedium,
+                                color = AppColors.TextPrimary,
+                                fontWeight = FontWeight.Bold,
+                            )
+                            Text(
+                                text = Strings.artistAlbumsDesc(currentArtist.albumCount),
+                                color = AppColors.TextSecondary,
+                            )
+                            Button(
+                                onClick = { selectedRoom?.let { onShuffleArtist(currentArtist, it) } },
+                                enabled = selectedRoom != null && currentArtist.albums.isNotEmpty() && !isPlaybackLoading,
+                                shape = RoundedCornerShape(50),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = palette.accent,
+                                    contentColor = palette.onAccent,
+                                    disabledContainerColor = palette.accent.copy(alpha = 0.35f),
+                                    disabledContentColor = palette.onAccent.copy(alpha = 0.6f),
+                                ),
+                                contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Shuffle,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(Strings.shuffleArtist, fontWeight = FontWeight.Bold)
+                            }
+                            Text(
+                                text = selectedRoom?.let { Strings.willPushTo(it.roomName) } ?: Strings.noRoomSelectedDesc,
+                                color = AppColors.TextTertiary,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                        if (currentArtist.coverUrl != null) {
+                            AsyncAlbumArtwork(
+                                imageUrl = currentArtist.coverUrl,
+                                title = currentArtist.name,
+                                modifier = Modifier
+                                    .size(104.dp)
+                                    .border(BorderStroke(1.dp, AppColors.BorderStrong), CircleShape)
+                                    .clip(CircleShape),
+                                contentScale = ContentScale.Crop,
+                                thumbnailSize = 104.dp,
+                            )
+                        } else {
+                            Box(
+                                modifier = Modifier
+                                    .size(104.dp)
+                                    .border(BorderStroke(1.dp, AppColors.BorderStrong), CircleShape)
+                                    .clip(CircleShape)
+                                    .background(AppColors.SurfaceMuted),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Person,
+                                    contentDescription = null,
+                                    tint = AppColors.TextSecondary,
+                                    modifier = Modifier.size(44.dp),
+                                )
+                            }
+                        }
+                    }
+                }
+                items(
+                    items = sortedAlbums,
+                    key = { it.ratingKey },
+                    contentType = { "album" },
+                ) { album ->
+                    AlbumCoverCard(
+                        album = album,
+                        selected = selectedAlbum?.ratingKey == album.ratingKey,
+                        onClick = { onAlbumClick(album) },
+                        onQueueAction = { onAlbumQueueAction(album, it) },
+                        compact = false,
+                        // The artist name is redundant on their own page; show the year instead.
+                        subtitleOverride = album.year?.toString() ?: album.artistName,
                     )
                 }
-            }
-        }
-        item(span = { GridItemSpan(maxLineSpan) }, contentType = "header") {
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Text(
-                    text = currentArtist.name,
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = AppColors.TextPrimary,
-                    fontWeight = FontWeight.Bold,
-                )
-                Text(
-                    text = Strings.artistAlbumsDesc(currentArtist.albumCount),
-                    color = AppColors.TextSecondary,
-                )
-                Button(
-                    onClick = { selectedRoom?.let { onShuffleArtist(currentArtist, it) } },
-                    enabled = selectedRoom != null && currentArtist.albums.isNotEmpty() && !isPlaybackLoading,
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Shuffle,
-                        contentDescription = Strings.shuffleArtist,
-                        modifier = Modifier.size(18.dp),
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(Strings.shuffleArtist)
-                }
-                Text(
-                    text = selectedRoom?.let { Strings.willPushTo(it.roomName) } ?: Strings.noRoomSelectedDesc,
-                    color = AppColors.TextTertiary,
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
-        }
-        items(
-            items = currentArtist.albums,
-            key = { it.ratingKey },
-            contentType = { "album" },
-        ) { album ->
-            AlbumCoverCard(
-                album = album,
-                selected = selectedAlbum?.ratingKey == album.ratingKey,
-                onClick = { onAlbumClick(album) },
-                onQueueAction = { onAlbumQueueAction(album, it) },
-                compact = false,
-            )
-        }
     }
 }
 

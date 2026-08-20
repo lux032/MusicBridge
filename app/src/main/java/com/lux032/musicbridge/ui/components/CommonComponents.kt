@@ -22,6 +22,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.runtime.*
@@ -62,8 +63,37 @@ internal fun FavoriteIconButton(
     ) {
         FavoriteIconGraphic(
             isFavorite = isFavorite,
-            tint = if (isFavorite) AppColors.Accent else AppColors.TextSecondary,
+            tint = if (isFavorite) LocalArtworkPalette.current.accent else AppColors.TextSecondary,
         )
+    }
+}
+
+/**
+ * Small translucent back button matching the player page's top bar. The Box wrapper keeps it
+ * left-aligned at its natural size inside lazy grids/lists, whose tight width constraints
+ * would otherwise stretch the circle into a full-width pill.
+ */
+@Composable
+internal fun BackCircleButton(
+    onClick: () -> Unit,
+    contentDescription: String,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier.fillMaxWidth(),
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        IconCircleButton(
+            onClick = onClick,
+            containerColor = Color.White.copy(alpha = 0.10f),
+        ) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                contentDescription = contentDescription,
+                tint = AppColors.TextPrimary,
+                modifier = Modifier.size(20.dp),
+            )
+        }
     }
 }
 
@@ -119,21 +149,27 @@ internal fun BottomNavigationBar(
     val navigationBarBottomInset = WindowInsets.navigationBars
         .asPaddingValues()
         .calculateBottomPadding()
+    val palette = LocalArtworkPalette.current
 
+    // Floating rounded pill matching the player page's action bar: tinted translucent
+    // container, hairline light border, icon + label items.
     Surface(
-        modifier = modifier.fillMaxWidth(),
-        color = AppColors.Surface,
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(
+                start = 16.dp,
+                end = 16.dp,
+                bottom = navigationBarBottomInset + 10.dp,
+            ),
+        shape = RoundedCornerShape(28.dp),
+        color = palette.backgroundBottom.copy(alpha = 0.88f),
+        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.10f)),
         shadowElevation = 8.dp,
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(
-                    start = 16.dp,
-                    top = 12.dp,
-                    end = 16.dp,
-                    bottom = navigationBarBottomInset + 12.dp,
-                ),
+                .padding(horizontal = 8.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.SpaceEvenly,
         ) {
             BottomNavButton(
@@ -188,7 +224,7 @@ internal fun AppNavigationRail(
         modifier = modifier
             .fillMaxHeight()
             .width(104.dp),
-        color = AppColors.Surface.copy(alpha = 0.96f),
+        color = LocalArtworkPalette.current.backgroundBottom.copy(alpha = 0.94f),
         shadowElevation = 8.dp,
     ) {
         Column(
@@ -244,7 +280,7 @@ internal fun BottomNavButton(
         label = "nav_button_scale",
     )
     val animatedTint by animateColorAsState(
-        targetValue = if (isSelected) AppColors.Accent else AppColors.TextSecondary,
+        targetValue = if (isSelected) LocalArtworkPalette.current.accent else AppColors.TextSecondary,
         label = "nav_tint",
     )
     Column(
@@ -356,6 +392,7 @@ internal fun AlbumCoverCard(
     onClick: () -> Unit,
     onQueueAction: ((QueuePlacement) -> Unit)? = null,
     compact: Boolean = false,
+    subtitleOverride: String? = null,
 ) {
     val layoutInfo = LocalAppLayoutInfo.current
     var showQueueMenu by remember { mutableStateOf(false) }
@@ -406,7 +443,7 @@ internal fun AlbumCoverCard(
                         overflow = TextOverflow.Ellipsis,
                     )
                     Text(
-                        text = album.artistName ?: Strings.unknownArtist,
+                        text = subtitleOverride ?: album.artistName ?: Strings.unknownArtist,
                         color = AppColors.TextSecondary,
                         style = MaterialTheme.typography.bodySmall,
                         maxLines = 1,
@@ -563,6 +600,7 @@ internal fun GlobalVolumeOverlay(
     modifier: Modifier = Modifier,
     onVolumeChange: (Float) -> Unit,
 ) {
+    val accent = LocalArtworkPalette.current.accent
     Surface(
         modifier = modifier.widthIn(max = 360.dp),
         shape = RoundedCornerShape(24.dp),
@@ -589,7 +627,7 @@ internal fun GlobalVolumeOverlay(
                 )
                 Text(
                     text = if (hasLoadedVolume) "${volume.toInt()}" else "--",
-                    color = AppColors.Accent,
+                    color = accent,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                 )
@@ -605,8 +643,8 @@ internal fun GlobalVolumeOverlay(
                 valueRange = 0f..100f,
                 enabled = hasLoadedVolume && !isVolumeLoading,
                 colors = SliderDefaults.colors(
-                    thumbColor = AppColors.Accent,
-                    activeTrackColor = AppColors.Accent,
+                    thumbColor = accent,
+                    activeTrackColor = accent,
                     inactiveTrackColor = AppColors.SurfaceMuted,
                     disabledThumbColor = AppColors.TextTertiary,
                     disabledActiveTrackColor = AppColors.TextTertiary,
@@ -616,7 +654,7 @@ internal fun GlobalVolumeOverlay(
                     Box(
                         modifier = Modifier
                             .size(14.dp)
-                            .background(AppColors.Accent, CircleShape),
+                            .background(accent, CircleShape),
                     )
                 },
                 track = { sliderState ->
@@ -634,7 +672,7 @@ internal fun GlobalVolumeOverlay(
                                 .fillMaxWidth(fraction)
                                 .height(4.dp)
                                 .clip(RoundedCornerShape(2.dp))
-                                .background(AppColors.Accent),
+                                .background(accent),
                         )
                     }
                 },

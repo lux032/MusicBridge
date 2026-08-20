@@ -24,6 +24,8 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -286,39 +288,36 @@ internal fun EntryActionCard(
     actionLabel: String,
     onAction: () -> Unit,
 ) {
-    Surface(
-        shape = RoundedCornerShape(22.dp),
-        color = AppColors.Surface,
-        border = BorderStroke(1.dp, AppColors.Border),
-        shadowElevation = 4.dp,
+    // Plain section-header style (no card chrome) so it blends into the tinted background,
+    // matching the other home section headers.
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onAction),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 16.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.titleLarge,
-                    color = AppColors.TextPrimary,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Text(
-                    text = body,
-                    color = AppColors.TextSecondary,
-                )
-            }
-            Spacer(modifier = Modifier.width(12.dp))
-            OutlinedButton(onClick = onAction) {
-                Text(actionLabel)
-            }
+            Text(
+                text = title,
+                style = MaterialTheme.typography.headlineMedium,
+                color = AppColors.TextPrimary,
+                fontWeight = FontWeight.Bold,
+            )
+            Text(
+                text = body,
+                color = AppColors.TextSecondary,
+            )
         }
+        Spacer(modifier = Modifier.width(12.dp))
+        Text(
+            text = "$actionLabel ›",
+            color = LocalArtworkPalette.current.accent,
+            fontWeight = FontWeight.SemiBold,
+        )
     }
 }
 
@@ -350,8 +349,12 @@ private fun androidx.compose.foundation.lazy.LazyListScope.albumPreviewGridItems
                 color = AppColors.TextPrimary,
                 fontWeight = FontWeight.SemiBold,
             )
-            OutlinedButton(onClick = onAction) {
-                Text(actionLabel)
+            TextButton(onClick = onAction) {
+                Text(
+                    text = "$actionLabel ›",
+                    color = LocalArtworkPalette.current.accent,
+                    fontWeight = FontWeight.SemiBold,
+                )
             }
         }
     }
@@ -409,14 +412,17 @@ internal fun AlbumCollectionSection(
         state = gridState,
         columns = GridCells.Adaptive(layoutInfo.albumGridMinimumWidth),
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(bottom = bottomContentPadding),
+        contentPadding = PaddingValues(
+            start = layoutInfo.horizontalPadding,
+            top = 12.dp,
+            end = layoutInfo.horizontalPadding,
+            bottom = bottomContentPadding,
+        ),
         horizontalArrangement = Arrangement.spacedBy(14.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         item(span = { GridItemSpan(maxLineSpan) }, contentType = "back") {
-            OutlinedButton(onClick = onBack) {
-                Text(Strings.backToHome)
-            }
+            BackCircleButton(onClick = onBack, contentDescription = Strings.backToHome)
         }
         item(span = { GridItemSpan(maxLineSpan) }, contentType = "hero") {
             Box(
@@ -516,9 +522,7 @@ internal fun AllAlbumsSection(
             horizontalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             item(span = { GridItemSpan(maxLineSpan) }) {
-                OutlinedButton(onClick = onBack) {
-                    Text(Strings.backToHome)
-                }
+                BackCircleButton(onClick = onBack, contentDescription = Strings.backToHome)
             }
             item(span = { GridItemSpan(maxLineSpan) }) {
                 Column(
