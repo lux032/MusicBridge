@@ -22,6 +22,7 @@ object Strings {
     val noFavoritesBody get() = if (isZhCN) "当前按 Plex 返回的 userRating 识别收藏专辑。你也可以先打开任意专辑，在详情页直接点击收藏。" else "Favorites are identified by Plex userRating. You can also open any album and mark it as favorite in the detail page."
     val retry get() = if (isZhCN) "重新获取" else "Retry"
     val allAlbums get() = if (isZhCN) "全部专辑" else "All Albums"
+    val albums get() = if (isZhCN) "专辑" else "Albums"
     val albumsSynced get() = if (isZhCN) { count: Int -> "已同步 $count 张专辑" } else { count: Int -> "$count albums synced" }
     val view get() = if (isZhCN) "查看" else "View"
     val recentPlayed get() = if (isZhCN) "最近播放" else "Recently Played"
@@ -92,6 +93,11 @@ object Strings {
     val backToArtists get() = if (isZhCN) "返回歌手页" else "Back to Artists"
     val artistAlbumsDesc get() = if (isZhCN) { count: Int -> "共 $count 张专辑，点击封面进入专辑详情并继续播放。" } else { count: Int -> "Total $count albums. Tap cover to view details and continue playback." }
     val shuffleArtist get() = if (isZhCN) "随机播放该歌手" else "Shuffle Artist"
+    val shuffleShort get() = if (isZhCN) "随机播放" else "Shuffle"
+    val topTracks get() = if (isZhCN) "热门单曲" else "Top Tracks"
+    val playAll get() = if (isZhCN) "播放全部" else "Play All"
+    val favoriteArtist get() = if (isZhCN) "收藏歌手" else "Favorite Artist"
+    val unfavoriteArtist get() = if (isZhCN) "取消收藏歌手" else "Unfavorite Artist"
     val volume get() = if (isZhCN) "音量" else "Volume"
     val loadingVolume get() = if (isZhCN) { room: String -> "正在读取 $room 的音量" } else { room: String -> "Loading volume for $room" }
     val home get() = if (isZhCN) "首页" else "Home"

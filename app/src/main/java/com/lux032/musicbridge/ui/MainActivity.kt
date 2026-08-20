@@ -467,7 +467,7 @@ fun PlexAlbumScreen(
                     }
                 } else if (currentSection == AppSection.ArtistAlbums) {
                     val savedPos = state.getSavedLazyScrollPosition(AppSection.ArtistAlbums)
-                    val artistAlbumsGridState = rememberLazyGridState(
+                    val artistAlbumsListState = rememberLazyListState(
                         initialFirstVisibleItemIndex = savedPos.index,
                         initialFirstVisibleItemScrollOffset = savedPos.offset,
                     )
@@ -475,10 +475,13 @@ fun PlexAlbumScreen(
                         onDispose {
                             state.saveLazyScrollPosition(
                                 AppSection.ArtistAlbums,
-                                artistAlbumsGridState.firstVisibleItemIndex,
-                                artistAlbumsGridState.firstVisibleItemScrollOffset,
+                                artistAlbumsListState.firstVisibleItemIndex,
+                                artistAlbumsListState.firstVisibleItemScrollOffset,
                             )
                         }
+                    }
+                    LaunchedEffect(state.selectedArtist?.ratingKey, state.selectedArtist?.name) {
+                        state.selectedArtist?.let { state.loadArtistTracks(it) }
                     }
                     Box(
                         modifier = Modifier.fillMaxSize(),
@@ -488,12 +491,35 @@ fun PlexAlbumScreen(
                             selectedAlbum = state.selectedAlbum,
                             selectedRoom = state.selectedSonosRoom,
                             isPlaybackLoading = state.isPlaybackCommandLoading,
+                            isFavoriteLoading = state.isFavoriteMutationLoading,
+                            artistTracks = state.artistTracks,
+                            isArtistTracksLoading = state.isArtistTracksLoading,
                             bottomContentPadding = contentBottomPadding,
-                            gridState = artistAlbumsGridState,
+                            listState = artistAlbumsListState,
                             onBack = state::navigateBack,
                             onAlbumClick = state::openAlbumDetail,
                             onAlbumQueueAction = state::enqueueAlbum,
                             onShuffleArtist = state::shuffleArtist,
+                            onToggleArtistFavorite = state::toggleArtistFavorite,
+                            onQueueTrack = state::enqueueTrack,
+                            onPlayTrack = { artist, _, room, index ->
+                                val tracksFromIndex = state.artistTracks.drop(index)
+                                if (tracksFromIndex.isNotEmpty()) {
+                                    val fakeAlbum = PlexAlbum(
+                                        ratingKey = artist.ratingKey ?: artist.name,
+                                        title = artist.name,
+                                        artistName = artist.name,
+                                        year = null,
+                                        thumbUrl = artist.coverUrl,
+                                        userRating = null,
+                                        addedAtEpochSeconds = null,
+                                        lastViewedAtEpochSeconds = null,
+                                        section = PlexSection("", "", ""),
+                                        sourceId = artist.sourceId,
+                                    )
+                                    state.startSingleTrackPlayback(fakeAlbum, tracksFromIndex, 0, room)
+                                }
+                            },
                         )
                     }
                 } else if (currentSection == AppSection.FavoriteCollection) {

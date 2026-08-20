@@ -503,7 +503,7 @@ internal fun PlaybackDetailSection(
     if (isPlaylistSheetVisible) {
         ModalBottomSheet(
             onDismissRequest = { isPlaylistSheetVisible = false },
-            containerColor = AppColors.Surface,
+            containerColor = LocalArtworkPalette.current.backgroundBottom,
         ) {
             // Lazy so a long queue does not compose hundreds of rows at once; start at the
             // currently playing track instead of the top.
@@ -538,8 +538,8 @@ internal fun PlaybackDetailSection(
                                 onSelectTrack(index)
                             },
                         shape = RoundedCornerShape(14.dp),
-                        color = if (isCurrent) AppColors.SurfaceStrong else AppColors.SurfaceAlt,
-                        border = BorderStroke(1.dp, if (isCurrent) AppColors.Accent else AppColors.Border),
+                        color = if (isCurrent) AppColors.CardSurfaceStrong else AppColors.CardSurface,
+                        border = BorderStroke(1.dp, if (isCurrent) LocalArtworkPalette.current.accent else AppColors.Border),
                     ) {
                         Row(
                             modifier = Modifier
@@ -561,7 +561,7 @@ internal fun PlaybackDetailSection(
                                 )
                                 Text(
                                     text = if (isCurrent) Strings.nowPlaying else (track.albumTitle ?: currentState.album.title),
-                                    color = if (isCurrent) AppColors.Accent else AppColors.TextSecondary,
+                                    color = if (isCurrent) LocalArtworkPalette.current.accent else AppColors.TextSecondary,
                                     style = MaterialTheme.typography.bodySmall,
                                 )
                             }
@@ -604,8 +604,8 @@ internal fun PlaybackDetailSection(
                                     },
                                 ),
                             shape = RoundedCornerShape(14.dp),
-                            color = if (playbackMode == mode) AppColors.SurfaceStrong else AppColors.SurfaceAlt,
-                            border = BorderStroke(1.dp, if (playbackMode == mode) AppColors.Accent else AppColors.Border),
+                            color = if (playbackMode == mode) AppColors.CardSurfaceStrong else AppColors.CardSurface,
+                            border = BorderStroke(1.dp, if (playbackMode == mode) LocalArtworkPalette.current.accent else AppColors.Border),
                         ) {
                             Row(
                                 modifier = Modifier
@@ -619,7 +619,7 @@ internal fun PlaybackDetailSection(
                                     Icon(
                                         imageVector = Icons.Filled.Check,
                                         contentDescription = null,
-                                        tint = AppColors.Accent,
+                                        tint = LocalArtworkPalette.current.accent,
                                     )
                                 }
                             }
@@ -656,8 +656,8 @@ internal fun PlaybackDetailSection(
                                         onSelectRoom(room)
                                     },
                                 shape = RoundedCornerShape(14.dp),
-                                color = if (isCurrentRoom) AppColors.SurfaceStrong else AppColors.SurfaceAlt,
-                                border = BorderStroke(1.dp, if (isCurrentRoom) AppColors.Accent else AppColors.Border),
+                                color = if (isCurrentRoom) AppColors.CardSurfaceStrong else AppColors.CardSurface,
+                                border = BorderStroke(1.dp, if (isCurrentRoom) LocalArtworkPalette.current.accent else AppColors.Border),
                             ) {
                                 Row(
                                     modifier = Modifier
@@ -1363,7 +1363,7 @@ private fun AlbumTrackRow(
             onLongClick = { showQueueMenu = true },
         ),
         shape = RoundedCornerShape(12.dp),
-        color = AppColors.Surface,
+        color = AppColors.CardSurface,
         border = BorderStroke(1.dp, AppColors.Border),
     ) {
         Row(
@@ -1483,7 +1483,7 @@ private fun WheelPickerField(
                 .width(88.dp)
                 .height(itemHeight * visibleItemCount)
                 .clip(RoundedCornerShape(18.dp))
-                .background(AppColors.SurfaceAlt),
+                .background(AppColors.CardSurface),
             contentAlignment = Alignment.Center,
         ) {
             LazyColumn(
@@ -1610,6 +1610,8 @@ internal fun BottomMiniPlayer(
                     highlighted = true,
                     sizeOverride = 54.dp,
                     iconSizeOverride = 24.dp,
+                    highlightedContainerColor = palette.accent,
+                    highlightedContentColor = palette.onAccent,
                 )
             }
             Box(
@@ -1765,10 +1767,11 @@ internal fun SettingsSection(
 
         serverProfiles.forEach { profile ->
             val isActive = profile.id == activeServerId
+            val palette = LocalArtworkPalette.current
             ElevatedCard(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.elevatedCardColors(
-                    containerColor = if (isActive) AppColors.Accent.copy(alpha = 0.14f) else AppColors.SurfaceMuted,
+                    containerColor = if (isActive) palette.accent.copy(alpha = 0.14f) else AppColors.CardSurface,
                 ),
             ) {
                 Row(
@@ -1782,7 +1785,7 @@ internal fun SettingsSection(
                     Icon(
                         imageVector = if (profile.type == MusicServerType.Plex) Icons.Filled.Cloud else Icons.Filled.Storage,
                         contentDescription = null,
-                        tint = if (isActive) AppColors.Accent else AppColors.TextSecondary,
+                        tint = if (isActive) palette.accent else AppColors.TextSecondary,
                     )
                     Column(modifier = Modifier.weight(1f)) {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -1896,8 +1899,8 @@ internal fun SettingsSection(
                 onClick = { onSaveServer(draft, false) },
                 modifier = Modifier.weight(1f),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = AppColors.Accent,
-                    contentColor = AppColors.SurfaceStrong,
+                    containerColor = LocalArtworkPalette.current.accent,
+                    contentColor = LocalArtworkPalette.current.onAccent,
                 ),
             ) {
                 Text(Strings.save)
@@ -1927,9 +1930,10 @@ internal fun OpusTranscodeStrategyCard(
     currentMode: OpusTranscodeMode,
     onModeChange: (OpusTranscodeMode) -> Unit,
 ) {
+    val palette = LocalArtworkPalette.current
     Surface(
         shape = RoundedCornerShape(26.dp),
-        color = AppColors.Surface,
+        color = AppColors.CardSurface,
         border = BorderStroke(1.dp, AppColors.Border),
     ) {
         Column(
@@ -1957,7 +1961,7 @@ internal fun OpusTranscodeStrategyCard(
                     .clip(RoundedCornerShape(18.dp))
                     .clickable { onModeChange(OpusTranscodeMode.DIRECT_MP3) },
                 shape = RoundedCornerShape(18.dp),
-                color = if (isDirectMp3) AppColors.SurfaceMuted else AppColors.SurfaceAlt,
+                color = if (isDirectMp3) AppColors.CardSurfaceStrong else AppColors.CardSurface,
                 border = BorderStroke(1.dp, if (isDirectMp3) AppColors.BorderStrong else AppColors.Border),
             ) {
                 Row(
@@ -1971,7 +1975,7 @@ internal fun OpusTranscodeStrategyCard(
                         selected = isDirectMp3,
                         onClick = { onModeChange(OpusTranscodeMode.DIRECT_MP3) },
                         colors = RadioButtonDefaults.colors(
-                            selectedColor = AppColors.Accent,
+                            selectedColor = palette.accent,
                             unselectedColor = AppColors.TextSecondary,
                         ),
                     )
@@ -1992,11 +1996,11 @@ internal fun OpusTranscodeStrategyCard(
                                 onClick = { onModeChange(OpusTranscodeMode.DIRECT_MP3) },
                                 label = { Text(Strings.opusModeDirectMp3Badge) },
                                 colors = AssistChipDefaults.assistChipColors(
-                                    labelColor = AppColors.Accent,
+                                    labelColor = palette.accent,
                                 ),
                                 border = AssistChipDefaults.assistChipBorder(
                                     enabled = true,
-                                    borderColor = AppColors.Accent.copy(alpha = 0.5f),
+                                    borderColor = palette.accent.copy(alpha = 0.5f),
                                 ),
                             )
                         }
@@ -2017,7 +2021,7 @@ internal fun OpusTranscodeStrategyCard(
                     .clip(RoundedCornerShape(18.dp))
                     .clickable { onModeChange(OpusTranscodeMode.PROXY_FLAC) },
                 shape = RoundedCornerShape(18.dp),
-                color = if (isProxyFlac) AppColors.SurfaceMuted else AppColors.SurfaceAlt,
+                color = if (isProxyFlac) AppColors.CardSurfaceStrong else AppColors.CardSurface,
                 border = BorderStroke(1.dp, if (isProxyFlac) AppColors.BorderStrong else AppColors.Border),
             ) {
                 Row(
@@ -2031,7 +2035,7 @@ internal fun OpusTranscodeStrategyCard(
                         selected = isProxyFlac,
                         onClick = { onModeChange(OpusTranscodeMode.PROXY_FLAC) },
                         colors = RadioButtonDefaults.colors(
-                            selectedColor = AppColors.Accent,
+                            selectedColor = palette.accent,
                             unselectedColor = AppColors.TextSecondary,
                         ),
                     )

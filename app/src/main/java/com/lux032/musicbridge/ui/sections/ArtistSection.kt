@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.LazyItemScope
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
@@ -33,12 +34,15 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.lux032.musicbridge.plex.PlexAlbum
+import com.lux032.musicbridge.plex.PlexTrackStream
 import com.lux032.musicbridge.sonos.SonosRoom
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
@@ -246,7 +250,7 @@ internal fun ArtistCoverCard(
         modifier = Modifier
             .clickable(onClick = onClick),
         shape = RoundedCornerShape(cornerRadius),
-        color = AppColors.Surface,
+        color = AppColors.CardSurface,
         border = BorderStroke(1.dp, AppColors.Border),
         shadowElevation = 0.dp,
     ) {
@@ -310,7 +314,7 @@ internal fun ArtistListRow(
         modifier = Modifier
             .clickable(onClick = onClick),
         shape = RoundedCornerShape(20.dp),
-        color = AppColors.Surface,
+        color = AppColors.CardSurface,
         border = BorderStroke(1.dp, AppColors.Border),
     ) {
         Row(
@@ -409,8 +413,8 @@ internal fun BoxScope.VerticalIndexBar(
                 )
             },
         shape = RoundedCornerShape(if (compact) 16.dp else 20.dp),
-        color = AppColors.SurfaceStrong.copy(alpha = 0.94f),
-        border = BorderStroke(1.dp, AppColors.BorderStrong),
+        color = LocalArtworkPalette.current.backgroundBottom.copy(alpha = 0.88f),
+        border = BorderStroke(1.dp, AppColors.Border),
         shadowElevation = 6.dp,
     ) {
         Column(
@@ -449,12 +453,18 @@ internal fun ArtistAlbumsSection(
     selectedAlbum: PlexAlbum?,
     selectedRoom: SonosRoom?,
     isPlaybackLoading: Boolean,
+    isFavoriteLoading: Boolean,
+    artistTracks: List<PlexTrackStream>,
+    isArtistTracksLoading: Boolean,
     bottomContentPadding: androidx.compose.ui.unit.Dp,
-    gridState: LazyGridState = rememberLazyGridState(),
+    listState: LazyListState = rememberLazyListState(),
     onBack: () -> Unit,
     onAlbumClick: (PlexAlbum) -> Unit,
     onAlbumQueueAction: (PlexAlbum, QueuePlacement) -> Unit,
     onShuffleArtist: (ArtistSummary, SonosRoom) -> Unit,
+    onToggleArtistFavorite: (ArtistSummary) -> Unit,
+    onPlayTrack: (ArtistSummary, PlexTrackStream, SonosRoom, Int) -> Unit,
+    onQueueTrack: (PlexTrackStream, QueuePlacement) -> Unit,
 ) {
     val layoutInfo = LocalAppLayoutInfo.current
     val currentArtist = artist
@@ -475,10 +485,10 @@ internal fun ArtistAlbumsSection(
     val sortedAlbums = remember(currentArtist.albums) {
         currentArtist.albums.sortedByDescending { it.year ?: Int.MIN_VALUE }
     }
+    val topTracks = remember(artistTracks) { artistTracks.take(10) }
 
-    LazyVerticalGrid(
-        state = gridState,
-        columns = GridCells.Adaptive(layoutInfo.albumGridMinimumWidth),
+    LazyColumn(
+        state = listState,
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(
             start = layoutInfo.horizontalPadding,
@@ -486,105 +496,249 @@ internal fun ArtistAlbumsSection(
             end = layoutInfo.horizontalPadding,
             bottom = bottomContentPadding,
         ),
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        item(span = { GridItemSpan(maxLineSpan) }, contentType = "back") {
+        item(contentType = "back") {
             BackCircleButton(onClick = onBack, contentDescription = Strings.backToArtists)
         }
-                item(span = { GridItemSpan(maxLineSpan) }, contentType = "hero") {
+
+        item(contentType = "hero") {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 12.dp, bottom = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = currentArtist.name,
+                        style = MaterialTheme.typography.headlineMedium,
+                        color = AppColors.TextPrimary,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Text(
+                        text = Strings.albumsCount(currentArtist.albumCount),
+                        color = AppColors.TextSecondary,
+                    )
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        FavoriteIconButton(
+                            isFavorite = currentArtist.isFavorite,
+                            isLoading = isFavoriteLoading,
+                            onClick = { onToggleArtistFavorite(currentArtist) },
+                        )
+                        val playAllEnabled =
+                            selectedRoom != null && artistTracks.isNotEmpty() && !isPlaybackLoading
+                        IconCircleButton(
+                            onClick = {
+                                selectedRoom?.let { room ->
+                                    artistTracks.firstOrNull()?.let { onPlayTrack(currentArtist, it, room, 0) }
+                                }
+                            },
+                            enabled = playAllEnabled,
+                            containerColor = if (playAllEnabled) palette.accent else palette.accent.copy(alpha = 0.35f),
+                            modifier = Modifier.semantics { contentDescription = Strings.playAll },
+                        ) {
+                            PlayerIconGraphic(
+                                icon = PlayerIcon.Play,
+                                tint = palette.onAccent.copy(alpha = if (playAllEnabled) 1f else 0.6f),
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
+                        val shuffleEnabled =
+                            selectedRoom != null && currentArtist.albums.isNotEmpty() && !isPlaybackLoading
+                        IconCircleButton(
+                            onClick = { selectedRoom?.let { onShuffleArtist(currentArtist, it) } },
+                            enabled = shuffleEnabled,
+                            containerColor = AppColors.CardSurfaceStrong,
+                            modifier = Modifier.semantics { contentDescription = Strings.shuffleShort },
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Shuffle,
+                                contentDescription = null,
+                                tint = if (shuffleEnabled) AppColors.TextPrimary else AppColors.TextTertiary,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
+                    }
+                    Text(
+                        text = selectedRoom?.let { Strings.willPushTo(it.roomName) } ?: Strings.noRoomSelectedDesc,
+                        color = AppColors.TextTertiary,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                if (currentArtist.coverUrl != null) {
+                    AsyncAlbumArtwork(
+                        imageUrl = currentArtist.coverUrl,
+                        title = currentArtist.name,
+                        modifier = Modifier
+                            .size(104.dp)
+                            .border(BorderStroke(1.dp, AppColors.BorderStrong), CircleShape)
+                            .clip(CircleShape),
+                        contentScale = ContentScale.Crop,
+                        thumbnailSize = 104.dp,
+                    )
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .size(104.dp)
+                            .border(BorderStroke(1.dp, AppColors.BorderStrong), CircleShape)
+                            .clip(CircleShape)
+                            .background(AppColors.SurfaceMuted),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Person,
+                            contentDescription = null,
+                            tint = AppColors.TextSecondary,
+                            modifier = Modifier.size(44.dp),
+                        )
+                    }
+                }
+            }
+        }
+
+        if (sortedAlbums.isNotEmpty()) {
+            item(contentType = "albums-header") {
+                Text(
+                    text = Strings.albums,
+                    style = MaterialTheme.typography.titleLarge,
+                    color = AppColors.TextPrimary,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+            itemsIndexed(
+                sortedAlbums.chunked(3),
+                key = { _, rowAlbums -> "artist-album-row-${rowAlbums.first().ratingKey}" },
+                contentType = { _, _ -> "album-row" },
+            ) { _, rowAlbums ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    rowAlbums.forEach { album ->
+                        Box(modifier = Modifier.weight(1f)) {
+                            AlbumCoverCard(
+                                album = album,
+                                selected = selectedAlbum?.ratingKey == album.ratingKey,
+                                onClick = { onAlbumClick(album) },
+                                onQueueAction = { onAlbumQueueAction(album, it) },
+                                compact = true,
+                                // The artist name is redundant on their own page; show year · track count.
+                                subtitleOverride = listOfNotNull(
+                                    album.year?.toString(),
+                                    album.leafCount?.let(Strings.tracks),
+                                ).joinToString(" · ").ifBlank { album.artistName.orEmpty() },
+                            )
+                        }
+                    }
+                    repeat(3 - rowAlbums.size) {
+                        Spacer(modifier = Modifier.weight(1f))
+                    }
+                }
+            }
+        }
+
+        if (isArtistTracksLoading) {
+            item(contentType = "tracks-loading") {
+                Box(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    CircularProgressIndicator(
+                        color = palette.accent,
+                        modifier = Modifier.size(28.dp),
+                        strokeWidth = 3.dp,
+                    )
+                }
+            }
+        } else if (topTracks.isNotEmpty()) {
+            item(contentType = "tracks-header") {
+                Text(
+                    text = Strings.topTracks,
+                    style = MaterialTheme.typography.titleLarge,
+                    color = AppColors.TextPrimary,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+            itemsIndexed(
+                topTracks,
+                key = { index, track -> track.ratingKey ?: "artist-track-$index" },
+                contentType = { _, _ -> "track" },
+            ) { index, track ->
+                var showQueueMenu by remember { mutableStateOf(false) }
+                Box {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(top = 12.dp, bottom = 10.dp),
-                        horizontalArrangement = Arrangement.spacedBy(16.dp),
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable(enabled = !isPlaybackLoading) {
+                                selectedRoom?.let { onPlayTrack(currentArtist, track, it, index) }
+                            }
+                            .padding(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
+                        AsyncAlbumArtwork(
+                            imageUrl = track.thumbUrl,
+                            title = track.title,
+                            modifier = Modifier
+                                .size(48.dp)
+                                .clip(RoundedCornerShape(10.dp)),
+                            thumbnailSize = 48.dp,
+                        )
                         Column(
                             modifier = Modifier.weight(1f),
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(3.dp),
                         ) {
                             Text(
-                                text = currentArtist.name,
-                                style = MaterialTheme.typography.headlineMedium,
+                                text = track.title,
                                 color = AppColors.TextPrimary,
-                                fontWeight = FontWeight.Bold,
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
                             )
                             Text(
-                                text = Strings.artistAlbumsDesc(currentArtist.albumCount),
-                                color = AppColors.TextSecondary,
+                                text = track.artistName ?: track.albumTitle.orEmpty(),
+                                color = AppColors.TextTertiary,
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
                             )
-                            Button(
-                                onClick = { selectedRoom?.let { onShuffleArtist(currentArtist, it) } },
-                                enabled = selectedRoom != null && currentArtist.albums.isNotEmpty() && !isPlaybackLoading,
-                                shape = RoundedCornerShape(50),
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = palette.accent,
-                                    contentColor = palette.onAccent,
-                                    disabledContainerColor = palette.accent.copy(alpha = 0.35f),
-                                    disabledContentColor = palette.onAccent.copy(alpha = 0.6f),
-                                ),
-                                contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp),
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Filled.Shuffle,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(18.dp),
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(Strings.shuffleArtist, fontWeight = FontWeight.Bold)
-                            }
+                        }
+                        track.durationMillis?.let {
                             Text(
-                                text = selectedRoom?.let { Strings.willPushTo(it.roomName) } ?: Strings.noRoomSelectedDesc,
+                                text = formatDuration(it),
                                 color = AppColors.TextTertiary,
                                 style = MaterialTheme.typography.bodySmall,
                             )
                         }
-                        if (currentArtist.coverUrl != null) {
-                            AsyncAlbumArtwork(
-                                imageUrl = currentArtist.coverUrl,
-                                title = currentArtist.name,
-                                modifier = Modifier
-                                    .size(104.dp)
-                                    .border(BorderStroke(1.dp, AppColors.BorderStrong), CircleShape)
-                                    .clip(CircleShape),
-                                contentScale = ContentScale.Crop,
-                                thumbnailSize = 104.dp,
+                        IconCircleButton(onClick = { showQueueMenu = true }) {
+                            Icon(
+                                imageVector = Icons.Filled.MoreVert,
+                                contentDescription = null,
+                                tint = AppColors.TextTertiary,
+                                modifier = Modifier.size(18.dp),
                             )
-                        } else {
-                            Box(
-                                modifier = Modifier
-                                    .size(104.dp)
-                                    .border(BorderStroke(1.dp, AppColors.BorderStrong), CircleShape)
-                                    .clip(CircleShape)
-                                    .background(AppColors.SurfaceMuted),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Filled.Person,
-                                    contentDescription = null,
-                                    tint = AppColors.TextSecondary,
-                                    modifier = Modifier.size(44.dp),
-                                )
-                            }
                         }
                     }
-                }
-                items(
-                    items = sortedAlbums,
-                    key = { it.ratingKey },
-                    contentType = { "album" },
-                ) { album ->
-                    AlbumCoverCard(
-                        album = album,
-                        selected = selectedAlbum?.ratingKey == album.ratingKey,
-                        onClick = { onAlbumClick(album) },
-                        onQueueAction = { onAlbumQueueAction(album, it) },
-                        compact = false,
-                        // The artist name is redundant on their own page; show the year instead.
-                        subtitleOverride = album.year?.toString() ?: album.artistName,
+                    QueueActionMenu(
+                        expanded = showQueueMenu,
+                        onDismiss = { showQueueMenu = false },
+                        onAction = { placement ->
+                            showQueueMenu = false
+                            onQueueTrack(track, placement)
+                        },
                     )
                 }
+            }
+        }
     }
 }
 

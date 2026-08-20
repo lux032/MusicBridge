@@ -162,7 +162,7 @@ internal fun HomeStatusCard(
 ) {
     Surface(
         shape = RoundedCornerShape(20.dp),
-        color = AppColors.Surface,
+        color = AppColors.CardSurface,
         border = BorderStroke(1.dp, AppColors.Border),
     ) {
         Column(
@@ -237,10 +237,10 @@ private fun RecentPlayedShelfSection(
                             .fillMaxWidth()
                             .aspectRatio(1f),
                         shape = RoundedCornerShape(20.dp),
-                        color = AppColors.Surface,
+                        color = AppColors.CardSurface,
                         border = BorderStroke(
                             width = if (selectedAlbum?.ratingKey == album.ratingKey) 1.5.dp else 1.dp,
-                            color = if (selectedAlbum?.ratingKey == album.ratingKey) AppColors.Accent else AppColors.Border,
+                            color = if (selectedAlbum?.ratingKey == album.ratingKey) LocalArtworkPalette.current.accent else AppColors.Border,
                         ),
                     ) {
                         AsyncAlbumArtwork(
@@ -621,9 +621,10 @@ internal fun SonosSettingsCard(
     onDiscover: () -> Unit,
     onSelectRoom: (SonosRoom) -> Unit,
 ) {
+    val palette = LocalArtworkPalette.current
     Surface(
         shape = RoundedCornerShape(26.dp),
-        color = AppColors.Surface,
+        color = AppColors.CardSurface,
         border = BorderStroke(1.dp, AppColors.Border),
     ) {
         Column(
@@ -639,8 +640,8 @@ internal fun SonosSettingsCard(
                     onClick = onDiscover,
                     enabled = !isLoading,
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = AppColors.Accent,
-                        contentColor = AppColors.SurfaceStrong,
+                        containerColor = palette.accent,
+                        contentColor = palette.onAccent,
                     ),
                 ) {
                     Text(Strings.discoverDevices)
@@ -666,7 +667,7 @@ internal fun SonosSettingsCard(
                             scaleY = scale
                         },
                     shape = RoundedCornerShape(18.dp),
-                    color = if (room.coordinatorUuid == selectedRoom?.coordinatorUuid) AppColors.SurfaceMuted else AppColors.SurfaceAlt,
+                    color = if (room.coordinatorUuid == selectedRoom?.coordinatorUuid) AppColors.CardSurfaceStrong else AppColors.CardSurface,
                     border = BorderStroke(1.dp, if (room.coordinatorUuid == selectedRoom?.coordinatorUuid) AppColors.BorderStrong else AppColors.Border),
                 ) {
                     Row(

@@ -126,7 +126,7 @@ internal fun IconCircleButton(
                 onClick = onClick,
             ),
         shape = CircleShape,
-        color = if (highlighted) AppColors.SurfaceStrong else (containerColor ?: AppColors.SurfaceMuted),
+        color = if (highlighted) AppColors.CardSurfaceStrong else (containerColor ?: AppColors.CardSurface),
         border = BorderStroke(
             1.dp,
             if (highlighted) AppColors.BorderStrong else AppColors.Border,
@@ -314,7 +314,7 @@ internal fun BottomNavButton(
 internal fun MessageCard(label: String, message: String, tone: MessageTone) {
     val backgroundColor = when (tone) {
         MessageTone.Error -> AppColors.ErrorBg
-        MessageTone.Info -> AppColors.Surface
+        MessageTone.Info -> AppColors.CardSurface
     }
     Surface(
         shape = RoundedCornerShape(20.dp),
@@ -335,7 +335,7 @@ internal fun MessageCard(label: String, message: String, tone: MessageTone) {
 internal fun LoadingCard(message: String) {
     Surface(
         shape = RoundedCornerShape(20.dp),
-        color = AppColors.Surface,
+        color = AppColors.CardSurface,
         border = BorderStroke(1.dp, AppColors.Border),
     ) {
         Row(
@@ -362,7 +362,7 @@ internal fun EmptyStateCard(
 ) {
     Surface(
         shape = RoundedCornerShape(22.dp),
-        color = AppColors.Surface,
+        color = AppColors.CardSurface,
         border = BorderStroke(1.dp, AppColors.Border),
         shadowElevation = 4.dp,
     ) {

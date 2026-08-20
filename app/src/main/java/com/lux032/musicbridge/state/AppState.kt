@@ -70,6 +70,8 @@ class AppState(
     var isAlbumSearchLoading by mutableStateOf(false)
     var selectedAlbum by mutableStateOf<PlexAlbum?>(null)
     var selectedArtistName by mutableStateOf<String?>(null)
+    var artistTracks by mutableStateOf<List<PlexTrackStream>>(emptyList())
+    var isArtistTracksLoading by mutableStateOf(false)
     var artistPresentation by mutableStateOf(ArtistPresentation.Covers)
     var trackResult by mutableStateOf<PlexAlbumTracksResult?>(null)
     var sonosRooms by mutableStateOf<List<SonosRoom>>(emptyList())
@@ -153,6 +155,9 @@ class AppState(
                     coverUrl = it.coverUrl,
                     albumCount = it.albumCount,
                     albums = albums,
+                    ratingKey = it.ratingKey,
+                    sourceId = it.sourceId,
+                    userRating = it.userRating,
                 )
             }
         }
@@ -334,6 +339,10 @@ class AppState(
     fun toggleAlbumFavorite(album: PlexAlbum) = libraryCoordinator.toggleAlbumFavorite(album)
 
     fun toggleTrackFavorite(track: PlexTrackStream) = libraryCoordinator.toggleTrackFavorite(track)
+
+    fun toggleArtistFavorite(artist: ArtistSummary) = libraryCoordinator.toggleArtistFavorite(artist)
+
+    fun loadArtistTracks(artist: ArtistSummary) = libraryCoordinator.loadArtistTracks(artist)
 
     suspend fun loadArtists() = libraryCoordinator.loadArtists()
 

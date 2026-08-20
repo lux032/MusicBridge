@@ -44,6 +44,7 @@ data class PlexAlbum(
     val lastViewedAtEpochSeconds: Long?,
     val section: PlexSection,
     val sourceId: String = "",
+    val leafCount: Int? = null,
 ) {
     val isFavorite: Boolean
         get() = (userRating ?: 0f) > 0f
@@ -84,8 +85,13 @@ data class PlexArtist(
     val ratingKey: String,
     val title: String,
     val thumbUrl: String?,
+    val userRating: Float? = null,
     val sourceId: String = "",
-)
+) {
+    // Plex has no artist "follow"; a 10-star rating is what Plexamp shows as a liked artist.
+    val isFavorite: Boolean
+        get() = (userRating ?: 0f) > 0f
+}
 
 data class PlexArtistsResult(
     val serverName: String,
@@ -343,6 +349,27 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient {
         setFavorite(ratingKey, isFavorite)
     }
 
+    override suspend fun setArtistFavorite(ratingKey: String, isFavorite: Boolean) {
+        setFavorite(ratingKey, isFavorite)
+    }
+
+    override suspend fun fetchArtistTracks(artist: PlexArtist): List<PlexTrackStream> = withContext(Dispatchers.IO) {
+        val token = resolveToken()
+        val server = resolveServer(token)
+        val accessToken = server.accessToken.orEmpty().ifBlank { token }
+        val sections = listMusicSections(server, token)
+        if (sections.isEmpty()) {
+            error("服务器 '${server.name}' 上没有找到音乐库。")
+        }
+
+        sections
+            .flatMap { section ->
+                runCatching { listArtistTracks(server, section, artist, accessToken) }
+                    .getOrDefault(emptyList())
+            }
+            .distinctBy(PlexTrackStream::ratingKey)
+    }
+
     override suspend fun reportTimeline(
         ratingKey: String,
         state: String,
@@ -520,6 +547,7 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient {
                         lastViewedAtEpochSeconds = directory.getAttribute("lastViewedAt").trim().toLongOrNull(),
                         section = section,
                         sourceId = config.sourceId,
+                        leafCount = directory.getAttribute("leafCount").trim().toIntOrNull(),
                     )
                 )
             }
@@ -548,11 +576,81 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient {
                             .trim()
                             .takeIf { it.isNotBlank() }
                             ?.let { buildMediaUrl(server.uri, it, token) },
+                        userRating = directory.getAttribute("userRating").trim().toFloatOrNull(),
                         sourceId = config.sourceId,
                     )
                 )
             }
         }
+    }
+
+    /**
+     * Tracks belonging to one artist, most-played first (Plex records a per-track viewCount;
+     * there is no dedicated "popular tracks" endpoint). Unplayed tracks keep library order
+     * after the played ones.
+     */
+    private fun listArtistTracks(
+        server: PlexServer,
+        section: PlexSection,
+        artist: PlexArtist,
+        token: String,
+    ): List<PlexTrackStream> {
+        val accessToken = server.accessToken.orEmpty().ifBlank { token }
+        val response = request(
+            method = "GET",
+            url = buildPlexUrl(
+                serverUri = server.uri,
+                path = "/library/sections/${section.key}/all",
+                queryParameters = listOf(
+                    "type" to "10",
+                    "artist.id" to artist.ratingKey,
+                ),
+            ),
+            headers = mapOf("X-Plex-Token" to accessToken),
+        )
+        val root = parseXml(response.body)
+        val tracks = root.getElementsByTagName("Track")
+        val parsed = buildList {
+            for (index in 0 until tracks.length) {
+                val track = tracks.item(index) as? Element ?: continue
+                val title = track.getAttribute("title").trim()
+                val ratingKey = track.getAttribute("ratingKey").trim()
+                if (title.isBlank() || ratingKey.isBlank()) continue
+
+                val partKey = track.firstPartKey() ?: continue
+                val sourceAudioCodec = track.firstAudioCodec()
+                val viewCount = track.getAttribute("viewCount").trim().toLongOrNull() ?: 0L
+                add(
+                    viewCount to PlexTrackStream(
+                        ratingKey = ratingKey,
+                        title = title,
+                        partKey = partKey,
+                        streamUrl = buildPlaybackUrl(
+                            serverUri = server.uri,
+                            ratingKey = ratingKey,
+                            partKey = partKey,
+                            sourceAudioCodec = sourceAudioCodec,
+                            token = accessToken,
+                            clientIdentifier = config.clientIdentifier,
+                            opusMode = config.opusTranscodeMode,
+                        ),
+                        durationMillis = track.getAttribute("duration").trim().toLongOrNull(),
+                        userRating = track.getAttribute("userRating").trim().toFloatOrNull(),
+                        albumRatingKey = track.getAttribute("parentRatingKey").trim().ifBlank { null },
+                        albumTitle = track.getAttribute("parentTitle").trim().ifBlank { null },
+                        artistName = track.getAttribute("grandparentTitle").trim().ifBlank { null },
+                        thumbUrl = track.trackThumbUrl(server.uri, accessToken),
+                        sourceAudioCodec = sourceAudioCodec,
+                        playbackMimeType = sourceAudioCodec.transcodedPlaybackMimeType(config.opusTranscodeMode),
+                        sourceId = config.sourceId,
+                    )
+                )
+            }
+        }
+        // Most-played first; unplayed tracks keep their library order afterwards.
+        return parsed
+            .sortedWith(compareByDescending<Pair<Long, PlexTrackStream>> { it.first }.thenBy { it.second.title.lowercase() })
+            .map { it.second }
     }
 
     private fun listAlbumTracks(server: PlexServer, album: PlexAlbum, token: String): List<PlexTrackStream> {

@@ -3,6 +3,7 @@ package com.lux032.musicbridge.music
 import com.lux032.musicbridge.plex.PlexAlbum
 import com.lux032.musicbridge.plex.PlexAlbumTracksResult
 import com.lux032.musicbridge.plex.PlexAlbumsResult
+import com.lux032.musicbridge.plex.PlexArtist
 import com.lux032.musicbridge.plex.PlexArtistsResult
 import com.lux032.musicbridge.plex.PlexPlaylist
 import com.lux032.musicbridge.plex.PlexPlaylistTracksResult
@@ -24,6 +25,8 @@ interface MusicSourceClient {
     suspend fun fetchPlaylistTracks(playlist: PlexPlaylist): PlexPlaylistTracksResult
     suspend fun setAlbumFavorite(ratingKey: String, isFavorite: Boolean)
     suspend fun setTrackFavorite(ratingKey: String, isFavorite: Boolean)
+    suspend fun setArtistFavorite(ratingKey: String, isFavorite: Boolean)
+    suspend fun fetchArtistTracks(artist: PlexArtist): List<PlexTrackStream>
     suspend fun reportTimeline(
         ratingKey: String,
         state: String,

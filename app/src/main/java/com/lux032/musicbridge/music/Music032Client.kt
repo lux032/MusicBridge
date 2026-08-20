@@ -50,10 +50,18 @@ class Music032Client(
                 ratingKey = value.optLong("id").toString(),
                 title = value.optString("name").trim(),
                 thumbUrl = mediaUrl(value.optString("imageUrl")),
+                userRating = if (value.optBoolean("isFavorite")) 10f else null,
                 sourceId = sourceId,
             )
         }.filter { it.title.isNotBlank() }
         PlexArtistsResult(profile.displayName, artists)
+    }
+
+    override suspend fun fetchArtistTracks(artist: PlexArtist): List<PlexTrackStream> = withContext(Dispatchers.IO) {
+        runCatching {
+            val root = JSONObject(request("GET", "/api/v1/artists/${artist.ratingKey}"))
+            root.optJSONArray("tracks").toObjects().map(::parseTrack)
+        }.getOrDefault(emptyList())
     }
 
     override suspend fun fetchFavoriteTracks(): List<PlexTrackStream> = withContext(Dispatchers.IO) {
@@ -108,6 +116,11 @@ class Music032Client(
         Unit
     }
 
+    override suspend fun setArtistFavorite(ratingKey: String, isFavorite: Boolean) = withContext(Dispatchers.IO) {
+        request(if (isFavorite) "PUT" else "DELETE", "/api/v1/artists/$ratingKey/favorite")
+        Unit
+    }
+
     override suspend fun reportTimeline(
         ratingKey: String,
         state: String,
@@ -151,6 +164,7 @@ class Music032Client(
             lastViewedAtEpochSeconds = parseEpochSeconds(value.optString("lastPlayedAt")),
             section = section,
             sourceId = sourceId,
+            leafCount = value.optInt("trackCount").takeIf { it > 0 },
         )
     }
 

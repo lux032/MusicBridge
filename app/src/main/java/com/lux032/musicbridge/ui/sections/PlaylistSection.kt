@@ -75,8 +75,8 @@ private fun FavoriteTracksCard(
         modifier = Modifier
             .clickable(onClick = onClick),
         shape = RoundedCornerShape(20.dp),
-        color = AppColors.SurfaceStrong,
-        border = BorderStroke(1.dp, AppColors.BorderStrong),
+        color = AppColors.CardSurface,
+        border = BorderStroke(1.dp, AppColors.Border),
     ) {
         Row(
             modifier = Modifier
@@ -116,7 +116,7 @@ private fun PlaylistCard(
         modifier = Modifier
             .clickable(onClick = onClick),
         shape = RoundedCornerShape(20.dp),
-        color = AppColors.Surface,
+        color = AppColors.CardSurface,
         border = BorderStroke(1.dp, AppColors.Border),
     ) {
         Row(
@@ -285,7 +285,7 @@ internal fun PlaylistDetailSection(
                         onLongClick = { showQueueMenu = true },
                     ),
                 shape = RoundedCornerShape(12.dp),
-                color = AppColors.Surface,
+                color = AppColors.CardSurface,
                 border = BorderStroke(1.dp, AppColors.Border),
             ) {
                 Row(

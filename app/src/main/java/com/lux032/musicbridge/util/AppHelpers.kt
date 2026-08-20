@@ -14,7 +14,14 @@ data class ArtistSummary(
     val coverUrl: String?,
     val albumCount: Int,
     val albums: List<PlexAlbum> = emptyList(),
-)
+    val ratingKey: String? = null,
+    val sourceId: String = "",
+    val userRating: Float? = null,
+) {
+    // Plex has no artist "follow"; a 10-star rating is what Plexamp shows as a liked artist.
+    val isFavorite: Boolean
+        get() = (userRating ?: 0f) > 0f
+}
 
 data class IndexedGroup<T>(
     val label: String,
@@ -44,6 +51,10 @@ object AppColors {
     val TextTertiary = Color(0xFF8E8E8E)
     val Accent = Color(0xFFF1F1F1)
     val AccentMuted = Color(0xFF2A2A2A)
+    // Glassy card chrome: a light veil that lets the artwork-tinted background gradient
+    // show through, matching the player action bar / floating nav pill.
+    val CardSurface = Color.White.copy(alpha = 0.07f)
+    val CardSurfaceStrong = Color.White.copy(alpha = 0.12f)
     val ErrorBg = Color(0xFF2A1616)
     val ErrorText = Color(0xFFFFB4AB)
 }

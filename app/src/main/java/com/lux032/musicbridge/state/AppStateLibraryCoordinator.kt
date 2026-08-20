@@ -2,6 +2,7 @@ package com.lux032.musicbridge
 
 import com.lux032.musicbridge.plex.PlexAlbum
 import com.lux032.musicbridge.plex.PlexAlbumTracksResult
+import com.lux032.musicbridge.plex.PlexArtist
 import com.lux032.musicbridge.plex.PlexPlaylist
 import com.lux032.musicbridge.plex.PlexPlaylistTracksResult
 import com.lux032.musicbridge.plex.PlexSection
@@ -386,6 +387,67 @@ internal class AppStateLibraryCoordinator(
         }
     }
 
+    fun toggleArtistFavorite(artist: ArtistSummary) {
+        val ratingKey = artist.ratingKey ?: return
+        if (state.isFavoriteMutationLoading) return
+
+        val targetFavorite = !artist.isFavorite
+        state.isFavoriteMutationLoading = true
+        state.errorMessage = null
+        state.actionMessage = null
+        state.scope.launch {
+            runCatching {
+                state.clientFor(artist.sourceId).setArtistFavorite(ratingKey, targetFavorite)
+            }.onSuccess {
+                val newRating = if (targetFavorite) 10f else null
+                state.artists = state.artists.map { current ->
+                    if (current.ratingKey == ratingKey && current.sourceId == artist.sourceId) {
+                        current.copy(userRating = newRating)
+                    } else {
+                        current
+                    }
+                }
+                state.actionMessage = if (targetFavorite) {
+                    "已收藏歌手：${artist.name}"
+                } else {
+                    "已取消收藏歌手：${artist.name}"
+                }
+            }.onFailure {
+                state.errorMessage = it.message ?: "未知错误"
+            }
+            state.isFavoriteMutationLoading = false
+        }
+    }
+
+    fun loadArtistTracks(artist: ArtistSummary) {
+        val ratingKey = artist.ratingKey
+        state.artistTracks = emptyList()
+        if (ratingKey == null) {
+            state.isArtistTracksLoading = false
+            return
+        }
+        state.isArtistTracksLoading = true
+        state.scope.launch {
+            runCatching {
+                state.clientFor(artist.sourceId).fetchArtistTracks(
+                    PlexArtist(
+                        ratingKey = ratingKey,
+                        title = artist.name,
+                        thumbUrl = artist.coverUrl,
+                        sourceId = artist.sourceId,
+                    )
+                )
+            }.onSuccess { tracks ->
+                if (state.selectedArtistName == artist.name) {
+                    state.artistTracks = tracks
+                }
+            }
+            if (state.selectedArtistName == artist.name) {
+                state.isArtistTracksLoading = false
+            }
+        }
+    }
+
     fun toggleTrackFavorite(track: PlexTrackStream) {
         if (state.isFavoriteMutationLoading) return
 
@@ -437,6 +499,9 @@ internal class AppStateLibraryCoordinator(
                     name = plexArtist.title,
                     coverUrl = plexArtist.thumbUrl,
                     albumCount = info?.albumCount ?: 0,
+                    ratingKey = plexArtist.ratingKey,
+                    sourceId = plexArtist.sourceId,
+                    userRating = plexArtist.userRating,
                 )
             }.filter { it.albumCount > 0 }
         } catch (_: Exception) {

@@ -296,6 +296,7 @@ class AlbumLocalStore(context: Context) {
                 type = string(AlbumDatabaseHelper.COLUMN_SECTION_TYPE),
             ),
             sourceId = string(AlbumDatabaseHelper.COLUMN_SOURCE_ID),
+            leafCount = nullableInt(AlbumDatabaseHelper.COLUMN_LEAF_COUNT),
         )
     }
 
@@ -338,6 +339,7 @@ class AlbumLocalStore(context: Context) {
             put(AlbumDatabaseHelper.COLUMN_SECTION_KEY, section.key)
             put(AlbumDatabaseHelper.COLUMN_SECTION_TITLE, section.title)
             put(AlbumDatabaseHelper.COLUMN_SECTION_TYPE, section.type)
+            put(AlbumDatabaseHelper.COLUMN_LEAF_COUNT, leafCount)
         }
 
     private fun PlexTrackStream.toContentValues(): ContentValues =
@@ -397,11 +399,16 @@ private class AlbumDatabaseHelper(context: Context) :
             createTracksTable(db)
             createAlbumTracksTable(db)
         }
+        if (oldVersion < 7) {
+            // leafCount is cosmetic (artist page "year · N tracks" subtitle); old rows keep
+            // NULL and pick the value up on the next library sync.
+            db.execSQL("ALTER TABLE $TABLE_ALBUMS ADD COLUMN $COLUMN_LEAF_COUNT INTEGER")
+        }
     }
 
     companion object {
         private const val DATABASE_NAME = "plex_album_cache.db"
-        private const val DATABASE_VERSION = 6
+        private const val DATABASE_VERSION = 7
 
         const val TABLE_ALBUMS = "albums"
         const val TABLE_TRACKS = "tracks"
@@ -430,6 +437,7 @@ private class AlbumDatabaseHelper(context: Context) :
         const val COLUMN_TRACK_THUMB_URL = "thumb_url"
         const val COLUMN_TRACK_SOURCE_AUDIO_CODEC = "source_audio_codec"
         const val COLUMN_TRACK_PLAYBACK_MIME_TYPE = "playback_mime_type"
+        const val COLUMN_LEAF_COUNT = "leaf_count"
     }
 
     private fun createAlbumsTable(db: SQLiteDatabase) {
@@ -448,6 +456,7 @@ private class AlbumDatabaseHelper(context: Context) :
                 $COLUMN_SECTION_KEY TEXT NOT NULL,
                 $COLUMN_SECTION_TITLE TEXT NOT NULL,
                 $COLUMN_SECTION_TYPE TEXT NOT NULL,
+                $COLUMN_LEAF_COUNT INTEGER,
                 PRIMARY KEY ($COLUMN_SOURCE_ID, $COLUMN_RATING_KEY)
             )
             """.trimIndent()
