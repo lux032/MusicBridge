@@ -1,11 +1,13 @@
 package com.lux032.musicbridge
 
+import android.util.Log
 import com.lux032.musicbridge.plex.PlexAlbum
 import com.lux032.musicbridge.plex.PlexAlbumTracksResult
 import com.lux032.musicbridge.plex.PlexPlaylistTracksResult
 import com.lux032.musicbridge.plex.PlexSection
 import com.lux032.musicbridge.plex.PlexTrackStream
 import com.lux032.musicbridge.plex.playbackUrlIdentity
+import com.lux032.musicbridge.plex.withPlexTranscodeOffsetSeconds
 import com.lux032.musicbridge.plex.withOpusTranscodeMode
 import com.lux032.musicbridge.service.PlaybackForegroundService
 import com.lux032.musicbridge.sonos.SonosDiscovery
@@ -21,6 +23,10 @@ internal class AppStatePlaybackCoordinator(
     private val state: AppState,
 ) {
     private val playbackRequestGeneration = AtomicLong(0L)
+    private val seekRequestGeneration = AtomicLong(0L)
+
+    @Volatile
+    private var opusRestartSeek: OpusRestartSeek? = null
 
     init {
         PlaybackForegroundService.onSleepTimerExpired = {
@@ -44,6 +50,7 @@ internal class AppStatePlaybackCoordinator(
         initialPositionMillis: Long,
     ) {
         val targetTrack = tracks.getOrNull(trackIndex) ?: return
+        opusRestartSeek = null
         val requestGeneration = nextPlaybackRequestGeneration()
         val displayAlbum = resolveAlbumForTrack(targetTrack, album)
         state.albumPlaybackJob?.cancel()
@@ -122,6 +129,7 @@ internal class AppStatePlaybackCoordinator(
         startIndex: Int,
         initialPositionMillis: Long,
     ) {
+        opusRestartSeek = null
         val requestGeneration = nextPlaybackRequestGeneration()
         state.albumPlaybackJob?.cancel()
         state.playbackReportingJob?.cancel()
@@ -185,6 +193,7 @@ internal class AppStatePlaybackCoordinator(
                         )
                     },
                     onTrackChanged = { index, track, startPositionMillis ->
+                        opusRestartSeek = null
                         if (!didStartFirstTrack) {
                             didStartFirstTrack = true
                             state.isPlaybackCommandLoading = false
@@ -287,6 +296,7 @@ internal class AppStatePlaybackCoordinator(
         shuffle: Boolean,
     ) {
         if (playlistResult.tracks.isEmpty()) return
+        opusRestartSeek = null
         val requestGeneration = nextPlaybackRequestGeneration()
         state.albumPlaybackJob?.cancel()
         state.playbackReportingJob?.cancel()
@@ -361,6 +371,7 @@ internal class AppStatePlaybackCoordinator(
                         }
                     },
                     onTrackChanged = { index, track, positionMillis ->
+                        opusRestartSeek = null
                         if (!didStartFirstTrack) {
                             didStartFirstTrack = true
                             state.isPlaybackCommandLoading = false
@@ -458,6 +469,19 @@ internal class AppStatePlaybackCoordinator(
     fun seekPlayback(playerState: MiniPlayerState, positionMillis: Long) {
         val durationMillis = playerState.durationMillis?.takeIf { it > 0L } ?: return
         val targetMillis = positionMillis.coerceIn(0L, durationMillis)
+        val targetTrack = playerState.tracks.getOrNull(playerState.currentIndex) ?: return
+        val isOpusDirectMp3 = targetTrack.sourceAudioCodec.equals("opus", ignoreCase = true) &&
+            state.opusTranscodeMode == OpusTranscodeMode.DIRECT_MP3
+        val seekGeneration = seekRequestGeneration.incrementAndGet()
+        if (isOpusDirectMp3) {
+            opusRestartSeek = OpusRestartSeek(
+                sourceId = targetTrack.sourceId,
+                ratingKey = targetTrack.ratingKey,
+                offsetMillis = targetMillis,
+                generation = seekGeneration,
+                pending = true,
+            )
+        }
         state.miniPlayerState = state.miniPlayerState?.takeIf { current ->
             current.room.coordinatorUuid == playerState.room.coordinatorUuid
         }?.copy(currentPositionMillis = targetMillis)
@@ -465,13 +489,45 @@ internal class AppStatePlaybackCoordinator(
         state.isPlaybackCommandLoading = true
         state.scope.launch {
             runCatching {
-                state.sonosController.seek(playerState.room, (targetMillis / 1_000L).toInt())
+                if (isOpusDirectMp3) {
+                    val effectiveTrack = targetTrack.withOpusTranscodeMode(
+                        OpusTranscodeMode.DIRECT_MP3,
+                        state.plexClientIdentifier,
+                    )
+                    val offsetSeconds = (targetMillis / 1_000L).toInt()
+                    val seekUrl = effectiveTrack.streamUrl.withPlexTranscodeOffsetSeconds(offsetSeconds)
+                    Log.i(LOG_TAG, "opus seek restart targetMs=$targetMillis generation=$seekGeneration")
+                    state.plexTranscodeProxy.cancelPendingDownload()
+                    state.sonosController.playTrack(
+                        room = playerState.room,
+                        trackUrl = seekUrl,
+                        title = effectiveTrack.title,
+                        albumTitle = effectiveTrack.albumTitle ?: playerState.album.title,
+                        mimeType = effectiveTrack.playbackMimeType,
+                    )
+                    if (playerState.isPaused) state.sonosController.pause(playerState.room)
+                    if (seekRequestGeneration.get() == seekGeneration) {
+                        opusRestartSeek = opusRestartSeek?.copy(pending = false)
+                    }
+                } else {
+                    opusRestartSeek = null
+                    Log.i(LOG_TAG, "sonos seek targetMs=$targetMillis generation=$seekGeneration")
+                    state.sonosController.seek(playerState.room, (targetMillis / 1_000L).toInt())
+                }
             }.onSuccess {
-                state.actionMessage = "已跳转到 ${formatDuration(targetMillis)}"
-            }.onFailure {
-                state.errorMessage = it.message ?: "未知错误"
+                if (seekRequestGeneration.get() == seekGeneration) {
+                    state.actionMessage = "已跳转到 ${formatDuration(targetMillis)}"
+                }
+            }.onFailure { error ->
+                if (seekRequestGeneration.get() == seekGeneration) {
+                    opusRestartSeek = null
+                    Log.w(LOG_TAG, "seek failed targetMs=$targetMillis", error)
+                    state.errorMessage = error.message ?: "未知错误"
+                }
             }
-            state.isPlaybackCommandLoading = false
+            if (seekRequestGeneration.get() == seekGeneration) {
+                state.isPlaybackCommandLoading = false
+            }
         }
     }
 
@@ -605,10 +661,32 @@ internal class AppStatePlaybackCoordinator(
                 val status = runCatching { state.sonosController.getPlaybackStatus(room) }.getOrNull() ?: continue
                 val resolvedTrack = resolveActiveTrack(currentQueue, latestMiniPlayerState, status) ?: continue
                 val playbackState = status.toPlexPlaybackState()
-                val positionMillis = ((status.relTimeSeconds ?: 0) * 1_000L).coerceAtLeast(0L)
+                val rawPositionMillis = ((status.relTimeSeconds ?: 0) * 1_000L).coerceAtLeast(0L)
+                val restartSeek = opusRestartSeek?.takeIf {
+                    it.sourceId == resolvedTrack.sourceId && it.ratingKey == resolvedTrack.ratingKey
+                }
+                if (restartSeek?.pending == true) {
+                    // SetAVTransportURI briefly exposes the previous stream's position. Keep the
+                    // optimistic slider value until the replacement transcode starts playing.
+                    continue
+                }
+                val positionMillis = (rawPositionMillis + (restartSeek?.offsetMillis ?: 0L))
+                    .coerceAtLeast(0L)
+                    .let { position -> resolvedTrack.durationMillis?.let(position::coerceAtMost) ?: position }
+                if (restartSeek != null && !restartSeek.hasLoggedReadback) {
+                    Log.i(
+                        LOG_TAG,
+                        "opus seek readback rawMs=$rawPositionMillis absoluteMs=$positionMillis " +
+                            "offsetMs=${restartSeek.offsetMillis} generation=${restartSeek.generation}",
+                    )
+                    if (opusRestartSeek?.generation == restartSeek.generation) {
+                        opusRestartSeek = restartSeek.copy(hasLoggedReadback = true)
+                    }
+                }
                 val durationMillis = resolvedTrack.durationMillis ?: status.trackDurationSeconds?.times(1_000L)
 
                 if (resolvedTrack.ratingKey != currentTrack.ratingKey || resolvedTrack.sourceId != currentTrack.sourceId) {
+                    opusRestartSeek = null
                     reportStoppedTrackIfNeeded(
                         track = currentTrack,
                         timeMillis = currentTrackTimeMillis,
@@ -736,6 +814,19 @@ internal class AppStatePlaybackCoordinator(
         if (!isCurrentPlaybackRequest(generation)) {
             throw CancellationException("播放请求已被新的操作取代。")
         }
+    }
+
+    private data class OpusRestartSeek(
+        val sourceId: String,
+        val ratingKey: String,
+        val offsetMillis: Long,
+        val generation: Long,
+        val pending: Boolean,
+        val hasLoggedReadback: Boolean = false,
+    )
+
+    private companion object {
+        const val LOG_TAG = "MBPlayback"
     }
 
     private suspend fun reportTimelineSafely(

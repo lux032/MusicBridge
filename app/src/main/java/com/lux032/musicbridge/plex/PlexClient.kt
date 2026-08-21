@@ -942,6 +942,44 @@ internal fun buildPlaybackUrl(
 internal fun String?.transcodedPlaybackMimeType(opusMode: OpusTranscodeMode = OpusTranscodeMode.DEFAULT): String? =
     if (equals("opus", ignoreCase = true)) opusMode.mimeType else null
 
+/**
+ * Starts a new Plex universal-transcode stream at the requested source-track time.
+ * A Sonos REL_TIME seek is not reliable for Plex's live MP3 response, so Opus direct
+ * playback uses this URL to create a fresh, time-offset transcode session instead.
+ */
+internal fun String.withPlexTranscodeOffsetSeconds(offsetSeconds: Int): String {
+    if (!contains("/:/transcode/universal/start", ignoreCase = true)) return this
+
+    val safeOffset = offsetSeconds.coerceAtLeast(0).toString()
+    val fragment = substringAfter('#', "").takeIf { contains('#') }
+    val withoutFragment = substringBefore('#')
+    val baseUrl = withoutFragment.substringBefore('?')
+    val query = withoutFragment.substringAfter('?', "")
+    var replaced = false
+    val updatedQuery = query
+        .split('&')
+        .filter { it.isNotBlank() }
+        .map { parameter ->
+            if (parameter.substringBefore('=').equals("offset", ignoreCase = true)) {
+                replaced = true
+                "offset=$safeOffset"
+            } else {
+                parameter
+            }
+        }
+        .toMutableList()
+        .apply {
+            if (!replaced) add("offset=$safeOffset")
+        }
+        .joinToString("&")
+
+    return buildString {
+        append(baseUrl)
+        if (updatedQuery.isNotEmpty()) append('?').append(updatedQuery)
+        fragment?.let { append('#').append(it) }
+    }
+}
+
 internal fun PlexTrackStream.withOpusTranscodeMode(
     targetMode: OpusTranscodeMode,
     clientIdentifier: String = "",

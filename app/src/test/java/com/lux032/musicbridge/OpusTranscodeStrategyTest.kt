@@ -7,6 +7,7 @@ import com.lux032.musicbridge.plex.buildPlaybackUrl
 import com.lux032.musicbridge.plex.playbackUrlIdentity
 import com.lux032.musicbridge.plex.transcodedPlaybackMimeType
 import com.lux032.musicbridge.plex.withOpusTranscodeMode
+import com.lux032.musicbridge.plex.withPlexTranscodeOffsetSeconds
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -82,6 +83,25 @@ class OpusTranscodeStrategyTest {
 
         val mime = "opus".transcodedPlaybackMimeType(OpusTranscodeMode.DIRECT_MP3)
         assertEquals("audio/mpeg", mime)
+    }
+
+    @Test
+    fun opusDirectMp3SeekReplacesTranscodeOffsetWithoutChangingIdentity() {
+        val original = buildPlaybackUrl(
+            serverUri = "http://192.168.1.10:32400",
+            ratingKey = "456",
+            partKey = "/library/parts/888/file.opus",
+            sourceAudioCodec = "opus",
+            token = "my-token",
+            clientIdentifier = "my-client-id",
+            opusMode = OpusTranscodeMode.DIRECT_MP3,
+        )
+
+        val seekUrl = original.withPlexTranscodeOffsetSeconds(93)
+
+        assertTrue(seekUrl.contains("offset=93"))
+        assertFalse(seekUrl.contains("offset=0"))
+        assertEquals(playbackUrlIdentity(original), playbackUrlIdentity(seekUrl))
     }
 
     @Test
