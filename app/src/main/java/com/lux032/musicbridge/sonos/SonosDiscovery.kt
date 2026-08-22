@@ -11,6 +11,7 @@ import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.HttpURLConnection
 import java.net.InetAddress
+import java.net.InetSocketAddress
 import java.net.SocketTimeoutException
 import java.net.Socket
 import java.net.URI
@@ -505,7 +506,11 @@ private fun soapRequest(controlUrl: String, serviceType: String, action: String,
         append("\r\n")
     }.toByteArray(StandardCharsets.UTF_8)
 
-    return Socket(host, port).use { socket ->
+    return Socket().use { socket ->
+        // Connect timeout matters as much as the read timeout: without it a dead speaker
+        // IP leaves the socket hanging in connect() for minutes, and the caller's loading
+        // flag (which gates UI) stays latched the whole time.
+        socket.connect(InetSocketAddress(host, port), 5_000)
         socket.soTimeout = 10_000
         val output = socket.getOutputStream()
         output.write(httpRequest)

@@ -201,12 +201,14 @@ internal fun BottomNavigationBar(
 internal fun BottomMiniPlayerHost(
     appState: AppState,
     modifier: Modifier = Modifier,
+    isPlayerOpen: Boolean = false,
     onOpenPlayback: () -> Unit,
 ) {
     val playerState = appState.miniPlayerState ?: return
     BottomMiniPlayer(
         state = playerState,
         modifier = modifier,
+        isPlayerOpen = isPlayerOpen,
         onArtworkClick = onOpenPlayback,
         onTogglePause = { appState.togglePause(playerState) },
     )
@@ -688,6 +690,7 @@ internal fun AsyncAlbumArtwork(
     modifier: Modifier = Modifier,
     contentScale: ContentScale = ContentScale.Fit,
     thumbnailSize: Dp? = null,
+    placeholderThumbnailSize: Dp? = null,
 ) {
     val context = LocalContext.current
     val imageLoader = remember(context) { AlbumArtworkImageLoader.get(context) }
@@ -701,9 +704,18 @@ internal fun AsyncAlbumArtwork(
                 imageUrl
             }
         }
-        val imageRequest = remember(requestUrl, context) {
+        // Shared-element morphs swap from the small mini-player request to a larger one with
+        // a different cache key; pointing the placeholder at the small request's cache entry
+        // keeps the first frame of the morph a real cover instead of a grey flash.
+        val placeholderCacheKey = remember(imageUrl, placeholderThumbnailSize, density) {
+            placeholderThumbnailSize?.let {
+                plexThumbnailUrl(imageUrl, with(density) { it.roundToPx() })
+            }
+        }
+        val imageRequest = remember(requestUrl, placeholderCacheKey, context) {
             ImageRequest.Builder(context)
                 .data(requestUrl)
+                .apply { placeholderCacheKey?.let { placeholderMemoryCacheKey(it) } }
                 .build()
         }
         AsyncImage(

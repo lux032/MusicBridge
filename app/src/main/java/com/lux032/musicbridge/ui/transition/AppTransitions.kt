@@ -1,0 +1,130 @@
+package com.lux032.musicbridge
+
+import androidx.compose.animation.AnimatedContentTransitionScope
+import androidx.compose.animation.AnimatedVisibilityScope
+import androidx.compose.animation.BoundsTransform
+import androidx.compose.animation.ContentTransform
+import androidx.compose.animation.ExperimentalSharedTransitionApi
+import androidx.compose.animation.SharedTransitionScope
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Rect
+import com.lux032.musicbridge.plex.PlexTrackStream
+
+/** Direction of the most recent navigation, recorded by AppState so the section
+ *  transition can pick the right motion (P1 uses Push/Pop; P0 only needs player vs. not). */
+enum class NavAction { Push, Pop, TabSwitch }
+
+/** Root SharedTransitionLayout scope, provided at the app root so any screen can attach
+ *  shared elements without threading the scope through parameters. Null in previews. */
+@OptIn(ExperimentalSharedTransitionApi::class)
+val LocalSharedTransitionScope = compositionLocalOf<SharedTransitionScope?> { null }
+
+/** The AnimatedContent scope of the currently displayed section, so player-side shared
+ *  elements and staggered enter animations can hook into the section transition. */
+val LocalAnimatedVisibilityScope = compositionLocalOf<AnimatedVisibilityScope?> { null }
+
+/** Shared-element keys for the mini player <-> full player morph. */
+object PlayerSharedKeys {
+    const val Container = "playerContainer"
+    // NOTE: the play/pause button is deliberately NOT a shared element — shared elements
+    // render in the transition overlay while morphing, and hit-testing stays at the layout
+    // position, so a flying button eats taps. Reliability beats the morph here.
+    fun artwork(track: PlexTrackStream): String = "playerArtwork-${track.sourceId}-${track.ratingKey}"
+}
+
+object TransitionDurations {
+    const val PageFadeInMillis = 240
+    const val PageFadeOutMillis = 180
+    const val DismissSettleMillis = 160
+}
+
+/** Springy bounds morph for shared elements — fast settle (~300ms) with a soft landing. */
+@OptIn(ExperimentalSharedTransitionApi::class)
+val PlayerBoundsTransform: BoundsTransform = BoundsTransform { _: Rect, _: Rect ->
+    spring(dampingRatio = 0.85f, stiffness = 500f)
+}
+
+/**
+ * Section-level transition spec. P0: pages fade; when the player is involved, all motion
+ * comes from the shared elements, so the page itself only crossfades. P1 will add
+ * direction-aware slide/parallax for [NavAction.Push]/[NavAction.Pop].
+ */
+fun AnimatedContentTransitionScope<AppSection>.sectionTransitionSpec(
+    @Suppress("UNUSED_PARAMETER") action: NavAction,
+): ContentTransform {
+    return ContentTransform(
+        targetContentEnter = fadeIn(tween(TransitionDurations.PageFadeInMillis)),
+        initialContentExit = fadeOut(tween(TransitionDurations.PageFadeOutMillis)),
+        sizeTransform = SizeTransform(clip = false),
+    )
+}
+
+// --- Shared-element modifier helpers (null-safe when no SharedTransitionLayout is present) ---
+
+/** Player-side (inside AnimatedContent) shared element, e.g. the big artwork. */
+@OptIn(ExperimentalSharedTransitionApi::class)
+@Composable
+fun Modifier.playerSharedElement(key: Any): Modifier {
+    val sharedScope = LocalSharedTransitionScope.current ?: return this
+    val animScope = LocalAnimatedVisibilityScope.current ?: return this
+    return with(sharedScope) {
+        this@playerSharedElement.sharedElement(
+            rememberSharedContentState(key),
+            animatedVisibilityScope = animScope,
+            boundsTransform = PlayerBoundsTransform,
+        )
+    }
+}
+
+/** Player-side (inside AnimatedContent) shared bounds, e.g. the page backdrop / play button.
+ *  Implemented via sharedElement — sharedBounds has no caller-managed counterpart on the
+ *  mini side, and sharedElement gives the same bounds morph. */
+@OptIn(ExperimentalSharedTransitionApi::class)
+@Composable
+fun Modifier.playerSharedBounds(key: Any): Modifier = playerSharedElement(key)
+
+/** Mini-player-side shared element with caller-managed visibility: the element is hidden
+ *  (and handed to the transition overlay) whenever [visible] is false, i.e. while the
+ *  full player is open, so only one end of each shared key is ever on screen. */
+@OptIn(ExperimentalSharedTransitionApi::class)
+@Composable
+fun Modifier.miniSharedElement(key: Any, visible: Boolean): Modifier {
+    val sharedScope = LocalSharedTransitionScope.current ?: return this
+    return with(sharedScope) {
+        this@miniSharedElement.sharedElementWithCallerManagedVisibility(
+            rememberSharedContentState(key),
+            visible = visible,
+            boundsTransform = PlayerBoundsTransform,
+        )
+    }
+}
+
+/** Mini-player-side shared bounds with caller-managed visibility (see [miniSharedElement]).
+ *  Implemented via sharedElementWithCallerManagedVisibility — there is no sharedBounds
+ *  caller-managed variant in this Compose version, and the bounds morph is equivalent. */
+@OptIn(ExperimentalSharedTransitionApi::class)
+@Composable
+fun Modifier.miniSharedBounds(key: Any, visible: Boolean): Modifier = miniSharedElement(key, visible)
+
+/** Content blocks of the player page all fade+rise together, starting from the first
+ *  frame of the transition — no stagger. Staggering made the page read as "cover first,
+ *  everything else later"; simultaneous entry keeps the whole UI in sync with the morph. */
+@Composable
+fun Modifier.staggeredPlayerEnter(@Suppress("UNUSED_PARAMETER") index: Int): Modifier {
+    val animScope = LocalAnimatedVisibilityScope.current ?: return this
+    return with(animScope) {
+        this@staggeredPlayerEnter.animateEnterExit(
+            enter = fadeIn(tween(TransitionDurations.PageFadeInMillis)) +
+                slideInVertically(tween(TransitionDurations.PageFadeInMillis)) { it / 16 },
+            exit = fadeOut(tween(120)),
+        )
+    }
+}

@@ -14,6 +14,15 @@ import androidx.activity.SystemBarStyle
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModelProvider
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.SharedTransitionLayout
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.LocalOverscrollFactory
 import androidx.compose.foundation.layout.Arrangement
@@ -38,7 +47,6 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.key
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.setValue
@@ -118,6 +126,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 }
+@OptIn(androidx.compose.animation.ExperimentalSharedTransitionApi::class)
 @Composable
 fun PlexAlbumScreen(
     modifier: Modifier = Modifier,
@@ -247,7 +256,6 @@ fun PlexAlbumScreen(
     }
     
     val isBottomBarVisible = activeSection != AppSection.PlaybackDetail
-    val isMiniPlayerVisible = activeSection != AppSection.PlaybackDetail && hasMiniPlayer
     val overlayRoom = state.selectedSonosRoom
 
     fun shouldPersistVerticalScroll(section: AppSection): Boolean =
@@ -262,13 +270,16 @@ fun PlexAlbumScreen(
 
     // Only the player lays out edge-to-edge (it applies the system bar insets itself);
     // every other section sits inside the scaffold's safe padding while the root gradient
-    // below paints full-bleed behind the transparent system bars.
-    val isEdgeToEdgeSection = activeSection == AppSection.PlaybackDetail
+    // below paints full-bleed behind the transparent system bars. The padding is applied
+    // per-section inside the AnimatedContent below so the exiting page keeps its own
+    // padding for the whole transition instead of jumping mid-fade.
 
+    SharedTransitionLayout {
     CompositionLocalProvider(
         LocalAppLayoutInfo provides layoutInfo,
         LocalOverscrollFactory provides null,
         LocalArtworkPalette provides nowPlayingPalette,
+        LocalSharedTransitionScope provides this@SharedTransitionLayout,
     ) {
     Box(
         modifier = modifier
@@ -280,26 +291,41 @@ fun PlexAlbumScreen(
             ),
     ) {
     Row(
-        modifier = Modifier
-            .fillMaxSize()
-            .then(
-                if (isEdgeToEdgeSection) Modifier
-                else Modifier.padding(contentPadding)
-            )
+        modifier = Modifier.fillMaxSize(),
     ) {
         if (isNavigationRailVisible) {
-            AppNavigationRail(
-                primarySection = state.primarySection,
-                onSectionChange = state::switchPrimarySection,
-            )
+            // The rail keeps the scaffold padding the Row used to supply.
+            Box(
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .padding(contentPadding),
+            ) {
+                AppNavigationRail(
+                    primarySection = state.primarySection,
+                    onSectionChange = state::switchPrimarySection,
+                )
+            }
         }
         Box(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxHeight(),
         ) {
-        key(activeSection) {
-            val currentSection = activeSection
+        AnimatedContent(
+            targetState = activeSection,
+            modifier = Modifier.fillMaxSize(),
+            transitionSpec = { sectionTransitionSpec(state.lastNavAction) },
+            label = "sectionTransition",
+        ) { currentSection ->
+        CompositionLocalProvider(LocalAnimatedVisibilityScope provides this) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .then(
+                    if (currentSection == AppSection.PlaybackDetail) Modifier
+                    else Modifier.padding(contentPadding)
+                ),
+        ) {
 
             if (currentSection == AppSection.AllAlbums) {
                 val savedPos = state.getSavedLazyScrollPosition(AppSection.AllAlbums)
@@ -715,6 +741,9 @@ fun PlexAlbumScreen(
                 }
             }
         }
+        }
+        }
+        }
 
         if (isBottomBarVisible && !isNavigationRailVisible) {
             BottomNavigationBar(
@@ -733,11 +762,26 @@ fun PlexAlbumScreen(
             )
         }
 
-        if (isMiniPlayerVisible) {
+        // The mini player stays composed while the full player is open so its shared
+        // elements can morph to/from the player page; caller-managed visibility hides the
+        // pill itself in that state. This AnimatedVisibility only animates playback
+        // start/stop (slide the bar in/out). Fully-qualified call: the plain function must
+        // win over RowScope.AnimatedVisibility, which shadows it inside the outer Row.
+        androidx.compose.animation.AnimatedVisibility(
+            visible = hasMiniPlayer,
+            modifier = Modifier.align(Alignment.BottomCenter),
+            enter = slideInVertically(
+                animationSpec = tween(300, easing = FastOutSlowInEasing),
+                initialOffsetY = { it },
+            ) + fadeIn(tween(300)),
+            exit = slideOutVertically(
+                animationSpec = tween(240),
+                targetOffsetY = { it },
+            ) + fadeOut(tween(180)),
+        ) {
             BottomMiniPlayerHost(
                 appState = state,
                 modifier = Modifier
-                    .align(Alignment.BottomCenter)
                     .padding(
                         start = layoutInfo.horizontalPadding,
                         end = layoutInfo.horizontalPadding,
@@ -745,6 +789,7 @@ fun PlexAlbumScreen(
                         bottom = navigationBottomPadding + 12.dp,
                     )
                     .onSizeChanged { miniPlayerHeightPx = it.height },
+                isPlayerOpen = activeSection == AppSection.PlaybackDetail,
                 onOpenPlayback = { state.navigateTo(AppSection.PlaybackDetail) },
             )
         }

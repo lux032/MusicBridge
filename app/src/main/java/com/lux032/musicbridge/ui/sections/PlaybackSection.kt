@@ -7,12 +7,18 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.material3.ripple
 import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -35,10 +41,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextAlign
@@ -62,6 +75,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -162,6 +176,7 @@ internal fun PlaybackDetailSection(
             imageUrl = displayAlbum.thumbUrl,
             title = displayAlbum.title,
             modifier = Modifier
+                .playerSharedElement(PlayerSharedKeys.artwork(currentTrack))
                 .widthIn(max = maximumSize)
                 .fillMaxWidth()
                 .aspectRatio(1f)
@@ -171,6 +186,8 @@ internal fun PlaybackDetailSection(
                 .clip(artworkShape),
             contentScale = ContentScale.Crop,
             thumbnailSize = maximumSize,
+            // The morph's first frame comes from the mini player's 52dp cache entry.
+            placeholderThumbnailSize = 52.dp,
         )
     }
     val playerDetails: @Composable ColumnScope.(Boolean) -> Unit = { compact ->
@@ -181,7 +198,9 @@ internal fun PlaybackDetailSection(
             verticalArrangement = Arrangement.spacedBy(if (compact) 10.dp else 14.dp),
         ) {
         Column(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .staggeredPlayerEnter(0),
             verticalArrangement = Arrangement.spacedBy(if (compact) 4.dp else 8.dp),
         ) {
             Text(
@@ -236,7 +255,9 @@ internal fun PlaybackDetailSection(
             val clampedDuration = durationMillis.coerceAtLeast(1L)
             val clampedSliderValue = sliderPositionMillis.coerceIn(0f, clampedDuration.toFloat())
             Column(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .staggeredPlayerEnter(1),
                 verticalArrangement = Arrangement.spacedBy(if (compact) 2.dp else 6.dp),
             ) {
                 Slider(
@@ -250,7 +271,8 @@ internal fun PlaybackDetailSection(
                         onSeek(currentState, sliderPositionMillis.roundToLong())
                     },
                     valueRange = 0f..clampedDuration.toFloat(),
-                    enabled = !isLoading,
+                    // Not gated on isLoading: transport controls must stay responsive while a
+                    // playback command is in flight — the seek generation logic resolves races.
                     colors = SliderDefaults.colors(
                         thumbColor = palette.accent,
                         activeTrackColor = palette.accent,
@@ -305,14 +327,16 @@ internal fun PlaybackDetailSection(
             }
         }
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .staggeredPlayerEnter(2),
             horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.CenterVertically,
         ) {
             PlayerControlButton(
                 icon = PlayerIcon.Previous,
                 onClick = onPrevious,
-                enabled = currentState.currentIndex > 0 && !isLoading,
+                enabled = currentState.currentIndex > 0,
                 sizeOverride = if (compact) 46.dp else 56.dp,
                 iconSizeOverride = if (compact) 20.dp else 23.dp,
                 unhighlightedContainerColor = Color.White.copy(alpha = 0.08f),
@@ -322,7 +346,9 @@ internal fun PlaybackDetailSection(
             GlowPlayerControlButton(
                 icon = if (currentState.isPaused) PlayerIcon.Play else PlayerIcon.Pause,
                 onClick = { onTogglePause(currentState) },
-                enabled = !isLoading,
+                // Always tappable, like the mini player's button — gating play/pause on an
+                // in-flight network command made the button silently dead for seconds.
+                enabled = true,
                 accent = palette.accent,
                 onAccent = palette.onAccent,
                 buttonSize = if (compact) 54.dp else 72.dp,
@@ -332,7 +358,7 @@ internal fun PlaybackDetailSection(
             PlayerControlButton(
                 icon = PlayerIcon.Next,
                 onClick = onNext,
-                enabled = currentState.currentIndex < currentState.tracks.lastIndex && !isLoading,
+                enabled = currentState.currentIndex < currentState.tracks.lastIndex,
                 sizeOverride = if (compact) 46.dp else 56.dp,
                 iconSizeOverride = if (compact) 20.dp else 23.dp,
                 unhighlightedContainerColor = Color.White.copy(alpha = 0.08f),
@@ -346,7 +372,9 @@ internal fun PlaybackDetailSection(
             isFavoriteLoading = isFavoriteLoading,
             palette = palette,
             compact = compact,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .staggeredPlayerEnter(3),
             onShowPlaylist = { isPlaylistSheetVisible = true },
             onShowModePicker = { isModeDialogVisible = true },
             onToggleTrackFavorite = { onToggleTrackFavorite(currentTrack) },
@@ -376,7 +404,96 @@ internal fun PlaybackDetailSection(
         }
     }
 
-    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+    // Swipe-to-dismiss: a downward drag slides the whole page down with a subtle scale/fade.
+    // Two input paths cover the whole page — touches on the scrollable details column reach
+    // us through the nested-scroll connection (only when it can't scroll up any further),
+    // touches anywhere else (top bar, landscape artwork, gaps) through the drag detector.
+    // Past the threshold the page settles off-screen and hands off to onBack(), whose pop
+    // transition morphs the shared elements back into the mini player.
+    val dismissScope = rememberCoroutineScope()
+    val dismissOffset = remember { Animatable(0f) }
+    var dismissHeightPx by remember { mutableFloatStateOf(1f) }
+    val portraitDetailsScroll = rememberScrollState()
+    val landscapeDetailsScroll = rememberScrollState()
+
+    fun settleDismiss() {
+        if (dismissOffset.value <= 0f) return
+        dismissScope.launch {
+            val progress = dismissOffset.value / dismissHeightPx
+            if (progress > 0.22f) {
+                dismissOffset.animateTo(
+                    dismissHeightPx * 0.6f,
+                    tween(TransitionDurations.DismissSettleMillis),
+                )
+                onBack()
+            } else {
+                dismissOffset.animateTo(0f, spring(dampingRatio = 0.68f, stiffness = 380f))
+            }
+        }
+    }
+
+    val dismissConnection = remember {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (source != NestedScrollSource.UserInput) return Offset.Zero
+                val dy = available.y
+                if (dy > 0f) {
+                    val atTop = portraitDetailsScroll.value == 0 && landscapeDetailsScroll.value == 0
+                    if (atTop || dismissOffset.value > 0f) {
+                        dismissScope.launch { dismissOffset.snapTo(dismissOffset.value + dy) }
+                        return Offset(0f, dy)
+                    }
+                } else if (dy < 0f && dismissOffset.value > 0f) {
+                    dismissScope.launch {
+                        dismissOffset.snapTo((dismissOffset.value + dy).coerceAtLeast(0f))
+                    }
+                    return Offset(0f, dy)
+                }
+                return Offset.Zero
+            }
+        }
+    }
+
+    val dismissModifier = Modifier
+        .nestedScroll(dismissConnection)
+        .pointerInput(Unit) {
+            detectVerticalDragGestures(
+                onVerticalDrag = { change, dy ->
+                    // Only reached for touches no scrollable child claimed.
+                    if (dy > 0f || dismissOffset.value > 0f) {
+                        change.consume()
+                        dismissScope.launch {
+                            dismissOffset.snapTo((dismissOffset.value + dy).coerceAtLeast(0f))
+                        }
+                    }
+                },
+            )
+        }
+        .pointerInput(Unit) {
+            // Watch every gesture end (Final pass, non-consuming) and settle the page.
+            awaitEachGesture {
+                awaitFirstDown(requireUnconsumed = false)
+                do {
+                    val event = awaitPointerEvent(PointerEventPass.Final)
+                } while (event.changes.any { it.pressed })
+                settleDismiss()
+            }
+        }
+        .graphicsLayer {
+            val p = (dismissOffset.value / dismissHeightPx).coerceIn(0f, 1f)
+            translationY = dismissOffset.value
+            val s = 1f - 0.07f * p
+            scaleX = s
+            scaleY = s
+            alpha = 1f - 0.45f * p
+        }
+
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxSize()
+            .onSizeChanged { dismissHeightPx = it.height.toFloat().coerceAtLeast(1f) }
+            .then(dismissModifier),
+    ) {
         val topBarHeight = 48.dp
         val availableWidth = maxWidth
         val bodyHeight = (maxHeight - topBarHeight).coerceAtLeast(0.dp)
@@ -388,6 +505,7 @@ internal fun PlaybackDetailSection(
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                .playerSharedBounds(PlayerSharedKeys.Container)
                 .background(
                     brush = Brush.verticalGradient(
                         colors = listOf(palette.backgroundTop, palette.backgroundBottom),
@@ -445,7 +563,7 @@ internal fun PlaybackDetailSection(
                                 .widthIn(max = 560.dp)
                                 .fillMaxWidth()
                                 .heightIn(max = bodyHeight - (verticalPadding * 2))
-                                .verticalScroll(rememberScrollState())
+                                .verticalScroll(landscapeDetailsScroll)
                                 .padding(vertical = if (compactLandscape) 2.dp else 8.dp),
                             horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
@@ -484,7 +602,7 @@ internal fun PlaybackDetailSection(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .heightIn(max = bodyHeight)
-                                .verticalScroll(rememberScrollState())
+                                .verticalScroll(portraitDetailsScroll)
                                 .padding(vertical = 8.dp),
                             verticalArrangement = Arrangement.spacedBy(16.dp),
                             horizontalAlignment = Alignment.CenterHorizontally,
@@ -975,6 +1093,7 @@ private fun GlowPlayerControlButton(
     onAccent: Color,
     buttonSize: androidx.compose.ui.unit.Dp,
     iconSize: androidx.compose.ui.unit.Dp,
+    modifier: Modifier = Modifier,
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
@@ -985,7 +1104,7 @@ private fun GlowPlayerControlButton(
     // The glow layers are scaled past the button's layout bounds via graphicsLayer, so they
     // never inflate the surrounding row — that previously pushed the page into scrolling.
     Box(
-        modifier = Modifier.size(buttonSize),
+        modifier = modifier.size(buttonSize),
         contentAlignment = Alignment.Center,
     ) {
         // Soft ambient halo spilling onto the background — kept weak so the top arc reads
@@ -1536,6 +1655,7 @@ private fun centeredWheelIndex(
 internal fun BottomMiniPlayer(
     state: MiniPlayerState,
     modifier: Modifier = Modifier,
+    isPlayerOpen: Boolean = false,
     onArtworkClick: () -> Unit,
     onTogglePause: () -> Unit,
 ) {
@@ -1551,7 +1671,11 @@ internal fun BottomMiniPlayer(
         0f
     }
     Surface(
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier
+            .fillMaxWidth()
+            // Caller-managed: while the full player is open the pill hands itself to the
+            // transition overlay (morphing into the player backdrop) instead of drawing.
+            .miniSharedBounds(PlayerSharedKeys.Container, visible = !isPlayerOpen),
         shape = RoundedCornerShape(24.dp),
         color = palette.backgroundTop,
         border = BorderStroke(1.dp, AppColors.BorderStrong),
@@ -1560,10 +1684,16 @@ internal fun BottomMiniPlayer(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = ripple(bounded = true),
-                    onClick = onArtworkClick,
+                // While the player is open the pill is invisible (its shared elements live
+                // in the transition overlay); strip the click target so the hidden pill can
+                // never swallow touches meant for the page beneath it.
+                .then(
+                    if (isPlayerOpen) Modifier
+                    else Modifier.clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = ripple(bounded = true),
+                        onClick = onArtworkClick,
+                    )
                 ),
         ) {
             Row(
@@ -1575,6 +1705,7 @@ internal fun BottomMiniPlayer(
             ) {
                 Box(
                     modifier = Modifier
+                        .miniSharedElement(PlayerSharedKeys.artwork(currentTrack), visible = !isPlayerOpen)
                         .clip(RoundedCornerShape(14.dp)),
                 ) {
                     AsyncAlbumArtwork(
@@ -1606,7 +1737,7 @@ internal fun BottomMiniPlayer(
                 PlayerControlButton(
                     icon = if (state.isPaused) PlayerIcon.Play else PlayerIcon.Pause,
                     onClick = onTogglePause,
-                    enabled = true,
+                    enabled = !isPlayerOpen,
                     highlighted = true,
                     sizeOverride = 54.dp,
                     iconSizeOverride = 24.dp,
@@ -1646,6 +1777,7 @@ internal fun PlayerControlButton(
     highlightedContentColor: Color = AppColors.SurfaceStrong,
     unhighlightedContainerColor: Color = AppColors.SurfaceMuted,
     unhighlightedBorderColor: Color = AppColors.Border,
+    modifier: Modifier = Modifier,
 ) {
     val containerColor = if (highlighted) highlightedContainerColor else unhighlightedContainerColor
     val contentColor = if (highlighted) highlightedContentColor else AppColors.TextPrimary
@@ -1660,7 +1792,7 @@ internal fun PlayerControlButton(
     )
 
     Surface(
-        modifier = Modifier
+        modifier = modifier
             .size(buttonSize)
             .graphicsLayer {
                 scaleX = scale

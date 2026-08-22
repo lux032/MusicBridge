@@ -176,14 +176,21 @@ class AppState(
     fun getSavedLazyScrollPosition(section: AppSection): SavedScrollPosition =
         savedLazyPositions[section] ?: SavedScrollPosition()
 
+    /** Direction of the most recent navigation — the section AnimatedContent reads this to
+     *  pick its transition style (player morph / push / pop / tab fade). */
+    var lastNavAction by mutableStateOf(NavAction.TabSwitch)
+        private set
+
     fun navigateTo(section: AppSection) {
         if (navigationStack.lastOrNull() == section) return
         navigationStack.add(section)
+        lastNavAction = NavAction.Push
     }
 
     fun replaceWith(section: AppSection) {
         navigationStack.clear()
         navigationStack.add(section)
+        lastNavAction = NavAction.TabSwitch
     }
 
     fun switchPrimarySection(section: AppSection) {
@@ -194,6 +201,7 @@ class AppState(
     fun navigateBack() {
         if (navigationStack.size > 1) {
             navigationStack.removeAt(navigationStack.lastIndex)
+            lastNavAction = NavAction.Pop
         }
     }
 

@@ -403,15 +403,18 @@ internal class AppStatePlaybackCoordinator(
     fun togglePause(playerState: MiniPlayerState) {
         state.isPlaybackCommandLoading = true
         state.scope.launch {
+            // Re-read inside the coroutine: the call-site playerState captures isPaused at
+            // tap time, so rapid toggles would otherwise send the same command twice.
+            val latest = state.miniPlayerState ?: playerState
             runCatching {
-                if (playerState.isPaused) {
-                    state.sonosController.resume(playerState.room)
+                if (latest.isPaused) {
+                    state.sonosController.resume(latest.room)
                 } else {
-                    state.sonosController.pause(playerState.room)
+                    state.sonosController.pause(latest.room)
                 }
             }.onSuccess {
-                state.miniPlayerState = state.miniPlayerState?.copy(isPaused = !playerState.isPaused)
-                state.actionMessage = if (playerState.isPaused) "已继续播放" else "已暂停播放"
+                state.miniPlayerState = state.miniPlayerState?.copy(isPaused = !latest.isPaused)
+                state.actionMessage = if (latest.isPaused) "已继续播放" else "已暂停播放"
             }.onFailure {
                 state.errorMessage = it.message ?: "未知错误"
             }
