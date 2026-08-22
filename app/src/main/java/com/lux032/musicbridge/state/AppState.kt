@@ -21,6 +21,7 @@ import com.lux032.musicbridge.plex.PlexTranscodeProxy
 import com.lux032.musicbridge.plex.isFavorite
 import com.lux032.musicbridge.local.LocalAudioCache
 import com.lux032.musicbridge.local.LocalPlaybackEngine
+import com.lux032.musicbridge.local.LocalPlaybackService
 import com.lux032.musicbridge.local.NetworkQualityMonitor
 import com.lux032.musicbridge.music.Music032Client
 import com.lux032.musicbridge.music.MusicSourceClient
@@ -51,7 +52,7 @@ class AppState(
     internal val localPlaybackEngine = LocalPlaybackEngine(
         context = context,
         cacheMaxBytes = appPreferences.loadLocalCacheSize().bytes,
-    )
+    ).also { LocalPlaybackEngine.activeEngine = it }
 
     var opusTranscodeMode by mutableStateOf(appPreferences.getOpusTranscodeMode())
 
@@ -352,6 +353,7 @@ class AppState(
             miniPlayerState = null
             localPlaybackEngine.stopPlayback()
             PlaybackForegroundService.stop(context)
+            LocalPlaybackService.stop(context)
         }
         serverProfiles.removeAt(index)
         albumLocalStore.deleteServerData(serverId)
@@ -473,7 +475,7 @@ class AppState(
         playbackCoordinator.seekPlayback(state, positionMillis)
 
     val sleepTimerState
-        get() = PlaybackForegroundService.sleepTimerState
+        get() = SleepTimerController.state
 
     fun startSleepTimer(hours: Int, minutes: Int) =
         playbackCoordinator.startSleepTimer(hours, minutes)

@@ -71,6 +71,9 @@ dependencies {
     // focus; the cache datasource backs the user-configurable local audio cache.
     implementation(libs.androidx.media3.exoplayer)
     implementation(libs.androidx.media3.datasource)
+    // Publishes the on-device player as a system MediaSession so local playback gets the
+    // standard media notification, lockscreen controls and Bluetooth/headset buttons.
+    implementation(libs.androidx.media3.session)
     // Installs the baseline profiles shipped inside Compose artifacts so release builds get
     // AOT-compiled scroll/animation hot paths instead of warming up through JIT.
     implementation(libs.androidx.profileinstaller)

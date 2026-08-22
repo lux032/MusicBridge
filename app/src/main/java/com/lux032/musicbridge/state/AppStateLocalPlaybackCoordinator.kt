@@ -1,11 +1,11 @@
 package com.lux032.musicbridge
 
 import com.lux032.musicbridge.local.LocalPlaybackEngine
+import com.lux032.musicbridge.local.LocalPlaybackService
 import com.lux032.musicbridge.local.LocalQueueItem
 import com.lux032.musicbridge.plex.PlexAlbum
 import com.lux032.musicbridge.plex.PlexTrackStream
 import com.lux032.musicbridge.plex.withLocalStreamQuality
-import com.lux032.musicbridge.service.PlaybackForegroundService
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -13,7 +13,10 @@ import kotlinx.coroutines.launch
 /**
  * Drives on-device playback through [LocalPlaybackEngine]. Mirrors the Sonos side of
  * [AppStatePlaybackCoordinator]: the engine owns rendering, this coordinator owns queue
- * state, Plex timeline reporting, scrobbling, and the foreground notification.
+ * state, Plex timeline reporting, and scrobbling. The system media notification is
+ * published by [LocalPlaybackService] via a MediaSession bound to the same player, so
+ * notification/lockscreen/headset controls drive the player directly and flow back here
+ * through the engine's listener callbacks.
  */
 internal class AppStateLocalPlaybackCoordinator(
     private val state: AppState,
@@ -41,13 +44,6 @@ internal class AppStateLocalPlaybackCoordinator(
                     if (current.target != PlaybackTarget.LocalDevice) return@launch
                     if (current.isPaused == !isPlaying) return@launch
                     state.miniPlayerState = current.copy(isPaused = !isPlaying)
-                    val track = current.tracks.getOrNull(current.currentIndex) ?: return@launch
-                    PlaybackForegroundService.updateIfRunning(
-                        title = track.title,
-                        subtitle = Strings.localPlayback,
-                        isPaused = !isPlaying,
-                        artworkUrl = track.thumbUrl,
-                    )
                 }
             }
 
@@ -96,14 +92,10 @@ internal class AppStateLocalPlaybackCoordinator(
         state.errorMessage = null
         state.isPlaybackCommandLoading = false
         rebuildEngineQueue(tracks, safeIndex, initialPositionMillis)
+        // A running sleep timer may still point at a Sonos room; local playback now owns it.
+        SleepTimerController.attachRoom(null)
+        LocalPlaybackService.start(state.context)
         val initialTrack = tracks[safeIndex]
-        PlaybackForegroundService.start(
-            context = state.context,
-            title = initialTrack.title,
-            subtitle = Strings.localPlayback,
-            isPaused = false,
-            artworkUrl = initialTrack.thumbUrl,
-        )
         state.actionMessage = "正在本机播放：${initialTrack.title}"
         startReporting()
     }
@@ -189,6 +181,7 @@ internal class AppStateLocalPlaybackCoordinator(
 
     fun stopLocalPlayback() {
         state.localPlaybackEngine.stopPlayback()
+        LocalPlaybackService.stop(state.context)
     }
 
     fun applyPlaybackMode(mode: PlaybackMode) {
@@ -198,22 +191,6 @@ internal class AppStateLocalPlaybackCoordinator(
     private fun startReporting() {
         state.playbackReportingJob?.cancel()
         state.playbackReportingJob = state.scope.launch {
-            PlaybackForegroundService.onPlaybackAction = { action ->
-                val playerState = state.miniPlayerState
-                if (playerState != null && playerState.target == PlaybackTarget.LocalDevice) {
-                    when (action) {
-                        PlaybackForegroundService.PlaybackAction.Previous -> {
-                            if (playerState.currentIndex > 0) playLocalIndex(playerState.currentIndex - 1, 0L)
-                        }
-                        PlaybackForegroundService.PlaybackAction.TogglePause -> toggleLocalPause(playerState)
-                        PlaybackForegroundService.PlaybackAction.Next -> {
-                            if (playerState.currentIndex < playerState.tracks.lastIndex) {
-                                playLocalIndex(playerState.currentIndex + 1, 0L)
-                            }
-                        }
-                    }
-                }
-            }
             try {
                 val scrobbledTrackKeys = mutableSetOf<String>()
                 var reportedTrack: PlexTrackStream? = null
@@ -254,13 +231,6 @@ internal class AppStateLocalPlaybackCoordinator(
                     }
                     reportedTrack = track
 
-                    PlaybackForegroundService.updateIfRunning(
-                        title = track.title,
-                        subtitle = Strings.localPlayback,
-                        isPaused = isPaused,
-                        artworkUrl = track.thumbUrl,
-                    )
-
                     val now = System.currentTimeMillis()
                     if (playbackState != lastReportedState || now - lastTimelineReportAt >= 10_000L) {
                         reportTimelineSafelyLocal(track, playbackState, positionMillis, durationMillis, continuing = false)
@@ -270,8 +240,7 @@ internal class AppStateLocalPlaybackCoordinator(
                     scrobbleIfNeededLocal(scrobbledTrackKeys, track, positionMillis, durationMillis)
                 }
             } finally {
-                PlaybackForegroundService.onPlaybackAction = null
-                PlaybackForegroundService.stop(state.context)
+                LocalPlaybackService.stop(state.context)
             }
         }
     }

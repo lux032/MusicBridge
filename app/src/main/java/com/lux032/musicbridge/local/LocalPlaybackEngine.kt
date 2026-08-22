@@ -171,6 +171,17 @@ class LocalPlaybackEngine(
 
     var listener: Listener? = null
 
+    /** The wrapped player, exposed so [LocalPlaybackService] can publish it as a MediaSession. */
+    internal val exoPlayer: ExoPlayer get() = player
+
+    companion object {
+        /**
+         * The engine instance owned by AppState. Registered here so [LocalPlaybackService]
+         * (created on demand by the system) can find the shared player without owning it.
+         */
+        internal var activeEngine: LocalPlaybackEngine? = null
+    }
+
     private val httpDataSourceFactory = DefaultHttpDataSource.Factory()
     private val cacheDataSourceFactory = CacheDataSource.Factory()
         .setCache(LocalAudioCache.configure(context.applicationContext, cacheMaxBytes))
@@ -341,5 +352,6 @@ class LocalPlaybackEngine(
         listener = null
         player.removeListener(playerListener)
         player.release()
+        if (activeEngine === this) activeEngine = null
     }
 }

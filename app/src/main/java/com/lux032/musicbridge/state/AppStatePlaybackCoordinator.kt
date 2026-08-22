@@ -33,11 +33,19 @@ internal class AppStatePlaybackCoordinator(
     private var opusRestartSeek: OpusRestartSeek? = null
 
     init {
-        PlaybackForegroundService.onSleepTimerExpired = {
+        SleepTimerController.onExpired = { room ->
             playbackRequestGeneration.incrementAndGet()
             state.albumPlaybackJob?.cancel()
             state.playbackReportingJob?.cancel()
             state.localPlaybackCoordinator.stopLocalPlayback()
+            if (room != null) {
+                state.scope.launch {
+                    runCatching { state.sonosController.pause(room) }
+                    runCatching { state.sonosController.stop(room) }
+                }
+            }
+            // Tears down the Sonos-side notification if that service was running.
+            PlaybackForegroundService.stop(state.context)
             state.scope.launch {
                 state.isPlaybackCommandLoading = false
                 state.errorMessage = null
@@ -838,17 +846,21 @@ internal class AppStatePlaybackCoordinator(
             return
         }
         val durationMillis = totalMinutes * 60_000L
-        PlaybackForegroundService.setSleepTimer(
-            context = state.context,
-            room = state.miniPlayerState?.sonosRoom ?: state.selectedSonosRoom,
+        // The timer only attaches a Sonos room when one is actually involved: during local
+        // playback the stale selected room must not be paused when the timer elapses.
+        val room = state.miniPlayerState?.sonosRoom
+            ?: state.selectedSonosRoom.takeIf { state.miniPlayerState == null }
+        SleepTimerController.start(
+            scope = state.scope,
             durationMillis = durationMillis,
+            room = room,
         )
         state.errorMessage = null
         state.actionMessage = "${Strings.sleepTimer} ${Strings.sleepTimerRemaining(formatSleepTimer(durationMillis))}"
     }
 
     fun cancelSleepTimer() {
-        PlaybackForegroundService.cancelSleepTimer(state.context)
+        SleepTimerController.cancel()
         state.errorMessage = null
         state.actionMessage = "${Strings.sleepTimer} ${Strings.sleepTimerOff}"
     }
@@ -1167,13 +1179,8 @@ internal class AppStatePlaybackCoordinator(
     }
 
     private fun syncSleepTimerRoom(room: SonosRoom) {
-        val timerState = PlaybackForegroundService.sleepTimerState.value
-        if (!timerState.isActive) return
-        PlaybackForegroundService.setSleepTimer(
-            context = state.context,
-            room = room,
-            durationMillis = timerState.remainingMillis,
-        )
+        if (!SleepTimerController.state.value.isActive) return
+        SleepTimerController.attachRoom(room)
     }
 
     private fun resolveNextPlaybackIndex(trackCount: Int, currentIndex: Int): Int? {
