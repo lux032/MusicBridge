@@ -54,6 +54,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
@@ -769,7 +770,12 @@ fun PlexAlbumScreen(
         // win over RowScope.AnimatedVisibility, which shadows it inside the outer Row.
         androidx.compose.animation.AnimatedVisibility(
             visible = hasMiniPlayer,
-            modifier = Modifier.align(Alignment.BottomCenter),
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                // Keep the shared-element source composed while the full player is open,
+                // but place its hidden layout behind the detail page so it cannot win hit
+                // testing over the transport controls.
+                .zIndex(if (activeSection == AppSection.PlaybackDetail) -1f else 1f),
             enter = slideInVertically(
                 animationSpec = tween(300, easing = FastOutSlowInEasing),
                 initialOffsetY = { it },

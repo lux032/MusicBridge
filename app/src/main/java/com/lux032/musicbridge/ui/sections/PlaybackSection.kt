@@ -7,9 +7,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -48,8 +45,6 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.input.pointer.PointerEventPass
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -58,6 +53,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import kotlin.math.roundToLong
 import com.lux032.musicbridge.plex.PlexAlbum
@@ -404,12 +400,10 @@ internal fun PlaybackDetailSection(
         }
     }
 
-    // Swipe-to-dismiss: a downward drag slides the whole page down with a subtle scale/fade.
-    // Two input paths cover the whole page — touches on the scrollable details column reach
-    // us through the nested-scroll connection (only when it can't scroll up any further),
-    // touches anywhere else (top bar, landscape artwork, gaps) through the drag detector.
-    // Past the threshold the page settles off-screen and hands off to onBack(), whose pop
-    // transition morphs the shared elements back into the mini player.
+    // Swipe-to-dismiss: downward drags from the top of the scrollable details area slide the
+    // page down. Keep this entirely in nested scroll: a full-page pointerInput competes with
+    // child click targets and can prevent transport buttons from receiving an otherwise
+    // valid tap.
     val dismissScope = rememberCoroutineScope()
     val dismissOffset = remember { Animatable(0f) }
     var dismissHeightPx by remember { mutableFloatStateOf(1f) }
@@ -451,34 +445,17 @@ internal fun PlaybackDetailSection(
                 }
                 return Offset.Zero
             }
+
+            override suspend fun onPreFling(available: Velocity): Velocity {
+                if (dismissOffset.value <= 0f) return Velocity.Zero
+                settleDismiss()
+                return available
+            }
         }
     }
 
     val dismissModifier = Modifier
         .nestedScroll(dismissConnection)
-        .pointerInput(Unit) {
-            detectVerticalDragGestures(
-                onVerticalDrag = { change, dy ->
-                    // Only reached for touches no scrollable child claimed.
-                    if (dy > 0f || dismissOffset.value > 0f) {
-                        change.consume()
-                        dismissScope.launch {
-                            dismissOffset.snapTo((dismissOffset.value + dy).coerceAtLeast(0f))
-                        }
-                    }
-                },
-            )
-        }
-        .pointerInput(Unit) {
-            // Watch every gesture end (Final pass, non-consuming) and settle the page.
-            awaitEachGesture {
-                awaitFirstDown(requireUnconsumed = false)
-                do {
-                    val event = awaitPointerEvent(PointerEventPass.Final)
-                } while (event.changes.any { it.pressed })
-                settleDismiss()
-            }
-        }
         .graphicsLayer {
             val p = (dismissOffset.value / dismissHeightPx).coerceIn(0f, 1f)
             translationY = dismissOffset.value
@@ -2229,7 +2206,13 @@ internal suspend fun playAlbumSequentially(
             albumTitle = track.albumTitle ?: trackResult.album.title,
             mimeType = mimeType,
         )
-        if (startPositionMillis > 0L) {
+        // Plex universal transcodes are live responses and do not support reliable Sonos
+        // REL_TIME seeking. Their source offset is already encoded in playbackUrl.
+        val positionIsEncodedInUrl = playbackUrl.contains(
+            "/:/transcode/universal/start",
+            ignoreCase = true,
+        )
+        if (startPositionMillis > 0L && !positionIsEncodedInUrl) {
             sonosController.seek(room, (startPositionMillis / 1_000L).toInt())
         }
         onTrackChanged(index, track, startPositionMillis)
