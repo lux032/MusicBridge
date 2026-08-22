@@ -61,7 +61,11 @@ internal fun PlaylistsSection(
             }
         } else {
             items(playlists, key = { it.ratingKey }, contentType = { "playlist" }) { playlist ->
-                PlaylistCard(playlist = playlist, onClick = { onPlaylistClick(playlist) })
+                // Placement-only animation: inserted/removed playlists shift siblings smoothly
+                // without an extra fade on top of the page transition.
+                Box(modifier = Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)) {
+                    PlaylistCard(playlist = playlist, onClick = { onPlaylistClick(playlist) })
+                }
             }
         }
     }
@@ -274,7 +278,7 @@ internal fun PlaylistDetailSection(
             contentType = { _, _ -> "track" },
         ) { index, track ->
             var showQueueMenu by remember { mutableStateOf(false) }
-            Box {
+            Box(modifier = Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)) {
             Surface(
                 modifier = Modifier
                     .combinedClickable(

@@ -11,6 +11,8 @@ import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.material3.ripple
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.layout.*
@@ -32,10 +34,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.lux032.musicbridge.sonos.SonosRoom
 import com.lux032.musicbridge.plex.PlexAlbum
@@ -150,6 +154,22 @@ internal fun BottomNavigationBar(
         .asPaddingValues()
         .calculateBottomPadding()
     val palette = LocalArtworkPalette.current
+    val sections = listOf(AppSection.Home, AppSection.Artists, AppSection.Playlists, AppSection.Settings)
+    val selectedIndex = sections.indexOf(primarySection).coerceAtLeast(0)
+
+    // The capsule's two edges follow the selection with springs of different stiffness, so the
+    // faster edge leads and the slower one trails: the pill stretches while it travels
+    // (位移+形变) and settles once both edges arrive.
+    val leadingEdge by animateFloatAsState(
+        targetValue = selectedIndex.toFloat(),
+        animationSpec = spring(dampingRatio = 0.85f, stiffness = 500f),
+        label = "nav_pill_leading_edge",
+    )
+    val trailingEdge by animateFloatAsState(
+        targetValue = selectedIndex.toFloat(),
+        animationSpec = spring(dampingRatio = 0.92f, stiffness = Spring.StiffnessLow),
+        label = "nav_pill_trailing_edge",
+    )
 
     // Floating rounded pill matching the player page's action bar: tinted translucent
     // container, hairline light border, icon + label items.
@@ -166,32 +186,45 @@ internal fun BottomNavigationBar(
         border = BorderStroke(1.dp, Color.White.copy(alpha = 0.10f)),
         shadowElevation = 8.dp,
     ) {
-        Row(
+        var rowSize by remember { mutableStateOf(IntSize.Zero) }
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 8.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly,
         ) {
-            BottomNavButton(
-                section = AppSection.Home,
-                isSelected = primarySection == AppSection.Home,
-                onClick = { onSectionChange(AppSection.Home) },
-            )
-            BottomNavButton(
-                section = AppSection.Artists,
-                isSelected = primarySection == AppSection.Artists,
-                onClick = { onSectionChange(AppSection.Artists) },
-            )
-            BottomNavButton(
-                section = AppSection.Playlists,
-                isSelected = primarySection == AppSection.Playlists,
-                onClick = { onSectionChange(AppSection.Playlists) },
-            )
-            BottomNavButton(
-                section = AppSection.Settings,
-                isSelected = primarySection == AppSection.Settings,
-                onClick = { onSectionChange(AppSection.Settings) },
-            )
+            if (rowSize.width > 0 && rowSize.height > 0) {
+                val density = LocalDensity.current
+                val cellWidth = with(density) { (rowSize.width / sections.size).toDp() }
+                val leftEdge = minOf(leadingEdge, trailingEdge)
+                val rightEdge = maxOf(leadingEdge, trailingEdge) + 1f
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.CenterStart)
+                        .offset(x = cellWidth * leftEdge + 4.dp)
+                        .width(cellWidth * (rightEdge - leftEdge) - 8.dp)
+                        .height(with(density) { rowSize.height.toDp() } - 8.dp)
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(palette.accent.copy(alpha = 0.16f)),
+                )
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .onSizeChanged { rowSize = it },
+            ) {
+                sections.forEach { section ->
+                    Box(
+                        modifier = Modifier.weight(1f),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        BottomNavButton(
+                            section = section,
+                            isSelected = primarySection == section,
+                            onClick = { onSectionChange(section) },
+                        )
+                    }
+                }
+            }
         }
     }
 }

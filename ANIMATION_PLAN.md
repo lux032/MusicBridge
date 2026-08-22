@@ -50,14 +50,19 @@
 
 ---
 
-## P2 — 微交互与细节 ⬜ 未开始
+## P2 — 微交互与细节 🔶 部分完成
 
 | 项目 | 状态 | 说明 |
 |---|---|---|
-| 列表项插入/移除动画 | ⬜ | Lazy 列表 `Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)` |
-| 全局音量浮层显隐动画 | ⬜ | `GlobalVolumeOverlay` 包 `AnimatedVisibility` |
-| 底部 Tab 指示器胶囊 | ⬜ | 选中指示器位移+形变动画 |
-| 预测式返回（可选） | ⬜ | Predictive Back + `SeekableTransitionState` 手势驱动转场 |
+| 列表项插入/移除动画 | ✅ | 全部 Lazy 列表的 `items`/`itemsIndexed` 内容根节点加 `Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)`（仅位移动画，不叠加淡入淡出，避免与页面转场打架）。覆盖：歌单列表、歌单详情曲目、艺人网格/列表、艺人详情专辑行+热门曲目、首页最近播放横滑+预览网格行、合集网格、全部专辑网格、播放队列底部弹层、专辑详情曲目（宽屏+窄屏） |
+| 全局音量浮层显隐动画 | ✅ | `MainActivity` 中 `if` 改为 `AnimatedVisibility`：入场半高上滑+淡入 280ms，出场下滑 220ms+淡出 180ms；`overlayRoom` 在外层 `?.let` 解包，保证退出动画期间浮层保持组合 |
+| 底部 Tab 指示器胶囊 | ✅ | `BottomNavigationBar` 重排为 4 个等宽 `weight(1f)` 单元格；选中胶囊跟随移动，前后两缘各跟一条不同 stiffness 的弹簧（前缘 500/阻尼 0.85，后缘 StiffnessLow/0.92），移动中拉伸形变、到位后收敛；accent 16% 填充、18dp 圆角，尺寸由 Row `onSizeChanged` 实测 |
+| 预测式返回（可选） | ⬜ 暂缓 | 自定义 `AnimatedContent` + `SharedTransitionLayout` 架构下接 `SeekableTransitionState` 手势进度会与共享元素 morph 冲突；按"交互可靠性优先"原则暂缓，待导航架构迁移（如 Navigation 3）后再评估 |
+
+**涉及文件**
+- `ui/sections/PlaylistSection.kt`、`ui/sections/ArtistSection.kt`、`ui/sections/HomeSection.kt`、`ui/sections/PlaybackSection.kt`（`animateItem`）
+- `ui/MainActivity.kt`（音量浮层 `AnimatedVisibility`）
+- `ui/components/CommonComponents.kt`（`BottomNavigationBar` 胶囊指示器）
 
 ---
 
@@ -70,3 +75,7 @@
 - **交互按钮不做共享元素**：overlay 渲染期间命中判定与视觉位置分离，按钮会"点了没反应"。
 - 高频传输控件**不要用网络 loading 状态门控**；loading 只用于展示，不用于禁用。
 - 大改布局嵌套后用括号配平校验（awk 统计深度归零），错位一个 `}` 会让兄弟节点落进错误的 lambda。
+- foundation 1.9 的 `animateItem` 是 `LazyItemScope`/`LazyGridItemScope` 的**成员函数**（非扩展、已去实验注解）——无需 import、无需 `@OptIn`，list/grid 同名也不冲突。
+- 浮层包 `AnimatedVisibility` 时，可空数据源要在**外层**解包（`room?.let { ... }`）；把 null 判断并进 `visible` 会导致数据变 null 时整个分支瞬间消失，退出动画播不出来。
+- 移动指示器的"拉伸形变"：指示器左右两缘各跟一个不同 stiffness 的 `animateFloatAsState`，left=min(两缘)、right=max(两缘)+1，弹簧速度差自然产生拉伸。
+- Box 里想让某层匹配兄弟内容的高度，**不能**用 `fillMaxHeight`（会吃到父级传入的 maxHeight 把布局撑爆）；用 `onSizeChanged` 实测兄弟尺寸再换算。

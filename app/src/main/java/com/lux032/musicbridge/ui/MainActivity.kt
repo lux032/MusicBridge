@@ -800,13 +800,11 @@ fun PlexAlbumScreen(
             )
         }
 
-        if (isVolumeOverlayVisible && overlayRoom != null) {
-            GlobalVolumeOverlay(
-                room = overlayRoom,
-                volume = state.sonosVolume,
-                hasLoadedVolume = state.hasLoadedSonosVolume,
-                isVolumeLoading = state.isVolumeLoading,
-                isVolumeChanging = state.isVolumeChanging,
+        // Slide + fade the volume overlay in/out instead of popping it. The nullable room is
+        // unwrapped outside AnimatedVisibility so the overlay stays composed while exiting.
+        overlayRoom?.let { room ->
+            androidx.compose.animation.AnimatedVisibility(
+                visible = isVolumeOverlayVisible,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(
@@ -814,11 +812,27 @@ fun PlexAlbumScreen(
                         end = layoutInfo.horizontalPadding,
                         bottom = volumeOverlayBottomPadding,
                     ),
-                onVolumeChange = { newValue ->
-                    state.applyVolumeChange(overlayRoom, newValue)
-                    showVolumeOverlay()
-                },
-            )
+                enter = slideInVertically(
+                    animationSpec = tween(280, easing = FastOutSlowInEasing),
+                    initialOffsetY = { it / 2 },
+                ) + fadeIn(tween(280)),
+                exit = slideOutVertically(
+                    animationSpec = tween(220, easing = FastOutSlowInEasing),
+                    targetOffsetY = { it / 2 },
+                ) + fadeOut(tween(180)),
+            ) {
+                GlobalVolumeOverlay(
+                    room = room,
+                    volume = state.sonosVolume,
+                    hasLoadedVolume = state.hasLoadedSonosVolume,
+                    isVolumeLoading = state.isVolumeLoading,
+                    isVolumeChanging = state.isVolumeChanging,
+                    onVolumeChange = { newValue ->
+                        state.applyVolumeChange(room, newValue)
+                        showVolumeOverlay()
+                    },
+                )
+            }
         }
 
         }

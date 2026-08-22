@@ -138,11 +138,13 @@ internal fun ArtistsSection(
                             key = { artist -> "artist-${artist.name}" },
                             contentType = { "artist" },
                         ) { artist ->
-                            ArtistCoverCard(
-                                artist = artist,
-                                compact = compactPhone,
-                                onClick = { onArtistClick(artist) },
-                            )
+                            Box(modifier = Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)) {
+                                ArtistCoverCard(
+                                    artist = artist,
+                                    compact = compactPhone,
+                                    onClick = { onArtistClick(artist) },
+                                )
+                            }
                         }
                     }
                 }
@@ -213,10 +215,12 @@ internal fun ArtistsSection(
                             key = { artist -> "artist-list-${artist.name}" },
                             contentType = { "artist" },
                         ) { artist ->
-                            ArtistListRow(
-                                artist = artist,
-                                onClick = { onArtistClick(artist) },
-                            )
+                            Box(modifier = Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)) {
+                                ArtistListRow(
+                                    artist = artist,
+                                    onClick = { onArtistClick(artist) },
+                                )
+                            }
                         }
                     }
                 }
@@ -619,7 +623,9 @@ internal fun ArtistAlbumsSection(
                 contentType = { _, _ -> "album-row" },
             ) { _, rowAlbums ->
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .animateItem(fadeInSpec = null, fadeOutSpec = null),
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     rowAlbums.forEach { album ->
@@ -673,7 +679,7 @@ internal fun ArtistAlbumsSection(
                 contentType = { _, _ -> "track" },
             ) { index, track ->
                 var showQueueMenu by remember { mutableStateOf(false) }
-                Box {
+                Box(modifier = Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()

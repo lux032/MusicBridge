@@ -222,7 +222,7 @@ private fun RecentPlayedShelfSection(
                 contentType = { "recent-album" },
             ) { album ->
                 var showQueueMenu by remember { mutableStateOf(false) }
-                Box {
+                Box(modifier = Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)) {
                 Column(
                     modifier = Modifier
                         .width(layoutInfo.recentAlbumCardWidth)
@@ -362,7 +362,9 @@ private fun androidx.compose.foundation.lazy.LazyListScope.albumPreviewGridItems
         item(key = "$keyPrefix-row-$rowIndex", contentType = "album-row") {
             val layoutInfo = LocalAppLayoutInfo.current
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .animateItem(fadeInSpec = null, fadeOutSpec = null),
                 horizontalArrangement = Arrangement.spacedBy(layoutInfo.contentSpacing),
             ) {
                 rowAlbums.forEach { album ->
@@ -469,13 +471,15 @@ internal fun AlbumCollectionSection(
             key = { it.ratingKey },
             contentType = { "album" },
         ) { album ->
-            AlbumCoverCard(
-                album = album,
-                selected = selectedAlbum?.ratingKey == album.ratingKey,
-                onClick = { onAlbumClick(album) },
-                onQueueAction = { onAlbumQueueAction(album, it) },
-                compact = false,
-            )
+            Box(modifier = Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)) {
+                AlbumCoverCard(
+                    album = album,
+                    selected = selectedAlbum?.ratingKey == album.ratingKey,
+                    onClick = { onAlbumClick(album) },
+                    onQueueAction = { onAlbumQueueAction(album, it) },
+                    compact = false,
+                )
+            }
         }
     }
 }
@@ -585,14 +589,16 @@ internal fun AllAlbumsSection(
                         key = { album -> album.ratingKey },
                         contentType = { "album" },
                     ) { album ->
-                        AlbumCoverCard(
-                            album = album,
-                            selected = selectedAlbum?.ratingKey == album.ratingKey,
-                            onClick = { onAlbumClick(album) },
-                            onQueueAction = { onAlbumQueueAction(album, it) },
-                            compact = false,
-                            sharedArtworkKey = AlbumSharedKeys.artwork(album),
-                        )
+                        Box(modifier = Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)) {
+                            AlbumCoverCard(
+                                album = album,
+                                selected = selectedAlbum?.ratingKey == album.ratingKey,
+                                onClick = { onAlbumClick(album) },
+                                onQueueAction = { onAlbumQueueAction(album, it) },
+                                compact = false,
+                                sharedArtworkKey = AlbumSharedKeys.artwork(album),
+                            )
+                        }
                     }
                 }
             }

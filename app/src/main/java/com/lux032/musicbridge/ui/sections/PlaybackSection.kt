@@ -627,6 +627,7 @@ internal fun PlaybackDetailSection(
                     val isCurrent = index == currentState.currentIndex
                     Surface(
                         modifier = Modifier
+                            .animateItem(fadeInSpec = null, fadeOutSpec = null)
                             .fillMaxWidth()
                             .clickable {
                                 isPlaylistSheetVisible = false
@@ -1387,17 +1388,19 @@ internal fun AlbumDetailSection(
                     key = { index, track -> track.ratingKey ?: index },
                     contentType = { _, _ -> "album-track" },
                 ) { index, track ->
-                    AlbumTrackRow(
-                        index = index,
-                        album = currentTrackResult.album,
-                        track = track,
-                        selectedRoom = selectedRoom,
-                        isPlaybackLoading = isPlaybackLoading,
-                        isFavoriteLoading = isFavoriteLoading,
-                        onToggleTrackFavorite = onToggleTrackFavorite,
-                        onQueueTrack = onQueueTrack,
-                        onPlayTrack = onPlayTrack,
-                    )
+                    Box(modifier = Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)) {
+                        AlbumTrackRow(
+                            index = index,
+                            album = currentTrackResult.album,
+                            track = track,
+                            selectedRoom = selectedRoom,
+                            isPlaybackLoading = isPlaybackLoading,
+                            isFavoriteLoading = isFavoriteLoading,
+                            onToggleTrackFavorite = onToggleTrackFavorite,
+                            onQueueTrack = onQueueTrack,
+                            onPlayTrack = onPlayTrack,
+                        )
+                    }
                 }
             }
         }
@@ -1424,17 +1427,19 @@ internal fun AlbumDetailSection(
                 key = { index, track -> track.ratingKey ?: index },
                 contentType = { _, _ -> "album-track" },
             ) { index, track ->
-                AlbumTrackRow(
-                    index = index,
-                    album = currentTrackResult.album,
-                    track = track,
-                    selectedRoom = selectedRoom,
-                    isPlaybackLoading = isPlaybackLoading,
-                    isFavoriteLoading = isFavoriteLoading,
-                    onToggleTrackFavorite = onToggleTrackFavorite,
-                    onQueueTrack = onQueueTrack,
-                    onPlayTrack = onPlayTrack,
-                )
+                Box(modifier = Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)) {
+                    AlbumTrackRow(
+                        index = index,
+                        album = currentTrackResult.album,
+                        track = track,
+                        selectedRoom = selectedRoom,
+                        isPlaybackLoading = isPlaybackLoading,
+                        isFavoriteLoading = isFavoriteLoading,
+                        onToggleTrackFavorite = onToggleTrackFavorite,
+                        onQueueTrack = onQueueTrack,
+                        onPlayTrack = onPlayTrack,
+                    )
+                }
             }
         }
     }
