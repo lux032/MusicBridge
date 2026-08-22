@@ -419,7 +419,7 @@ class AppState(
         initialPositionMillis: Long = 0L,
     ) = playbackCoordinator.startAlbumPlayback(albumTrackResult, startIndex, initialPositionMillis)
 
-    fun refreshSonosRooms() = playbackCoordinator.refreshSonosRooms()
+    fun refreshSonosRooms(announce: Boolean = true) = playbackCoordinator.refreshSonosRooms(announce)
 
     suspend fun loadVolume(room: SonosRoom) = playbackCoordinator.loadVolume(room)
 

@@ -730,112 +730,13 @@ internal fun PlaybackDetailSection(
     }
 
     if (isRoomDialogVisible) {
-        AlertDialog(
-            onDismissRequest = { isRoomDialogVisible = false },
-            confirmButton = {},
-            title = {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = Strings.selectOutputDevice,
-                        color = AppColors.TextPrimary,
-                        fontWeight = FontWeight.Bold,
-                    )
-                    TextButton(
-                        onClick = onRefreshRooms,
-                        enabled = !isRoomScanning,
-                    ) {
-                        Text(
-                            text = if (isRoomScanning) Strings.searchingDevices else Strings.refreshDevices,
-                            color = if (isRoomScanning) AppColors.TextTertiary else LocalArtworkPalette.current.accent,
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    }
-                }
-            },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    val isLocalCurrent = currentState.target == PlaybackTarget.LocalDevice
-                    Surface(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                isRoomDialogVisible = false
-                                onSelectTarget(PlaybackTarget.LocalDevice)
-                            },
-                        shape = RoundedCornerShape(14.dp),
-                        color = if (isLocalCurrent) AppColors.CardSurfaceStrong else AppColors.CardSurface,
-                        border = BorderStroke(1.dp, if (isLocalCurrent) LocalArtworkPalette.current.accent else AppColors.Border),
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 14.dp, vertical = 12.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                Text(Strings.localPlayback, color = AppColors.TextPrimary, fontWeight = FontWeight.Medium)
-                            }
-                            if (isLocalCurrent) {
-                                Icon(
-                                    imageVector = Icons.Filled.CheckCircle,
-                                    contentDescription = null,
-                                    tint = AppColors.Accent,
-                                )
-                            }
-                        }
-                    }
-                    if (rooms.isEmpty()) {
-                        Text(
-                            text = if (isRoomScanning) Strings.searchingDevices else Strings.noAvailableRooms,
-                            color = AppColors.TextSecondary,
-                        )
-                    } else {
-                        rooms.forEach { room ->
-                            val isCurrentRoom = currentState.sonosRoom?.coordinatorUuid == room.coordinatorUuid
-                            Surface(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        isRoomDialogVisible = false
-                                        onSelectTarget(PlaybackTarget.Sonos(room))
-                                    },
-                                shape = RoundedCornerShape(14.dp),
-                                color = if (isCurrentRoom) AppColors.CardSurfaceStrong else AppColors.CardSurface,
-                                border = BorderStroke(1.dp, if (isCurrentRoom) LocalArtworkPalette.current.accent else AppColors.Border),
-                            ) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(horizontal = 14.dp, vertical = 12.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                        Text(room.roomName, color = AppColors.TextPrimary, fontWeight = FontWeight.Medium)
-                                        Text(
-                                            text = if (room.memberCount > 1) Strings.members(room.memberCount) else Strings.singleRoom,
-                                            color = AppColors.TextSecondary,
-                                            style = MaterialTheme.typography.bodySmall,
-                                        )
-                                    }
-                                    if (isCurrentRoom) {
-                                        Icon(
-                                            imageVector = Icons.Filled.CheckCircle,
-                                            contentDescription = null,
-                                            tint = AppColors.Accent,
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            },
+        OutputTargetDialog(
+            currentTarget = currentState.target,
+            rooms = rooms,
+            isRoomScanning = isRoomScanning,
+            onDismiss = { isRoomDialogVisible = false },
+            onSelectTarget = onSelectTarget,
+            onRefreshRooms = onRefreshRooms,
         )
     }
 
@@ -922,6 +823,122 @@ internal fun PlaybackDetailSection(
                 }
             },
         )
+    }
+}
+
+/**
+ * Shared output-device picker: this device plus every discovered Sonos room. Used by the
+ * player page and the home output card so both entries behave identically.
+ */
+@Composable
+internal fun OutputTargetDialog(
+    currentTarget: PlaybackTarget,
+    rooms: List<SonosRoom>,
+    isRoomScanning: Boolean,
+    onDismiss: () -> Unit,
+    onSelectTarget: (PlaybackTarget) -> Unit,
+    onRefreshRooms: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {},
+        title = {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = Strings.selectOutputDevice,
+                    color = AppColors.TextPrimary,
+                    fontWeight = FontWeight.Bold,
+                )
+                TextButton(
+                    onClick = onRefreshRooms,
+                    enabled = !isRoomScanning,
+                ) {
+                    Text(
+                        text = if (isRoomScanning) Strings.searchingDevices else Strings.refreshDevices,
+                        color = if (isRoomScanning) AppColors.TextTertiary else LocalArtworkPalette.current.accent,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutputTargetOption(
+                    title = Strings.localPlayback,
+                    subtitle = null,
+                    isCurrent = currentTarget == PlaybackTarget.LocalDevice,
+                    onClick = {
+                        onDismiss()
+                        onSelectTarget(PlaybackTarget.LocalDevice)
+                    },
+                )
+                if (rooms.isEmpty()) {
+                    Text(
+                        text = if (isRoomScanning) Strings.searchingDevices else Strings.noAvailableRooms,
+                        color = AppColors.TextSecondary,
+                    )
+                } else {
+                    rooms.forEach { room ->
+                        OutputTargetOption(
+                            title = room.roomName,
+                            subtitle = if (room.memberCount > 1) Strings.members(room.memberCount) else Strings.singleRoom,
+                            isCurrent = (currentTarget as? PlaybackTarget.Sonos)?.room?.coordinatorUuid == room.coordinatorUuid,
+                            onClick = {
+                                onDismiss()
+                                onSelectTarget(PlaybackTarget.Sonos(room))
+                            },
+                        )
+                    }
+                }
+            }
+        },
+    )
+}
+
+@Composable
+private fun OutputTargetOption(
+    title: String,
+    subtitle: String?,
+    isCurrent: Boolean,
+    onClick: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(14.dp),
+        color = if (isCurrent) AppColors.CardSurfaceStrong else AppColors.CardSurface,
+        border = BorderStroke(1.dp, if (isCurrent) LocalArtworkPalette.current.accent else AppColors.Border),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(title, color = AppColors.TextPrimary, fontWeight = FontWeight.Medium)
+                subtitle?.let {
+                    Text(
+                        text = it,
+                        color = AppColors.TextSecondary,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+            if (isCurrent) {
+                Icon(
+                    imageVector = Icons.Filled.CheckCircle,
+                    contentDescription = null,
+                    tint = AppColors.Accent,
+                )
+            }
+        }
     }
 }
 

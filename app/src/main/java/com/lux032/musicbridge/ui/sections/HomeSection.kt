@@ -26,9 +26,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.PhoneAndroid
+import androidx.compose.material.icons.filled.Speaker
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
@@ -47,13 +50,16 @@ internal fun HomeSection(
     favoriteAlbums: List<PlexAlbum>,
     recentAddedAlbums: List<PlexAlbum>,
     selectedAlbum: PlexAlbum?,
-    selectedSonosRoom: SonosRoom?,
-    lastAlbumSyncEpochMillis: Long?,
+    playbackTarget: PlaybackTarget,
+    sonosRooms: List<SonosRoom>,
+    isRoomScanning: Boolean,
     isLoading: Boolean,
     errorMessage: String?,
     actionMessage: String?,
     bottomContentPadding: androidx.compose.ui.unit.Dp,
     listState: LazyListState = rememberLazyListState(),
+    onSelectTarget: (PlaybackTarget) -> Unit,
+    onRefreshRooms: () -> Unit,
     onRefreshFavorites: () -> Unit,
     onAlbumClick: (PlexAlbum) -> Unit,
     onAlbumQueueAction: (PlexAlbum, QueuePlacement) -> Unit,
@@ -63,18 +69,46 @@ internal fun HomeSection(
 ) {
     val layoutInfo = LocalAppLayoutInfo.current
     val needsConnection = !connectionPreferences.hasCredentials() && allAlbums.isEmpty()
+    var isOutputDialogVisible by remember { mutableStateOf(false) }
 
-    LazyColumn(
-        state = listState,
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(
-            start = layoutInfo.horizontalPadding,
-            top = 16.dp,
-            end = layoutInfo.horizontalPadding,
-            bottom = bottomContentPadding,
-        ),
-        verticalArrangement = Arrangement.spacedBy(layoutInfo.contentSpacing),
-    ) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        // Pinned top-right output picker: a small icon button instead of a full-width strip.
+        // The icon mirrors the current target (phone vs speaker) so the state is readable
+        // at a glance without spending a row of feed space on it.
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = layoutInfo.horizontalPadding, top = 8.dp, end = layoutInfo.horizontalPadding),
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconCircleButton(
+                onClick = { isOutputDialogVisible = true },
+                containerColor = Color.White.copy(alpha = 0.10f),
+            ) {
+                Icon(
+                    imageVector = if (playbackTarget is PlaybackTarget.Sonos) {
+                        Icons.Filled.Speaker
+                    } else {
+                        Icons.Filled.PhoneAndroid
+                    },
+                    contentDescription = Strings.selectOutputDevice,
+                    tint = AppColors.TextPrimary,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+        }
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.weight(1f),
+            contentPadding = PaddingValues(
+                start = layoutInfo.horizontalPadding,
+                top = 8.dp,
+                end = layoutInfo.horizontalPadding,
+                bottom = bottomContentPadding,
+            ),
+            verticalArrangement = Arrangement.spacedBy(layoutInfo.contentSpacing),
+        ) {
         errorMessage?.let { message ->
             item(key = "home-error", contentType = "message") {
                 MessageCard(label = Strings.error, message = message, tone = MessageTone.Error)
@@ -153,40 +187,17 @@ internal fun HomeSection(
             }
         }
     }
-}
+    }
 
-@Composable
-internal fun HomeStatusCard(
-    outputTargetName: String,
-    lastAlbumSyncEpochMillis: Long?,
-) {
-    Surface(
-        shape = RoundedCornerShape(20.dp),
-        color = AppColors.CardSurface,
-        border = BorderStroke(1.dp, AppColors.Border),
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 14.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            Text(
-                text = Strings.currentOutputRoom,
-                color = AppColors.TextTertiary,
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Text(
-                text = outputTargetName,
-                color = AppColors.TextPrimary,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Text(
-                text = formatSyncStatus(lastAlbumSyncEpochMillis),
-                color = AppColors.TextSecondary,
-                style = MaterialTheme.typography.bodySmall,
-            )
-        }
+    if (isOutputDialogVisible) {
+        OutputTargetDialog(
+            currentTarget = playbackTarget,
+            rooms = sonosRooms,
+            isRoomScanning = isRoomScanning,
+            onDismiss = { isOutputDialogVisible = false },
+            onSelectTarget = onSelectTarget,
+            onRefreshRooms = onRefreshRooms,
+        )
     }
 }
 

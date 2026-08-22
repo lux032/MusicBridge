@@ -192,6 +192,9 @@ fun PlexAlbumScreen(
         if (!state.hasLoadedLocalAlbums) {
             state.loadAlbumsFromLocalStore()
         }
+        // Warm the Sonos room list in the background so the output picker has devices to
+        // show the first time the user opens it — no manual pull-to-discover needed.
+        state.refreshSonosRooms(announce = false)
     }
 
     LaunchedEffect(state.albumSearchQuery, state.allAlbums.size) {
@@ -670,13 +673,16 @@ fun PlexAlbumScreen(
                         favoriteAlbums = state.favoriteAlbums,
                         recentAddedAlbums = state.recentAddedAlbums.take(100),
                         selectedAlbum = state.selectedAlbum,
-                        selectedSonosRoom = state.selectedSonosRoom,
-                        lastAlbumSyncEpochMillis = state.lastAlbumSyncEpochMillis,
+                        playbackTarget = state.selectedPlaybackTarget,
+                        sonosRooms = state.sonosRooms,
+                        isRoomScanning = state.isSonosLoading,
                         isLoading = state.isLoading,
                         errorMessage = state.errorMessage,
                         actionMessage = state.actionMessage,
                         bottomContentPadding = contentBottomPadding,
                         listState = homeListState,
+                        onSelectTarget = state::switchPlaybackTarget,
+                        onRefreshRooms = state::refreshSonosRooms,
                         onRefreshFavorites = { scope.launch { state.refreshAlbums() } },
                         onAlbumClick = state::openAlbumDetail,
                         onAlbumQueueAction = state::enqueueAlbum,

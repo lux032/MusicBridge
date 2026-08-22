@@ -325,10 +325,12 @@ internal class AppStatePlaybackCoordinator(
         }
     }
 
-    fun refreshSonosRooms() {
+    fun refreshSonosRooms(announce: Boolean = true) {
         state.isSonosLoading = true
-        state.errorMessage = null
-        state.actionMessage = null
+        if (announce) {
+            state.errorMessage = null
+            state.actionMessage = null
+        }
         state.sonosDiscoveryAttempted = true
         state.scope.launch {
             runCatching {
@@ -341,14 +343,18 @@ internal class AppStatePlaybackCoordinator(
                     rooms.firstOrNull { room -> room.coordinatorUuid == current.coordinatorUuid }
                         ?.let { state.selectPlaybackTarget(PlaybackTarget.Sonos(it)) }
                 }
-                state.actionMessage = if (rooms.isEmpty()) {
-                    "当前未发现 Sonos 房间"
-                } else {
-                    "已同步 ${rooms.size} 个 Sonos 房间"
+                if (announce) {
+                    state.actionMessage = if (rooms.isEmpty()) {
+                        "当前未发现 Sonos 房间"
+                    } else {
+                        "已同步 ${rooms.size} 个 Sonos 房间"
+                    }
                 }
                 state.volumeSyncKey += 1
             }.onFailure {
-                state.errorMessage = it.message ?: "未知错误"
+                if (announce) {
+                    state.errorMessage = it.message ?: "未知错误"
+                }
             }
             state.isSonosLoading = false
         }

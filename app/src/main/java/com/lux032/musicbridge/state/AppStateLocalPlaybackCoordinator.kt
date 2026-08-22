@@ -79,6 +79,9 @@ internal class AppStateLocalPlaybackCoordinator(
         val safeIndex = startIndex.coerceIn(0, tracks.lastIndex)
         state.albumPlaybackJob?.cancel()
         state.playbackReportingJob?.cancel()
+        // Persist the output choice: without this the stored target stays on the previous
+        // Sonos room, and the next playback start would silently jump back to the speaker.
+        state.selectPlaybackTarget(PlaybackTarget.LocalDevice)
         state.appPreferences.markAlbumPlayed(album.sourceId, album.ratingKey)
         state.recentPlayedAlbumKeys = state.appPreferences.loadRecentPlayedAlbumKeys(album.sourceId)
         state.miniPlayerState = MiniPlayerState(

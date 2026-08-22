@@ -171,8 +171,9 @@ internal fun BottomNavigationBar(
         label = "nav_pill_trailing_edge",
     )
 
-    // Floating rounded pill matching the player page's action bar: tinted translucent
-    // container, hairline light border, icon + label items.
+    // Floating dark-glass pill: mostly opaque palette base with a light hairline border.
+    // Darker than the player page's action bar — on the home feed the nearly-transparent
+    // white glass washes out over album artwork, so the bar needs more body of its own.
     Surface(
         modifier = modifier
             .fillMaxWidth()
@@ -182,9 +183,8 @@ internal fun BottomNavigationBar(
                 bottom = navigationBarBottomInset + 10.dp,
             ),
         shape = RoundedCornerShape(28.dp),
-        color = palette.backgroundBottom.copy(alpha = 0.88f),
+        color = palette.backgroundBottom.copy(alpha = 0.82f),
         border = BorderStroke(1.dp, Color.White.copy(alpha = 0.10f)),
-        shadowElevation = 8.dp,
     ) {
         var rowSize by remember { mutableStateOf(IntSize.Zero) }
         Box(

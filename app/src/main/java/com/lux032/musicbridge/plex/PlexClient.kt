@@ -1071,25 +1071,30 @@ internal fun PlexTrackStream.withOpusTranscodeMode(
 
 /**
  * Rewrites a Plex track's stream URL for on-device playback at the requested quality.
- * ORIGINAL keeps the direct file URL (ExoPlayer decodes opus/flac natively and seeks
+ * ORIGINAL plays the source file directly (ExoPlayer decodes opus/flac natively and seeks
  * via HTTP range). Bitrate tiers ask Plex for a universal transcode to MP3 — used to
  * save cellular data. Non-Plex sources (032) are returned unchanged for now.
+ *
+ * Note [streamUrl] is built for Sonos: opus tracks arrive as live-transcode URLs that
+ * support neither ranges nor reuse. Those are normalized back to the direct file URL
+ * first — on-device playback has no use for the Sonos opus workarounds.
  */
 internal fun PlexTrackStream.withLocalStreamQuality(
     quality: LocalStreamQuality,
     clientIdentifier: String,
 ): PlexTrackStream {
-    val bitrateKbps = quality.maxAudioBitrateKbps ?: return this
+    val direct = withDirectFileUrl()
+    val bitrateKbps = quality.maxAudioBitrateKbps ?: return direct
     // Direct file URLs look like "<server>/library/parts/<id>/<ts>/file.ext?X-Plex-Token=...".
-    val baseUrl = streamUrl.substringBefore('?')
-    if (!baseUrl.contains("/library/parts")) return this
+    val baseUrl = direct.streamUrl.substringBefore('?')
+    if (!baseUrl.contains("/library/parts")) return direct
     val serverUri = baseUrl.substringBefore("/library/parts")
-    val token = streamUrl.substringAfter('?', "")
+    val token = direct.streamUrl.substringAfter('?', "")
         .split('&')
         .firstOrNull { it.startsWith("X-Plex-Token=") }
         ?.substringAfter("X-Plex-Token=")
         .orEmpty()
-    if (serverUri.isBlank() || token.isBlank()) return this
+    if (serverUri.isBlank() || token.isBlank()) return direct
 
     val profile =
         "add-transcode-target(type=musicProfile&context=streaming&protocol=http&container=mp3&audioCodec=mp3&maxAudioBitrate=$bitrateKbps&replace=true)"
@@ -1119,7 +1124,27 @@ internal fun PlexTrackStream.withLocalStreamQuality(
             "X-Plex-Token" to token,
         ),
     )
-    return copy(streamUrl = transcodedUrl, playbackMimeType = "audio/mpeg")
+    return direct.copy(streamUrl = transcodedUrl, playbackMimeType = "audio/mpeg")
+}
+
+/**
+ * Returns this track with [streamUrl] pointing at the original file on the server.
+ * Sonos-targeted live-transcode URLs (the opus workarounds) are rebuilt from [partKey];
+ * everything else is already a direct URL. ExoPlayer sniffs the container itself, so the
+ * Sonos-specific [playbackMimeType] override is dropped as well.
+ */
+private fun PlexTrackStream.withDirectFileUrl(): PlexTrackStream {
+    if (!streamUrl.contains("/:/transcode/universal/start", ignoreCase = true)) return this
+    if (partKey.isBlank()) return this
+    val serverUri = streamUrl.substringBefore('?')
+        .substringBefore("/music/:/transcode", missingDelimiterValue = "")
+    val token = streamUrl.substringAfter('?', "")
+        .split('&')
+        .firstOrNull { it.startsWith("X-Plex-Token=") }
+        ?.substringAfter("X-Plex-Token=")
+        .orEmpty()
+    if (serverUri.isBlank() || token.isBlank()) return this
+    return copy(streamUrl = buildStreamUrl(serverUri, partKey, token), playbackMimeType = null)
 }
 
 private fun buildMediaUrl(serverUri: String, mediaPath: String, token: String): String {
