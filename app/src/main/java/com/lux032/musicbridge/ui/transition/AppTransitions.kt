@@ -7,15 +7,21 @@ import androidx.compose.animation.ContentTransform
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
+import com.lux032.musicbridge.plex.PlexAlbum
 import com.lux032.musicbridge.plex.PlexTrackStream
 
 /** Direction of the most recent navigation, recorded by AppState so the section
@@ -40,10 +46,19 @@ object PlayerSharedKeys {
     fun artwork(track: PlexTrackStream): String = "playerArtwork-${track.sourceId}-${track.ratingKey}"
 }
 
+/** Shared-element keys for the album list -> album detail cover morph (P1.5 pilot). */
+object AlbumSharedKeys {
+    fun artwork(album: PlexAlbum): String = "albumArtwork-${album.sourceId}-${album.ratingKey}"
+}
+
 object TransitionDurations {
     const val PageFadeInMillis = 240
     const val PageFadeOutMillis = 180
     const val DismissSettleMillis = 160
+    /** Push/Pop horizontal slide — snappier than the 600ms ambient background gradient,
+     *  slow enough for the parallax to read. */
+    const val PageSlideMillis = 320
+    const val TabFadeInMillis = 280
 }
 
 /** Springy bounds morph for shared elements — fast settle (~300ms) with a soft landing. */
@@ -53,18 +68,60 @@ val PlayerBoundsTransform: BoundsTransform = BoundsTransform { _: Rect, _: Rect 
 }
 
 /**
- * Section-level transition spec. P0: pages fade; when the player is involved, all motion
- * comes from the shared elements, so the page itself only crossfades. P1 will add
- * direction-aware slide/parallax for [NavAction.Push]/[NavAction.Pop].
+ * Section-level transition spec, dispatched on [action]:
+ * - Player involved (either side): the shared elements carry the motion, so the page
+ *   itself only crossfades — anything more fights the artwork/container morph.
+ * - Push (list -> detail): new page slides in from the right while the old page parallax
+ *   drifts left (1/4 speed), fades and shrinks slightly.
+ * - Pop (back): exact mirror — detail exits right, list returns from the left parallax.
+ * - Tab switch: gentle fade + slight rise, no lateral motion (tabs aren't ordered).
  */
 fun AnimatedContentTransitionScope<AppSection>.sectionTransitionSpec(
-    @Suppress("UNUSED_PARAMETER") action: NavAction,
+    action: NavAction,
 ): ContentTransform {
-    return ContentTransform(
-        targetContentEnter = fadeIn(tween(TransitionDurations.PageFadeInMillis)),
-        initialContentExit = fadeOut(tween(TransitionDurations.PageFadeOutMillis)),
-        sizeTransform = SizeTransform(clip = false),
-    )
+    val playerInvolved = targetState == AppSection.PlaybackDetail ||
+        initialState == AppSection.PlaybackDetail
+    if (playerInvolved) {
+        return ContentTransform(
+            targetContentEnter = fadeIn(tween(TransitionDurations.PageFadeInMillis)),
+            initialContentExit = fadeOut(tween(TransitionDurations.PageFadeOutMillis)),
+            sizeTransform = SizeTransform(clip = false),
+        )
+    }
+    return when (action) {
+        NavAction.Push -> ContentTransform(
+            targetContentEnter = slideInHorizontally(
+                tween(TransitionDurations.PageSlideMillis, easing = FastOutSlowInEasing),
+            ) { it } + fadeIn(tween(TransitionDurations.PageSlideMillis)),
+            initialContentExit = slideOutHorizontally(
+                tween(TransitionDurations.PageSlideMillis, easing = FastOutSlowInEasing),
+            ) { -it / 4 } + fadeOut(tween(TransitionDurations.PageFadeOutMillis)) +
+                scaleOut(
+                    tween(TransitionDurations.PageSlideMillis, easing = FastOutSlowInEasing),
+                    targetScale = 0.95f,
+                ),
+            sizeTransform = SizeTransform(clip = false),
+        )
+        NavAction.Pop -> ContentTransform(
+            targetContentEnter = slideInHorizontally(
+                tween(TransitionDurations.PageSlideMillis, easing = FastOutSlowInEasing),
+            ) { -it / 4 } + fadeIn(tween(TransitionDurations.PageSlideMillis)) +
+                scaleIn(
+                    tween(TransitionDurations.PageSlideMillis, easing = FastOutSlowInEasing),
+                    initialScale = 0.95f,
+                ),
+            initialContentExit = slideOutHorizontally(
+                tween(TransitionDurations.PageSlideMillis, easing = FastOutSlowInEasing),
+            ) { it } + fadeOut(tween(TransitionDurations.PageFadeOutMillis)),
+            sizeTransform = SizeTransform(clip = false),
+        )
+        NavAction.TabSwitch -> ContentTransform(
+            targetContentEnter = fadeIn(tween(TransitionDurations.TabFadeInMillis)) +
+                slideInVertically(tween(TransitionDurations.TabFadeInMillis)) { it / 28 },
+            initialContentExit = fadeOut(tween(TransitionDurations.PageFadeOutMillis)),
+            sizeTransform = SizeTransform(clip = false),
+        )
+    }
 }
 
 // --- Shared-element modifier helpers (null-safe when no SharedTransitionLayout is present) ---
@@ -90,6 +147,13 @@ fun Modifier.playerSharedElement(key: Any): Modifier {
 @OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
 fun Modifier.playerSharedBounds(key: Any): Modifier = playerSharedElement(key)
+
+/** Section-to-section shared element (album grid cover -> detail header, …). Same wiring
+ *  as [playerSharedElement]; the neutral name keeps call sites readable. Unmatched keys
+ *  degrade to plain fade — e.g. opening a detail whose cover wasn't on the previous page. */
+@OptIn(ExperimentalSharedTransitionApi::class)
+@Composable
+fun Modifier.sectionSharedElement(key: Any): Modifier = playerSharedElement(key)
 
 /** Mini-player-side shared element with caller-managed visibility: the element is hidden
  *  (and handed to the transition overlay) whenever [visible] is false, i.e. while the

@@ -591,6 +591,7 @@ internal fun AllAlbumsSection(
                             onClick = { onAlbumClick(album) },
                             onQueueAction = { onAlbumQueueAction(album, it) },
                             compact = false,
+                            sharedArtworkKey = AlbumSharedKeys.artwork(album),
                         )
                     }
                 }
