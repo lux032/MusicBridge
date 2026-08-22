@@ -150,4 +150,19 @@ object Strings {
     val opusModeDirectMp3Desc get() = if (isZhCN) "Plex 实时转为 320kbps MP3 直投音箱。秒播起播，零手机耗电，手机锁屏/离线不影响播放。" else "Plex transcodes to 320kbps MP3 directly to speaker. Instant start, zero battery drain, unaffected by screen lock or offline."
     val opusModeProxyFlac get() = if (isZhCN) "无损中继 (FLAC 本地缓存)" else "Lossless Relay (FLAC Local Cache)"
     val opusModeProxyFlacDesc get() = if (isZhCN) "Plex 转为 FLAC 并由手机代理转发。理论无损，但起播需缓冲数秒，且播放期间手机需保持在网。" else "Plex transcodes to FLAC relayed by phone proxy. Lossless PCM, but requires buffering and phone must stay connected."
+    val localPlayback get() = if (isZhCN) "本机播放" else "This Device"
+    val selectOutputDevice get() = if (isZhCN) "选择输出设备" else "Select Output"
+    val refreshDevices get() = if (isZhCN) "刷新设备" else "Refresh"
+    val searchingDevices get() = if (isZhCN) "正在搜索 Sonos 设备…" else "Searching for Sonos devices…"
+    val outputTargetDesc get() = if (isZhCN) { target: String -> "将通过 $target 播放" } else { target: String -> "Will play on $target" }
+    val qualityOriginal get() = if (isZhCN) "原码直放" else "Original"
+    val wifiQualityTitle get() = if (isZhCN) "WiFi 音质" else "WiFi Quality"
+    val cellularQualityTitle get() = if (isZhCN) "蜂窝网络音质" else "Cellular Quality"
+    val localCacheTitle get() = if (isZhCN) "本机缓存" else "Local Cache"
+    val clearCache get() = if (isZhCN) "清空缓存" else "Clear Cache"
+    val localPlaybackSectionDesc get() = if (isZhCN) "手机直接播放时的音质与缓存。未选择 Sonos 房间时默认本机播放。" else "Quality and caching for on-device playback. Used by default when no Sonos room is selected."
+    val wifiQualityDesc get() = if (isZhCN) "WiFi 网络下本机播放的音质" else "Playback quality on WiFi"
+    val cellularQualityDesc get() = if (isZhCN) "蜂窝网络下本机播放的音质" else "Playback quality on cellular"
+    val localCacheSizeTitle get() = if (isZhCN) "缓存上限" else "Cache Limit"
+    val localCacheUsedDesc get() = if (isZhCN) { used: String, limit: String -> "已缓存 $used / 上限 $limit" } else { used: String, limit: String -> "$used cached / $limit limit" }
 }

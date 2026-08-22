@@ -43,7 +43,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.lux032.musicbridge.plex.PlexAlbum
 import com.lux032.musicbridge.plex.PlexTrackStream
-import com.lux032.musicbridge.sonos.SonosRoom
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
 
@@ -455,7 +454,7 @@ internal fun BoxScope.VerticalIndexBar(
 internal fun ArtistAlbumsSection(
     artist: ArtistSummary?,
     selectedAlbum: PlexAlbum?,
-    selectedRoom: SonosRoom?,
+    outputTargetName: String,
     isPlaybackLoading: Boolean,
     isFavoriteLoading: Boolean,
     artistTracks: List<PlexTrackStream>,
@@ -465,9 +464,9 @@ internal fun ArtistAlbumsSection(
     onBack: () -> Unit,
     onAlbumClick: (PlexAlbum) -> Unit,
     onAlbumQueueAction: (PlexAlbum, QueuePlacement) -> Unit,
-    onShuffleArtist: (ArtistSummary, SonosRoom) -> Unit,
+    onShuffleArtist: (ArtistSummary) -> Unit,
     onToggleArtistFavorite: (ArtistSummary) -> Unit,
-    onPlayTrack: (ArtistSummary, PlexTrackStream, SonosRoom, Int) -> Unit,
+    onPlayTrack: (ArtistSummary, PlexTrackStream, Int) -> Unit,
     onQueueTrack: (PlexTrackStream, QueuePlacement) -> Unit,
 ) {
     val layoutInfo = LocalAppLayoutInfo.current
@@ -537,13 +536,10 @@ internal fun ArtistAlbumsSection(
                             isLoading = isFavoriteLoading,
                             onClick = { onToggleArtistFavorite(currentArtist) },
                         )
-                        val playAllEnabled =
-                            selectedRoom != null && artistTracks.isNotEmpty() && !isPlaybackLoading
+                        val playAllEnabled = artistTracks.isNotEmpty() && !isPlaybackLoading
                         IconCircleButton(
                             onClick = {
-                                selectedRoom?.let { room ->
-                                    artistTracks.firstOrNull()?.let { onPlayTrack(currentArtist, it, room, 0) }
-                                }
+                                artistTracks.firstOrNull()?.let { onPlayTrack(currentArtist, it, 0) }
                             },
                             enabled = playAllEnabled,
                             containerColor = if (playAllEnabled) palette.accent else palette.accent.copy(alpha = 0.35f),
@@ -555,10 +551,9 @@ internal fun ArtistAlbumsSection(
                                 modifier = Modifier.size(18.dp),
                             )
                         }
-                        val shuffleEnabled =
-                            selectedRoom != null && currentArtist.albums.isNotEmpty() && !isPlaybackLoading
+                        val shuffleEnabled = currentArtist.albums.isNotEmpty() && !isPlaybackLoading
                         IconCircleButton(
-                            onClick = { selectedRoom?.let { onShuffleArtist(currentArtist, it) } },
+                            onClick = { onShuffleArtist(currentArtist) },
                             enabled = shuffleEnabled,
                             containerColor = AppColors.CardSurfaceStrong,
                             modifier = Modifier.semantics { contentDescription = Strings.shuffleShort },
@@ -572,7 +567,7 @@ internal fun ArtistAlbumsSection(
                         }
                     }
                     Text(
-                        text = selectedRoom?.let { Strings.willPushTo(it.roomName) } ?: Strings.noRoomSelectedDesc,
+                        text = Strings.outputTargetDesc(outputTargetName),
                         color = AppColors.TextTertiary,
                         style = MaterialTheme.typography.bodySmall,
                     )
@@ -685,7 +680,7 @@ internal fun ArtistAlbumsSection(
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(12.dp))
                             .clickable(enabled = !isPlaybackLoading) {
-                                selectedRoom?.let { onPlayTrack(currentArtist, track, it, index) }
+                                onPlayTrack(currentArtist, track, index)
                             }
                             .padding(vertical = 4.dp),
                         horizontalArrangement = Arrangement.spacedBy(12.dp),

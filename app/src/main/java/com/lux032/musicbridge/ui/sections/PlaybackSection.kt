@@ -67,6 +67,7 @@ import com.lux032.musicbridge.sonos.SonosController
 import com.lux032.musicbridge.sonos.SonosRoom
 import android.os.Build
 import android.util.Log
+import java.util.Locale
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
@@ -78,6 +79,7 @@ import kotlinx.coroutines.launch
 internal fun PlaybackDetailSection(
     state: MiniPlayerState?,
     rooms: List<SonosRoom>,
+    isRoomScanning: Boolean,
     playbackMode: PlaybackMode,
     sleepTimerState: SleepTimerState,
     isLoading: Boolean,
@@ -92,7 +94,8 @@ internal fun PlaybackDetailSection(
     onToggleTrackFavorite: (PlexTrackStream) -> Unit,
     onSelectTrack: (Int) -> Unit,
     onSelectPlaybackMode: (PlaybackMode) -> Unit,
-    onSelectRoom: (SonosRoom) -> Unit,
+    onSelectTarget: (PlaybackTarget) -> Unit,
+    onRefreshRooms: () -> Unit,
     onStartSleepTimer: (Int, Int) -> Unit,
     onCancelSleepTimer: () -> Unit,
     // The playback screen lays out edge-to-edge; these insets keep foreground content inside
@@ -241,7 +244,7 @@ internal fun PlaybackDetailSection(
                 }
             }
             Text(
-                text = "${currentState.room.roomName} · ${currentState.currentIndex + 1}/${currentState.tracks.size}",
+                text = "${currentState.target.displayName} · ${currentState.currentIndex + 1}/${currentState.tracks.size}",
                 color = AppColors.TextTertiary,
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.clickable { isRoomDialogVisible = true },
@@ -731,25 +734,75 @@ internal fun PlaybackDetailSection(
             onDismissRequest = { isRoomDialogVisible = false },
             confirmButton = {},
             title = {
-                Text(
-                    text = Strings.selectSonosRoom,
-                    color = AppColors.TextPrimary,
-                    fontWeight = FontWeight.Bold,
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = Strings.selectOutputDevice,
+                        color = AppColors.TextPrimary,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    TextButton(
+                        onClick = onRefreshRooms,
+                        enabled = !isRoomScanning,
+                    ) {
+                        Text(
+                            text = if (isRoomScanning) Strings.searchingDevices else Strings.refreshDevices,
+                            color = if (isRoomScanning) AppColors.TextTertiary else LocalArtworkPalette.current.accent,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
             },
             text = {
-                if (rooms.isEmpty()) {
-                    Text(Strings.noAvailableRooms, color = AppColors.TextSecondary)
-                } else {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val isLocalCurrent = currentState.target == PlaybackTarget.LocalDevice
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                isRoomDialogVisible = false
+                                onSelectTarget(PlaybackTarget.LocalDevice)
+                            },
+                        shape = RoundedCornerShape(14.dp),
+                        color = if (isLocalCurrent) AppColors.CardSurfaceStrong else AppColors.CardSurface,
+                        border = BorderStroke(1.dp, if (isLocalCurrent) LocalArtworkPalette.current.accent else AppColors.Border),
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text(Strings.localPlayback, color = AppColors.TextPrimary, fontWeight = FontWeight.Medium)
+                            }
+                            if (isLocalCurrent) {
+                                Icon(
+                                    imageVector = Icons.Filled.CheckCircle,
+                                    contentDescription = null,
+                                    tint = AppColors.Accent,
+                                )
+                            }
+                        }
+                    }
+                    if (rooms.isEmpty()) {
+                        Text(
+                            text = if (isRoomScanning) Strings.searchingDevices else Strings.noAvailableRooms,
+                            color = AppColors.TextSecondary,
+                        )
+                    } else {
                         rooms.forEach { room ->
-                            val isCurrentRoom = room.coordinatorUuid == currentState.room.coordinatorUuid
+                            val isCurrentRoom = currentState.sonosRoom?.coordinatorUuid == room.coordinatorUuid
                             Surface(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable {
                                         isRoomDialogVisible = false
-                                        onSelectRoom(room)
+                                        onSelectTarget(PlaybackTarget.Sonos(room))
                                     },
                                 shape = RoundedCornerShape(14.dp),
                                 color = if (isCurrentRoom) AppColors.CardSurfaceStrong else AppColors.CardSurface,
@@ -1214,7 +1267,7 @@ private class ArcRingGlowBrush(
 @Composable
 internal fun AlbumDetailSection(
     trackResult: PlexAlbumTracksResult?,
-    selectedRoom: SonosRoom?,
+    outputTargetName: String,
     isPlaybackLoading: Boolean,
     isFavoriteLoading: Boolean,
     bottomContentPadding: androidx.compose.ui.unit.Dp,
@@ -1226,8 +1279,8 @@ internal fun AlbumDetailSection(
     onToggleTrackFavorite: (PlexTrackStream) -> Unit,
     onQueueAlbum: (PlexAlbum, QueuePlacement) -> Unit,
     onQueueTrack: (PlexTrackStream, QueuePlacement) -> Unit,
-    onPlayAlbum: (PlexAlbumTracksResult, SonosRoom) -> Unit,
-    onPlayTrack: (PlexAlbum, PlexTrackStream, SonosRoom) -> Unit,
+    onPlayAlbum: (PlexAlbumTracksResult) -> Unit,
+    onPlayTrack: (PlexAlbum, PlexTrackStream) -> Unit,
 ) {
     val currentTrackResult = trackResult
     if (currentTrackResult == null) {
@@ -1317,7 +1370,7 @@ internal fun AlbumDetailSection(
                 style = MaterialTheme.typography.bodyMedium,
             )
             Text(
-                text = selectedRoom?.let { Strings.willPushTo(it.roomName) } ?: Strings.noRoomSelectedDesc,
+                text = Strings.outputTargetDesc(outputTargetName),
                 color = AppColors.TextTertiary,
             )
             Row(
@@ -1331,13 +1384,13 @@ internal fun AlbumDetailSection(
                     onClick = { onToggleAlbumFavorite(currentTrackResult.album) },
                 )
                 IconCircleButton(
-                    onClick = { selectedRoom?.let { onPlayAlbum(currentTrackResult, it) } },
-                    enabled = selectedRoom != null && !isPlaybackLoading,
-                    containerColor = if (selectedRoom != null) palette.accent else null,
+                    onClick = { onPlayAlbum(currentTrackResult) },
+                    enabled = !isPlaybackLoading,
+                    containerColor = palette.accent,
                 ) {
                     PlayerIconGraphic(
                         icon = PlayerIcon.Play,
-                        tint = if (selectedRoom != null) palette.onAccent else AppColors.TextTertiary,
+                        tint = palette.onAccent,
                         modifier = Modifier.size(22.dp),
                     )
                 }
@@ -1393,7 +1446,6 @@ internal fun AlbumDetailSection(
                             index = index,
                             album = currentTrackResult.album,
                             track = track,
-                            selectedRoom = selectedRoom,
                             isPlaybackLoading = isPlaybackLoading,
                             isFavoriteLoading = isFavoriteLoading,
                             onToggleTrackFavorite = onToggleTrackFavorite,
@@ -1432,7 +1484,6 @@ internal fun AlbumDetailSection(
                         index = index,
                         album = currentTrackResult.album,
                         track = track,
-                        selectedRoom = selectedRoom,
                         isPlaybackLoading = isPlaybackLoading,
                         isFavoriteLoading = isFavoriteLoading,
                         onToggleTrackFavorite = onToggleTrackFavorite,
@@ -1452,19 +1503,18 @@ private fun AlbumTrackRow(
     index: Int,
     album: PlexAlbum,
     track: PlexTrackStream,
-    selectedRoom: SonosRoom?,
     isPlaybackLoading: Boolean,
     isFavoriteLoading: Boolean,
     onToggleTrackFavorite: (PlexTrackStream) -> Unit,
     onQueueTrack: (PlexTrackStream, QueuePlacement) -> Unit,
-    onPlayTrack: (PlexAlbum, PlexTrackStream, SonosRoom) -> Unit,
+    onPlayTrack: (PlexAlbum, PlexTrackStream) -> Unit,
 ) {
     var showQueueMenu by remember { mutableStateOf(false) }
     Box {
     Surface(
         modifier = Modifier.combinedClickable(
             enabled = !isPlaybackLoading,
-            onClick = { selectedRoom?.let { onPlayTrack(album, track, it) } },
+            onClick = { onPlayTrack(album, track) },
             onLongClick = { showQueueMenu = true },
         ),
         shape = RoundedCornerShape(12.dp),
@@ -1501,12 +1551,12 @@ private fun AlbumTrackRow(
                     onClick = { onToggleTrackFavorite(track) },
                 )
                 IconCircleButton(
-                    onClick = { selectedRoom?.let { onPlayTrack(album, track, it) } },
-                    enabled = selectedRoom != null && !isPlaybackLoading,
+                    onClick = { onPlayTrack(album, track) },
+                    enabled = !isPlaybackLoading,
                 ) {
                     PlayerIconGraphic(
                         icon = PlayerIcon.Play,
-                        tint = if (selectedRoom != null) AppColors.TextPrimary else AppColors.TextTertiary,
+                        tint = AppColors.TextPrimary,
                         modifier = Modifier.size(16.dp),
                     )
                 }
@@ -1807,16 +1857,18 @@ internal fun PlayerControlButton(
 
 @Composable
 internal fun SettingsSection(
-    rooms: List<SonosRoom>,
-    selectedRoom: SonosRoom?,
-    isSonosLoading: Boolean,
-    discoveryAttempted: Boolean,
     serverProfiles: List<MusicServerProfile>,
     activeServerId: String,
     opusTranscodeMode: OpusTranscodeMode = OpusTranscodeMode.DEFAULT,
+    wifiQuality: LocalStreamQuality,
+    cellularQuality: LocalStreamQuality,
+    localCacheSize: LocalCacheSize,
+    localCacheUsedBytes: Long,
     onOpusTranscodeModeChange: (OpusTranscodeMode) -> Unit = {},
-    onDiscoverSonos: () -> Unit,
-    onSelectRoom: (SonosRoom) -> Unit,
+    onWifiQualityChange: (LocalStreamQuality) -> Unit,
+    onCellularQualityChange: (LocalStreamQuality) -> Unit,
+    onLocalCacheSizeChange: (LocalCacheSize) -> Unit,
+    onClearLocalCache: () -> Unit,
     onSaveServer: (MusicServerProfile, Boolean) -> Unit,
     onSwitchServer: (String) -> Unit,
     onDeleteServer: (String) -> Unit,
@@ -1851,20 +1903,6 @@ internal fun SettingsSection(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        SonosSettingsCard(
-            rooms = rooms,
-            selectedRoom = selectedRoom,
-            isLoading = isSonosLoading,
-            discoveryAttempted = discoveryAttempted,
-            onDiscover = onDiscoverSonos,
-            onSelectRoom = onSelectRoom,
-        )
-        HorizontalDivider(color = AppColors.Border)
-        OpusTranscodeStrategyCard(
-            currentMode = opusTranscodeMode,
-            onModeChange = onOpusTranscodeModeChange,
-        )
-        HorizontalDivider(color = AppColors.Border)
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -2040,6 +2078,251 @@ internal fun SettingsSection(
         ) {
             Text(Strings.refreshHome)
         }
+        HorizontalDivider(color = AppColors.Border)
+        LocalPlaybackSettingsCard(
+            wifiQuality = wifiQuality,
+            cellularQuality = cellularQuality,
+            localCacheSize = localCacheSize,
+            localCacheUsedBytes = localCacheUsedBytes,
+            onWifiQualityChange = onWifiQualityChange,
+            onCellularQualityChange = onCellularQualityChange,
+            onLocalCacheSizeChange = onLocalCacheSizeChange,
+            onClearLocalCache = onClearLocalCache,
+        )
+        HorizontalDivider(color = AppColors.Border)
+        OpusTranscodeStrategyCard(
+            currentMode = opusTranscodeMode,
+            onModeChange = onOpusTranscodeModeChange,
+        )
+    }
+}
+
+@Composable
+internal fun LocalPlaybackSettingsCard(
+    wifiQuality: LocalStreamQuality,
+    cellularQuality: LocalStreamQuality,
+    localCacheSize: LocalCacheSize,
+    localCacheUsedBytes: Long,
+    onWifiQualityChange: (LocalStreamQuality) -> Unit,
+    onCellularQualityChange: (LocalStreamQuality) -> Unit,
+    onLocalCacheSizeChange: (LocalCacheSize) -> Unit,
+    onClearLocalCache: () -> Unit,
+) {
+    // true = editing the WiFi quality, false = cellular.
+    var qualityPickerTarget by remember { mutableStateOf<Boolean?>(null) }
+    var isCacheSizeDialogVisible by remember { mutableStateOf(false) }
+
+    Surface(
+        shape = RoundedCornerShape(26.dp),
+        color = AppColors.CardSurface,
+        border = BorderStroke(1.dp, AppColors.Border),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(
+                text = "📱 " + Strings.localPlayback,
+                style = MaterialTheme.typography.titleLarge,
+                color = AppColors.TextPrimary,
+            )
+            Text(
+                text = Strings.localPlaybackSectionDesc,
+                color = AppColors.TextSecondary,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            SettingsValueRow(
+                title = Strings.wifiQualityTitle,
+                value = wifiQuality.label,
+                onClick = { qualityPickerTarget = true },
+            )
+            SettingsValueRow(
+                title = Strings.cellularQualityTitle,
+                value = cellularQuality.label,
+                onClick = { qualityPickerTarget = false },
+            )
+            HorizontalDivider(color = AppColors.Border, modifier = Modifier.padding(vertical = 4.dp))
+            SettingsValueRow(
+                title = Strings.localCacheSizeTitle,
+                value = localCacheSize.megabytesLabel,
+                onClick = { isCacheSizeDialogVisible = true },
+            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = Strings.localCacheUsedDesc(
+                        formatCacheSizeLabel(localCacheUsedBytes),
+                        localCacheSize.megabytesLabel,
+                    ),
+                    color = AppColors.TextTertiary,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                TextButton(
+                    onClick = onClearLocalCache,
+                    enabled = localCacheUsedBytes > 0L,
+                ) {
+                    Text(
+                        text = Strings.clearCache,
+                        color = if (localCacheUsedBytes > 0L) AppColors.TextSecondary else AppColors.TextTertiary,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+        }
+    }
+
+    qualityPickerTarget?.let { isWifi ->
+        val currentQuality = if (isWifi) wifiQuality else cellularQuality
+        AlertDialog(
+            onDismissRequest = { qualityPickerTarget = null },
+            confirmButton = {},
+            title = {
+                Text(
+                    text = if (isWifi) Strings.wifiQualityTitle else Strings.cellularQualityTitle,
+                    color = AppColors.TextPrimary,
+                    fontWeight = FontWeight.Bold,
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    LocalStreamQuality.entries.forEach { quality ->
+                        val isSelected = quality == currentQuality
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .selectable(
+                                    selected = isSelected,
+                                    onClick = {
+                                        qualityPickerTarget = null
+                                        if (isWifi) onWifiQualityChange(quality) else onCellularQualityChange(quality)
+                                    },
+                                ),
+                            shape = RoundedCornerShape(14.dp),
+                            color = if (isSelected) AppColors.CardSurfaceStrong else AppColors.CardSurface,
+                            border = BorderStroke(1.dp, if (isSelected) LocalArtworkPalette.current.accent else AppColors.Border),
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(quality.label, color = AppColors.TextPrimary)
+                                if (isSelected) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Check,
+                                        contentDescription = null,
+                                        tint = LocalArtworkPalette.current.accent,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+        )
+    }
+
+    if (isCacheSizeDialogVisible) {
+        AlertDialog(
+            onDismissRequest = { isCacheSizeDialogVisible = false },
+            confirmButton = {},
+            title = {
+                Text(
+                    text = Strings.localCacheSizeTitle,
+                    color = AppColors.TextPrimary,
+                    fontWeight = FontWeight.Bold,
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    LocalCacheSize.entries.forEach { size ->
+                        val isSelected = size == localCacheSize
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .selectable(
+                                    selected = isSelected,
+                                    onClick = {
+                                        isCacheSizeDialogVisible = false
+                                        onLocalCacheSizeChange(size)
+                                    },
+                                ),
+                            shape = RoundedCornerShape(14.dp),
+                            color = if (isSelected) AppColors.CardSurfaceStrong else AppColors.CardSurface,
+                            border = BorderStroke(1.dp, if (isSelected) LocalArtworkPalette.current.accent else AppColors.Border),
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(size.megabytesLabel, color = AppColors.TextPrimary)
+                                if (isSelected) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Check,
+                                        contentDescription = null,
+                                        tint = LocalArtworkPalette.current.accent,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+        )
+    }
+}
+
+@Composable
+private fun SettingsValueRow(
+    title: String,
+    value: String,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 4.dp, vertical = 10.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(title, color = AppColors.TextPrimary, fontWeight = FontWeight.Medium)
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(value, color = LocalArtworkPalette.current.accent, fontWeight = FontWeight.SemiBold)
+            Icon(
+                imageVector = Icons.Filled.ChevronRight,
+                contentDescription = null,
+                tint = AppColors.TextTertiary,
+                modifier = Modifier.size(18.dp),
+            )
+        }
+    }
+}
+
+private fun formatCacheSizeLabel(bytes: Long): String {
+    if (bytes <= 0L) return "0 MB"
+    val megabytes = bytes / (1024.0 * 1024.0)
+    return if (megabytes >= 1024.0) {
+        String.format(Locale.US, "%.1f GB", megabytes / 1024.0)
+    } else {
+        String.format(Locale.US, "%.0f MB", megabytes)
     }
 }
 

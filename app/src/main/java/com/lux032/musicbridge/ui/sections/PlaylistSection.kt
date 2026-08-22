@@ -25,7 +25,6 @@ import com.lux032.musicbridge.plex.PlexPlaylist
 import com.lux032.musicbridge.plex.PlexPlaylistTracksResult
 import com.lux032.musicbridge.plex.PlexTrackStream
 import com.lux032.musicbridge.plex.isFavorite
-import com.lux032.musicbridge.sonos.SonosRoom
 
 @Composable
 internal fun PlaylistsSection(
@@ -162,16 +161,16 @@ private fun PlaylistCard(
 @Composable
 internal fun PlaylistDetailSection(
     playlistResult: PlexPlaylistTracksResult?,
-    selectedRoom: SonosRoom?,
+    outputTargetName: String,
     isPlaybackLoading: Boolean,
     isFavoriteLoading: Boolean,
     bottomContentPadding: androidx.compose.ui.unit.Dp,
     onBack: () -> Unit,
     onToggleTrackFavorite: (PlexTrackStream) -> Unit,
     onQueueTrack: (PlexTrackStream, QueuePlacement) -> Unit,
-    onPlayPlaylist: (PlexPlaylistTracksResult, SonosRoom) -> Unit,
-    onShufflePlaylist: (PlexPlaylistTracksResult, SonosRoom) -> Unit,
-    onPlayTrack: (PlexPlaylist, PlexTrackStream, SonosRoom, Int) -> Unit,
+    onPlayPlaylist: (PlexPlaylistTracksResult) -> Unit,
+    onShufflePlaylist: (PlexPlaylistTracksResult) -> Unit,
+    onPlayTrack: (PlexPlaylist, PlexTrackStream, Int) -> Unit,
 ) {
     val currentResult = playlistResult
     if (currentResult == null) {
@@ -237,7 +236,7 @@ internal fun PlaylistDetailSection(
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Text(
-                    text = selectedRoom?.let { Strings.willPushTo(it.roomName) } ?: Strings.noRoomSelectedDesc,
+                    text = Strings.outputTargetDesc(outputTargetName),
                     color = AppColors.TextTertiary,
                 )
                 Row(
@@ -246,25 +245,25 @@ internal fun PlaylistDetailSection(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     IconCircleButton(
-                        onClick = { selectedRoom?.let { onPlayPlaylist(currentResult, it) } },
-                        enabled = selectedRoom != null && !isPlaybackLoading,
-                        containerColor = if (selectedRoom != null) palette.accent else null,
+                        onClick = { onPlayPlaylist(currentResult) },
+                        enabled = !isPlaybackLoading,
+                        containerColor = palette.accent,
                     ) {
                         PlayerIconGraphic(
                             icon = PlayerIcon.Play,
-                            tint = if (selectedRoom != null) palette.onAccent else AppColors.TextTertiary,
+                            tint = palette.onAccent,
                             modifier = Modifier.size(22.dp),
                         )
                     }
                     IconCircleButton(
-                        onClick = { selectedRoom?.let { onShufflePlaylist(currentResult, it) } },
-                        enabled = selectedRoom != null && !isPlaybackLoading,
+                        onClick = { onShufflePlaylist(currentResult) },
+                        enabled = !isPlaybackLoading,
                         highlighted = false,
                     ) {
                         Icon(
                             imageVector = Icons.Filled.Shuffle,
                             contentDescription = Strings.shuffle,
-                            tint = if (selectedRoom != null) AppColors.TextPrimary else AppColors.TextTertiary,
+                            tint = AppColors.TextPrimary,
                             modifier = Modifier.size(22.dp),
                         )
                     }
@@ -284,7 +283,7 @@ internal fun PlaylistDetailSection(
                     .combinedClickable(
                         enabled = !isPlaybackLoading,
                         onClick = {
-                            selectedRoom?.let { onPlayTrack(currentResult.playlist, track, it, index) }
+                            onPlayTrack(currentResult.playlist, track, index)
                         },
                         onLongClick = { showQueueMenu = true },
                     ),
@@ -322,12 +321,12 @@ internal fun PlaylistDetailSection(
                                 onClick = { onToggleTrackFavorite(track) },
                             )
                             IconCircleButton(
-                                onClick = { selectedRoom?.let { onPlayTrack(currentResult.playlist, track, it, index) } },
-                                enabled = selectedRoom != null && !isPlaybackLoading,
+                                onClick = { onPlayTrack(currentResult.playlist, track, index) },
+                                enabled = !isPlaybackLoading,
                             ) {
                                 PlayerIconGraphic(
                                     icon = PlayerIcon.Play,
-                                    tint = if (selectedRoom != null) AppColors.TextPrimary else AppColors.TextTertiary,
+                                    tint = AppColors.TextPrimary,
                                     modifier = Modifier.size(16.dp),
                                 )
                             }

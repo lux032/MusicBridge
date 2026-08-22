@@ -2,6 +2,7 @@ package com.lux032.musicbridge.plex
 
 import android.os.Build
 import android.util.Base64
+import com.lux032.musicbridge.LocalStreamQuality
 import com.lux032.musicbridge.OpusTranscodeMode
 import com.lux032.musicbridge.music.MusicSourceClient
 import kotlinx.coroutines.Dispatchers
@@ -1066,6 +1067,59 @@ internal fun PlexTrackStream.withOpusTranscodeMode(
         streamUrl = updatedUrl,
         playbackMimeType = targetMime,
     )
+}
+
+/**
+ * Rewrites a Plex track's stream URL for on-device playback at the requested quality.
+ * ORIGINAL keeps the direct file URL (ExoPlayer decodes opus/flac natively and seeks
+ * via HTTP range). Bitrate tiers ask Plex for a universal transcode to MP3 — used to
+ * save cellular data. Non-Plex sources (032) are returned unchanged for now.
+ */
+internal fun PlexTrackStream.withLocalStreamQuality(
+    quality: LocalStreamQuality,
+    clientIdentifier: String,
+): PlexTrackStream {
+    val bitrateKbps = quality.maxAudioBitrateKbps ?: return this
+    // Direct file URLs look like "<server>/library/parts/<id>/<ts>/file.ext?X-Plex-Token=...".
+    val baseUrl = streamUrl.substringBefore('?')
+    if (!baseUrl.contains("/library/parts")) return this
+    val serverUri = baseUrl.substringBefore("/library/parts")
+    val token = streamUrl.substringAfter('?', "")
+        .split('&')
+        .firstOrNull { it.startsWith("X-Plex-Token=") }
+        ?.substringAfter("X-Plex-Token=")
+        .orEmpty()
+    if (serverUri.isBlank() || token.isBlank()) return this
+
+    val profile =
+        "add-transcode-target(type=musicProfile&context=streaming&protocol=http&container=mp3&audioCodec=mp3&maxAudioBitrate=$bitrateKbps&replace=true)"
+    val transcodedUrl = buildPlexUrl(
+        serverUri = serverUri,
+        path = "/music/:/transcode/universal/start.mp3",
+        queryParameters = listOf(
+            "path" to "/library/metadata/$ratingKey",
+            "mediaIndex" to "0",
+            "partIndex" to "0",
+            "protocol" to "http",
+            "offset" to "0",
+            "directPlay" to "0",
+            "directStream" to "0",
+            "directStreamAudio" to "0",
+            "audioCodec" to "mp3",
+            "maxAudioBitrate" to bitrateKbps.toString(),
+            "audioChannelCount" to "2",
+            "location" to "lan",
+            "X-Plex-Client-Identifier" to clientIdentifier,
+            "X-Plex-Client-Profile-Name" to "generic",
+            "X-Plex-Client-Profile-Extra" to profile,
+            "X-Plex-Product" to "MusicBridge",
+            "X-Plex-Version" to "0.1.0",
+            "X-Plex-Platform" to "Android",
+            "X-Plex-Device-Name" to "MusicBridge",
+            "X-Plex-Token" to token,
+        ),
+    )
+    return copy(streamUrl = transcodedUrl, playbackMimeType = "audio/mpeg")
 }
 
 private fun buildMediaUrl(serverUri: String, mediaPath: String, token: String): String {

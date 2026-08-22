@@ -157,7 +157,7 @@ internal fun HomeSection(
 
 @Composable
 internal fun HomeStatusCard(
-    selectedRoom: SonosRoom?,
+    outputTargetName: String,
     lastAlbumSyncEpochMillis: Long?,
 ) {
     Surface(
@@ -177,7 +177,7 @@ internal fun HomeStatusCard(
                 style = MaterialTheme.typography.bodySmall,
             )
             Text(
-                text = selectedRoom?.roomName ?: Strings.noRoomSelected,
+                text = outputTargetName,
                 color = AppColors.TextPrimary,
                 fontWeight = FontWeight.SemiBold,
             )

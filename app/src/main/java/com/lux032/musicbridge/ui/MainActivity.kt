@@ -62,7 +62,6 @@ import com.lux032.musicbridge.plex.PlexAlbum
 import com.lux032.musicbridge.plex.PlexAlbumTracksResult
 import com.lux032.musicbridge.plex.PlexSection
 import com.lux032.musicbridge.plex.PlexTrackStream
-import com.lux032.musicbridge.sonos.SonosRoom
 import com.lux032.musicbridge.ui.theme.PlexToSonosPlayerTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -410,20 +409,20 @@ fun PlexAlbumScreen(
                     ) {
                         PlaylistDetailSection(
                             playlistResult = state.playlistTrackResult,
-                            selectedRoom = state.selectedSonosRoom,
+                            outputTargetName = state.selectedPlaybackTarget.displayName,
                             isPlaybackLoading = state.isPlaybackCommandLoading,
                             isFavoriteLoading = state.isFavoriteMutationLoading,
                             bottomContentPadding = contentBottomPadding,
                             onBack = state::navigateBack,
                             onToggleTrackFavorite = state::toggleTrackFavorite,
                             onQueueTrack = state::enqueueTrack,
-                            onPlayPlaylist = { playlistResult, room ->
-                                state.startPlaylistPlayback(playlistResult, room, shuffle = false)
+                            onPlayPlaylist = { playlistResult ->
+                                state.startPlaylistPlayback(playlistResult, shuffle = false)
                             },
-                            onShufflePlaylist = { playlistResult, room ->
-                                state.startPlaylistPlayback(playlistResult, room, shuffle = true)
+                            onShufflePlaylist = { playlistResult ->
+                                state.startPlaylistPlayback(playlistResult, shuffle = true)
                             },
-                            onPlayTrack = { playlist, track, room, index ->
+                            onPlayTrack = { playlist, track, index ->
                                 val currentResult = state.playlistTrackResult
                                 if (currentResult != null) {
                                     val tracksFromIndex = currentResult.tracks.drop(index)
@@ -439,7 +438,7 @@ fun PlexAlbumScreen(
                                         section = PlexSection("", "", ""),
                                         sourceId = playlist.sourceId,
                                     )
-                                    state.startSingleTrackPlayback(fakeAlbum, tracksFromIndex, 0, room)
+                                    state.startSingleTrackPlayback(fakeAlbum, tracksFromIndex, 0)
                                 }
                             },
                         )
@@ -454,6 +453,7 @@ fun PlexAlbumScreen(
                         PlaybackDetailSection(
                             state = state.miniPlayerState,
                             rooms = state.sonosRooms,
+                            isRoomScanning = state.isSonosLoading,
                             topSystemBarInset = systemBarTopPadding,
                             bottomSystemBarInset = systemBarBottomPadding,
                             playbackMode = state.playbackMode,
@@ -465,14 +465,14 @@ fun PlexAlbumScreen(
                                 val playerState = state.miniPlayerState ?: return@PlaybackDetailSection
                                 val newIndex = (playerState.currentIndex - 1).coerceAtLeast(0)
                                 if (newIndex != playerState.currentIndex) {
-                                    state.playQueueIndex(newIndex, room = playerState.room)
+                                    state.playQueueIndex(newIndex)
                                 }
                             },
                             onNext = {
                                 val playerState = state.miniPlayerState ?: return@PlaybackDetailSection
                                 val newIndex = (playerState.currentIndex + 1).coerceAtMost(playerState.tracks.lastIndex)
                                 if (newIndex != playerState.currentIndex) {
-                                    state.playQueueIndex(newIndex, room = playerState.room)
+                                    state.playQueueIndex(newIndex)
                                 }
                             },
                             onTogglePause = state::togglePause,
@@ -482,12 +482,10 @@ fun PlexAlbumScreen(
                             onToggleTrackFavorite = state::toggleTrackFavorite,
                             onSelectTrack = { index -> state.playQueueIndex(index) },
                             onSelectPlaybackMode = state::updatePlaybackMode,
-                            onSelectRoom = state::switchPlaybackRoom,
+                            onSelectTarget = state::switchPlaybackTarget,
+                            onRefreshRooms = state::refreshSonosRooms,
                             onStartSleepTimer = { hours, minutes ->
-                                val room = state.miniPlayerState?.room ?: state.selectedSonosRoom
-                                if (room != null) {
-                                    state.startSleepTimer(hours, minutes, room)
-                                }
+                                state.startSleepTimer(hours, minutes)
                             },
                             onCancelSleepTimer = state::cancelSleepTimer,
                         )
@@ -516,7 +514,7 @@ fun PlexAlbumScreen(
                         ArtistAlbumsSection(
                             artist = state.selectedArtist,
                             selectedAlbum = state.selectedAlbum,
-                            selectedRoom = state.selectedSonosRoom,
+                            outputTargetName = state.selectedPlaybackTarget.displayName,
                             isPlaybackLoading = state.isPlaybackCommandLoading,
                             isFavoriteLoading = state.isFavoriteMutationLoading,
                             artistTracks = state.artistTracks,
@@ -529,7 +527,7 @@ fun PlexAlbumScreen(
                             onShuffleArtist = state::shuffleArtist,
                             onToggleArtistFavorite = state::toggleArtistFavorite,
                             onQueueTrack = state::enqueueTrack,
-                            onPlayTrack = { artist, _, room, index ->
+                            onPlayTrack = { artist, _, index ->
                                 val tracksFromIndex = state.artistTracks.drop(index)
                                 if (tracksFromIndex.isNotEmpty()) {
                                     val fakeAlbum = PlexAlbum(
@@ -544,7 +542,7 @@ fun PlexAlbumScreen(
                                         section = PlexSection("", "", ""),
                                         sourceId = artist.sourceId,
                                     )
-                                    state.startSingleTrackPlayback(fakeAlbum, tracksFromIndex, 0, room)
+                                    state.startSingleTrackPlayback(fakeAlbum, tracksFromIndex, 0)
                                 }
                             },
                         )
@@ -616,7 +614,7 @@ fun PlexAlbumScreen(
                     ) {
                         AlbumDetailSection(
                             trackResult = state.trackResult,
-                            selectedRoom = state.selectedSonosRoom,
+                            outputTargetName = state.selectedPlaybackTarget.displayName,
                             isPlaybackLoading = state.isPlaybackCommandLoading,
                             isFavoriteLoading = state.isFavoriteMutationLoading,
                             bottomContentPadding = contentBottomPadding,
@@ -627,10 +625,10 @@ fun PlexAlbumScreen(
                             onToggleTrackFavorite = state::toggleTrackFavorite,
                             onQueueAlbum = state::enqueueAlbum,
                             onQueueTrack = state::enqueueTrack,
-                            onPlayAlbum = { albumTrackResult: PlexAlbumTracksResult, room: SonosRoom ->
-                                state.startAlbumPlayback(albumTrackResult, room)
+                            onPlayAlbum = { albumTrackResult: PlexAlbumTracksResult ->
+                                state.startAlbumPlayback(albumTrackResult)
                             },
-                            onPlayTrack = { album: PlexAlbum, track: PlexTrackStream, room: SonosRoom ->
+                            onPlayTrack = { album: PlexAlbum, track: PlexTrackStream ->
                                 val currentTrackResult = state.trackResult
                                 if (
                                     currentTrackResult != null &&
@@ -643,9 +641,9 @@ fun PlexAlbumScreen(
                                         }
                                         .coerceAtLeast(0)
                                     val playlist = currentTrackResult.tracks.drop(trackIndex)
-                                    state.startSingleTrackPlayback(album, playlist, 0, room)
+                                    state.startSingleTrackPlayback(album, playlist, 0)
                                 } else {
-                                    state.startSingleTrackPlayback(album, listOf(track), 0, room)
+                                    state.startSingleTrackPlayback(album, listOf(track), 0)
                                 }
                             },
                         )
@@ -719,16 +717,18 @@ fun PlexAlbumScreen(
                             AppSection.FavoriteCollection -> Unit
                             AppSection.RecentAdded -> Unit
                             AppSection.Settings -> SettingsSection(
-                                rooms = state.sonosRooms,
-                                selectedRoom = state.selectedSonosRoom,
-                                isSonosLoading = state.isSonosLoading,
-                                discoveryAttempted = state.sonosDiscoveryAttempted,
                                 serverProfiles = state.serverProfiles,
                                 activeServerId = state.connectionPreferences.id,
                                 opusTranscodeMode = state.opusTranscodeMode,
+                                wifiQuality = state.wifiStreamQuality,
+                                cellularQuality = state.cellularStreamQuality,
+                                localCacheSize = state.localCacheSize,
+                                localCacheUsedBytes = state.localCacheUsedBytes(),
                                 onOpusTranscodeModeChange = state::updateOpusTranscodeMode,
-                                onDiscoverSonos = state::refreshSonosRooms,
-                                onSelectRoom = state::selectSonosRoom,
+                                onWifiQualityChange = { state.updateLocalStreamQuality(wifi = true, quality = it) },
+                                onCellularQualityChange = { state.updateLocalStreamQuality(wifi = false, quality = it) },
+                                onLocalCacheSizeChange = state::updateLocalCacheSize,
+                                onClearLocalCache = state::clearLocalAudioCache,
                                 onSaveServer = state::saveServerProfile,
                                 onSwitchServer = state::switchServer,
                                 onDeleteServer = state::deleteServer,

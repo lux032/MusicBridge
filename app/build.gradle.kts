@@ -67,6 +67,10 @@ dependencies {
     // Extracts dominant/vibrant colors from album artwork so the player screen can tint
     // its background and accents after the current cover.
     implementation(libs.androidx.palette.ktx)
+    // On-device playback: ExoPlayer decodes opus/flac/mp3 natively and handles audio
+    // focus; the cache datasource backs the user-configurable local audio cache.
+    implementation(libs.androidx.media3.exoplayer)
+    implementation(libs.androidx.media3.datasource)
     // Installs the baseline profiles shipped inside Compose artifacts so release builds get
     // AOT-compiled scroll/animation hot paths instead of warming up through JIT.
     implementation(libs.androidx.profileinstaller)

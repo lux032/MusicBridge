@@ -139,15 +139,16 @@ class PlaybackForegroundService : Service() {
     private fun handleSetSleepTimer(intent: Intent) {
         val durationMillis = intent.getLongExtra(EXTRA_SLEEP_TIMER_DURATION_MILLIS, 0L)
             .coerceAtLeast(0L)
-        val room = intent.toSonosRoom() ?: return
         if (durationMillis <= 0L) {
             cancelSleepTimer()
             return
         }
-        startSleepTimer(durationMillis, room)
+        // A null room means the sleep timer is attached to on-device playback; the
+        // coordinator's onSleepTimerExpired callback stops the local engine instead.
+        startSleepTimer(durationMillis, intent.toSonosRoom())
     }
 
-    private fun startSleepTimer(durationMillis: Long, room: SonosRoom) {
+    private fun startSleepTimer(durationMillis: Long, room: SonosRoom?) {
         sleepTimerJob?.cancel()
         sleepTimerRoom = room
         val endEpochMillis = System.currentTimeMillis() + durationMillis
@@ -165,13 +166,15 @@ class PlaybackForegroundService : Service() {
         }
     }
 
-    private suspend fun handleSleepTimerFinished(room: SonosRoom) {
+    private suspend fun handleSleepTimerFinished(room: SonosRoom?) {
         sleepTimerJob = null
         sleepTimerRoom = null
         updateSleepTimerState()
         onSleepTimerExpired?.invoke()
-        runCatching { sonosController.pause(room) }
-        runCatching { sonosController.stop(room) }
+        if (room != null) {
+            runCatching { sonosController.pause(room) }
+            runCatching { sonosController.stop(room) }
+        }
         stopSelf()
     }
 
@@ -355,11 +358,11 @@ class PlaybackForegroundService : Service() {
             instance?.updateNotification(title, subtitle, isPaused, artworkUrl)
         }
 
-        fun setSleepTimer(context: Context, room: SonosRoom, durationMillis: Long) {
+        fun setSleepTimer(context: Context, room: SonosRoom?, durationMillis: Long) {
             val intent = Intent(context, PlaybackForegroundService::class.java).apply {
                 action = ACTION_SET_SLEEP_TIMER
                 putExtra(EXTRA_SLEEP_TIMER_DURATION_MILLIS, durationMillis.coerceAtLeast(0L))
-                putRoom(room)
+                room?.let { putRoom(it) }
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(intent)

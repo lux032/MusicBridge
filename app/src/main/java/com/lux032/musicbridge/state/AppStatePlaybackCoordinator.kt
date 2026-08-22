@@ -37,6 +37,7 @@ internal class AppStatePlaybackCoordinator(
             playbackRequestGeneration.incrementAndGet()
             state.albumPlaybackJob?.cancel()
             state.playbackReportingJob?.cancel()
+            state.localPlaybackCoordinator.stopLocalPlayback()
             state.scope.launch {
                 state.isPlaybackCommandLoading = false
                 state.errorMessage = null
@@ -47,6 +48,32 @@ internal class AppStatePlaybackCoordinator(
     }
 
     fun startSingleTrackPlayback(
+        album: PlexAlbum,
+        tracks: List<PlexTrackStream>,
+        trackIndex: Int,
+        initialPositionMillis: Long,
+    ) {
+        when (val target = state.selectedPlaybackTarget) {
+            PlaybackTarget.LocalDevice -> {
+                val targetTrack = tracks.getOrNull(trackIndex) ?: return
+                state.localPlaybackCoordinator.startLocalPlayback(
+                    album = resolveAlbumForTrack(targetTrack, album),
+                    tracks = tracks,
+                    startIndex = trackIndex,
+                    initialPositionMillis = initialPositionMillis,
+                )
+            }
+            is PlaybackTarget.Sonos -> startSingleTrackPlaybackOnSonos(
+                album = album,
+                tracks = tracks,
+                trackIndex = trackIndex,
+                room = target.room,
+                initialPositionMillis = initialPositionMillis,
+            )
+        }
+    }
+
+    private fun startSingleTrackPlaybackOnSonos(
         album: PlexAlbum,
         tracks: List<PlexTrackStream>,
         trackIndex: Int,
@@ -75,14 +102,14 @@ internal class AppStatePlaybackCoordinator(
         state.playbackReportingJob?.cancel()
         state.appPreferences.markAlbumPlayed(displayAlbum.sourceId, displayAlbum.ratingKey)
         state.recentPlayedAlbumKeys = state.appPreferences.loadRecentPlayedAlbumKeys(displayAlbum.sourceId)
-        state.selectedSonosRoom = room
+        state.selectPlaybackTarget(PlaybackTarget.Sonos(room))
         state.volumeSyncKey += 1
         syncSleepTimerRoom(room)
         state.miniPlayerState = MiniPlayerState(
             album = displayAlbum,
             tracks = tracks,
             currentIndex = trackIndex,
-            room = room,
+            target = PlaybackTarget.Sonos(room),
             isPaused = false,
             currentPositionMillis = initialPositionMillis.coerceAtLeast(0L),
             durationMillis = targetTrack.durationMillis,
@@ -146,6 +173,29 @@ internal class AppStatePlaybackCoordinator(
 
     fun startAlbumPlayback(
         albumTrackResult: PlexAlbumTracksResult,
+        startIndex: Int,
+        initialPositionMillis: Long,
+    ) {
+        when (val target = state.selectedPlaybackTarget) {
+            PlaybackTarget.LocalDevice -> {
+                state.localPlaybackCoordinator.startLocalPlayback(
+                    album = albumTrackResult.album,
+                    tracks = albumTrackResult.tracks,
+                    startIndex = startIndex,
+                    initialPositionMillis = initialPositionMillis,
+                )
+            }
+            is PlaybackTarget.Sonos -> startAlbumPlaybackOnSonos(
+                albumTrackResult = albumTrackResult,
+                room = target.room,
+                startIndex = startIndex,
+                initialPositionMillis = initialPositionMillis,
+            )
+        }
+    }
+
+    private fun startAlbumPlaybackOnSonos(
+        albumTrackResult: PlexAlbumTracksResult,
         room: SonosRoom,
         startIndex: Int,
         initialPositionMillis: Long,
@@ -171,14 +221,14 @@ internal class AppStatePlaybackCoordinator(
         state.playbackReportingJob?.cancel()
         state.appPreferences.markAlbumPlayed(albumTrackResult.album.sourceId, albumTrackResult.album.ratingKey)
         state.recentPlayedAlbumKeys = state.appPreferences.loadRecentPlayedAlbumKeys(albumTrackResult.album.sourceId)
-        state.selectedSonosRoom = room
+        state.selectPlaybackTarget(PlaybackTarget.Sonos(room))
         state.volumeSyncKey += 1
         syncSleepTimerRoom(room)
         state.miniPlayerState = MiniPlayerState(
             album = albumTrackResult.album,
             tracks = albumTrackResult.tracks,
             currentIndex = startIndex,
-            room = room,
+            target = PlaybackTarget.Sonos(room),
             isPaused = false,
             currentPositionMillis = initialPositionMillis.coerceAtLeast(0L),
             durationMillis = albumTrackResult.tracks.getOrNull(startIndex)?.durationMillis,
@@ -257,7 +307,7 @@ internal class AppStatePlaybackCoordinator(
                             isPaused = false,
                             currentPositionMillis = startPositionMillis,
                             durationMillis = track.durationMillis,
-                            room = room,
+                            target = PlaybackTarget.Sonos(room),
                         )
                         state.actionMessage = "正在连续播放：${track.title}"
                     },
@@ -285,9 +335,12 @@ internal class AppStatePlaybackCoordinator(
                 SonosDiscovery(state.context).discoverRooms()
             }.onSuccess { rooms ->
                 state.sonosRooms = rooms
-                state.selectedSonosRoom = state.selectedSonosRoom
-                    ?.let { current -> rooms.firstOrNull { room -> room.coordinatorUuid == current.coordinatorUuid } }
-                    ?: rooms.firstOrNull()
+                // Refresh the selected room from the fresh discovery (IPs may have changed);
+                // never auto-select a speaker — the phone is the default output.
+                (state.selectedPlaybackTarget as? PlaybackTarget.Sonos)?.room?.let { current ->
+                    rooms.firstOrNull { room -> room.coordinatorUuid == current.coordinatorUuid }
+                        ?.let { state.selectPlaybackTarget(PlaybackTarget.Sonos(it)) }
+                }
                 state.actionMessage = if (rooms.isEmpty()) {
                     "当前未发现 Sonos 房间"
                 } else {
@@ -339,6 +392,42 @@ internal class AppStatePlaybackCoordinator(
 
     fun startPlaylistPlayback(
         playlistResult: PlexPlaylistTracksResult,
+        shuffle: Boolean,
+    ) {
+        if (playlistResult.tracks.isEmpty()) return
+        val tracks = if (shuffle) playlistResult.tracks.shuffled() else playlistResult.tracks
+        val fakeAlbum = PlexAlbum(
+            ratingKey = playlistResult.playlist.ratingKey,
+            title = playlistResult.playlist.title,
+            artistName = null,
+            year = null,
+            thumbUrl = playlistResult.playlist.thumbUrl,
+            userRating = null,
+            addedAtEpochSeconds = null,
+            lastViewedAtEpochSeconds = null,
+            section = PlexSection("", "", ""),
+            sourceId = playlistResult.playlist.sourceId.ifBlank { tracks.firstOrNull()?.sourceId.orEmpty() },
+        )
+        when (val target = state.selectedPlaybackTarget) {
+            PlaybackTarget.LocalDevice -> {
+                val initialAlbum = tracks.firstOrNull()?.let { resolveAlbumForTrack(it, fakeAlbum) } ?: fakeAlbum
+                state.localPlaybackCoordinator.startLocalPlayback(
+                    album = initialAlbum,
+                    tracks = tracks,
+                    startIndex = 0,
+                    initialPositionMillis = 0L,
+                )
+            }
+            is PlaybackTarget.Sonos -> startPlaylistPlaybackOnSonos(
+                playlistResult = playlistResult,
+                room = target.room,
+                shuffle = shuffle,
+            )
+        }
+    }
+
+    private fun startPlaylistPlaybackOnSonos(
+        playlistResult: PlexPlaylistTracksResult,
         room: SonosRoom,
         shuffle: Boolean,
     ) {
@@ -347,7 +436,7 @@ internal class AppStatePlaybackCoordinator(
         val requestGeneration = nextPlaybackRequestGeneration()
         state.albumPlaybackJob?.cancel()
         state.playbackReportingJob?.cancel()
-        state.selectedSonosRoom = room
+        state.selectPlaybackTarget(PlaybackTarget.Sonos(room))
         state.volumeSyncKey += 1
         syncSleepTimerRoom(room)
         val tracks = if (shuffle) playlistResult.tracks.shuffled() else playlistResult.tracks
@@ -368,7 +457,7 @@ internal class AppStatePlaybackCoordinator(
             album = initialAlbum,
             tracks = tracks,
             currentIndex = 0,
-            room = room,
+            target = PlaybackTarget.Sonos(room),
             isPaused = false,
         )
         tracks.firstOrNull()?.let { initialTrack ->
@@ -448,6 +537,10 @@ internal class AppStatePlaybackCoordinator(
     }
 
     fun togglePause(playerState: MiniPlayerState) {
+        if (playerState.target == PlaybackTarget.LocalDevice) {
+            state.localPlaybackCoordinator.toggleLocalPause(playerState)
+            return
+        }
         val commandGeneration = playbackToggleGeneration.incrementAndGet()
         state.isPlaybackCommandLoading = true
         state.scope.launch {
@@ -456,8 +549,9 @@ internal class AppStatePlaybackCoordinator(
                 if (commandGeneration < playbackToggleGeneration.get()) return@withLock
 
                 val latest = state.miniPlayerState ?: playerState
+                val room = latest.sonosRoom ?: return@withLock
                 val initialStatus = runCatching {
-                    state.sonosController.getPlaybackStatus(latest.room)
+                    state.sonosController.getPlaybackStatus(room)
                 }.getOrNull()
                 val transportState = initialStatus?.transportState.orEmpty()
                 val isActuallyPlaying = transportState.equals("PLAYING", ignoreCase = true)
@@ -480,13 +574,13 @@ internal class AppStatePlaybackCoordinator(
                 if (resumesOpusDirectMp3 || (shouldResume && isActuallyStopped)) {
                     restartedPlayback = true
                     Log.i(LOG_TAG, "restart transport at ${latest.currentPositionMillis}ms")
-                    playQueueIndex(latest.currentIndex, latest.currentPositionMillis, latest.room)
+                    playQueueIndex(latest.currentIndex, latest.currentPositionMillis, PlaybackTarget.Sonos(room))
                     return@withLock
                 }
 
                 val commandResult = runCatching {
-                    if (shouldResume) state.sonosController.resume(latest.room)
-                    else state.sonosController.pause(latest.room)
+                    if (shouldResume) state.sonosController.resume(room)
+                    else state.sonosController.pause(room)
                 }
 
                 if (commandGeneration == playbackToggleGeneration.get()) {
@@ -495,7 +589,7 @@ internal class AppStatePlaybackCoordinator(
                         state.actionMessage = if (shouldResume) "已继续播放" else "已暂停播放"
                     }.onFailure { error ->
                         val actualStatus = runCatching {
-                            state.sonosController.getPlaybackStatus(latest.room)
+                            state.sonosController.getPlaybackStatus(room)
                         }.getOrNull()
                         val actualState = actualStatus?.transportState.orEmpty()
                         val reachedTarget = if (shouldResume) {
@@ -508,7 +602,7 @@ internal class AppStatePlaybackCoordinator(
                             state.miniPlayerState = state.miniPlayerState?.copy(isPaused = !shouldResume)
                         } else if (shouldResume && actualState.equals("STOPPED", ignoreCase = true)) {
                             restartedPlayback = true
-                            playQueueIndex(latest.currentIndex, latest.currentPositionMillis, latest.room)
+                            playQueueIndex(latest.currentIndex, latest.currentPositionMillis, PlaybackTarget.Sonos(room))
                         } else {
                             state.errorMessage = error.message ?: "未知错误"
                         }
@@ -521,21 +615,51 @@ internal class AppStatePlaybackCoordinator(
         }
     }
 
-    fun selectSonosRoom(room: SonosRoom) {
-        state.selectedSonosRoom = room
-        state.actionMessage = "已选择 Sonos 房间: ${room.roomName}"
-        state.volumeSyncKey += 1
-    }
-
     fun updatePlaybackMode(mode: PlaybackMode) {
         state.playbackMode = mode
+        if (state.miniPlayerState?.target == PlaybackTarget.LocalDevice) {
+            state.localPlaybackCoordinator.applyPlaybackMode(mode)
+        }
         state.actionMessage = "播放模式已切换为：${mode.label}"
     }
 
-    fun playQueueIndex(index: Int, positionMillis: Long, room: SonosRoom?) {
+    fun playQueueIndex(index: Int, positionMillis: Long, target: PlaybackTarget?) {
         val playerState = state.miniPlayerState ?: return
-        val targetRoom = room ?: playerState.room
         val targetIndex = index.coerceIn(0, playerState.tracks.lastIndex)
+        when (val resolvedTarget = target ?: playerState.target) {
+            PlaybackTarget.LocalDevice -> {
+                if (playerState.target == PlaybackTarget.LocalDevice) {
+                    // Same renderer: seek inside the live ExoPlayer queue.
+                    state.localPlaybackCoordinator.playLocalIndex(targetIndex, positionMillis)
+                } else {
+                    // Renderer switch (Sonos -> this device): stop the speaker and rebuild
+                    // the local queue at the same position.
+                    playerState.sonosRoom?.let { room ->
+                        state.scope.launch { runCatching { state.sonosController.stop(room) } }
+                    }
+                    state.localPlaybackCoordinator.startLocalPlayback(
+                        album = playerState.album,
+                        tracks = playerState.tracks,
+                        startIndex = targetIndex,
+                        initialPositionMillis = positionMillis,
+                    )
+                }
+            }
+            is PlaybackTarget.Sonos -> {
+                if (playerState.target == PlaybackTarget.LocalDevice) {
+                    state.localPlaybackCoordinator.stopLocalPlayback()
+                }
+                playSonosQueueIndex(playerState, targetIndex, positionMillis, resolvedTarget.room)
+            }
+        }
+    }
+
+    private fun playSonosQueueIndex(
+        playerState: MiniPlayerState,
+        targetIndex: Int,
+        positionMillis: Long,
+        targetRoom: SonosRoom,
+    ) {
         val currentTrackResult = state.trackResult?.takeIf { result ->
             result.album.ratingKey == playerState.album.ratingKey &&
                 result.album.sourceId == playerState.album.sourceId &&
@@ -543,9 +667,9 @@ internal class AppStatePlaybackCoordinator(
                 playerState.tracks.map { it.sourceId to it.ratingKey }
         }
         if (currentTrackResult != null) {
-            startAlbumPlayback(currentTrackResult, targetRoom, targetIndex, positionMillis)
+            startAlbumPlaybackOnSonos(currentTrackResult, targetRoom, targetIndex, positionMillis)
         } else {
-            startSingleTrackPlayback(
+            startSingleTrackPlaybackOnSonos(
                 album = resolveAlbumForTrack(playerState.tracks[targetIndex], playerState.album),
                 tracks = playerState.tracks,
                 trackIndex = targetIndex,
@@ -555,20 +679,40 @@ internal class AppStatePlaybackCoordinator(
         }
     }
 
-    fun switchPlaybackRoom(room: SonosRoom) {
+    /** Moves the current playback (or just the selection, when idle) to another output. */
+    fun switchPlaybackTarget(target: PlaybackTarget) {
         val playerState = state.miniPlayerState ?: run {
-            selectSonosRoom(room)
+            state.selectPlaybackTarget(target)
+            state.actionMessage = when (target) {
+                PlaybackTarget.LocalDevice -> "已切换为 ${Strings.localPlayback}"
+                is PlaybackTarget.Sonos -> "已选择 Sonos 房间: ${target.room.roomName}"
+            }
+            state.volumeSyncKey += 1
             return
         }
-        if (room.coordinatorUuid == playerState.room.coordinatorUuid) {
-            selectSonosRoom(room)
+        val sameTarget = when (target) {
+            PlaybackTarget.LocalDevice -> playerState.target == PlaybackTarget.LocalDevice
+            is PlaybackTarget.Sonos ->
+                playerState.sonosRoom?.coordinatorUuid == target.room.coordinatorUuid
+        }
+        if (sameTarget) {
+            state.selectPlaybackTarget(target)
+            state.volumeSyncKey += 1
             return
         }
-        playQueueIndex(playerState.currentIndex, playerState.currentPositionMillis, room)
-        state.actionMessage = "正在切换到 ${room.roomName}"
+        playQueueIndex(playerState.currentIndex, playerState.currentPositionMillis, target)
+        state.actionMessage = when (target) {
+            PlaybackTarget.LocalDevice -> "正在切换到 ${Strings.localPlayback}"
+            is PlaybackTarget.Sonos -> "正在切换到 ${target.room.roomName}"
+        }
     }
 
     fun seekPlayback(playerState: MiniPlayerState, positionMillis: Long) {
+        if (playerState.target == PlaybackTarget.LocalDevice) {
+            state.localPlaybackCoordinator.seekLocal(playerState, positionMillis)
+            return
+        }
+        val room = playerState.sonosRoom ?: return
         val durationMillis = playerState.durationMillis?.takeIf { it > 0L } ?: return
         val targetMillis = positionMillis.coerceIn(0L, durationMillis)
         val targetTrack = playerState.tracks.getOrNull(playerState.currentIndex) ?: return
@@ -586,7 +730,7 @@ internal class AppStatePlaybackCoordinator(
             )
         }
         state.miniPlayerState = state.miniPlayerState?.takeIf { current ->
-            current.room.coordinatorUuid == playerState.room.coordinatorUuid
+            current.sonosRoom?.coordinatorUuid == room.coordinatorUuid
         }?.copy(currentPositionMillis = targetMillis)
 
         state.isPlaybackCommandLoading = true
@@ -602,17 +746,17 @@ internal class AppStatePlaybackCoordinator(
                     Log.i(LOG_TAG, "opus seek restart targetMs=$targetMillis generation=$seekGeneration")
                     state.plexTranscodeProxy.cancelPendingDownload()
                     state.sonosController.playTrack(
-                        room = playerState.room,
+                        room = room,
                         trackUrl = seekUrl,
                         title = effectiveTrack.title,
                         albumTitle = effectiveTrack.albumTitle ?: playerState.album.title,
                         mimeType = effectiveTrack.playbackMimeType,
                     )
-                    if (playerState.isPaused) state.sonosController.pause(playerState.room)
+                    if (playerState.isPaused) state.sonosController.pause(room)
                 } else {
                     opusRestartSeek = null
                     Log.i(LOG_TAG, "sonos seek targetMs=$targetMillis generation=$seekGeneration")
-                    state.sonosController.seek(playerState.room, (targetMillis / 1_000L).toInt())
+                    state.sonosController.seek(room, (targetMillis / 1_000L).toInt())
                 }
             }.onSuccess {
                 if (seekRequestGeneration.get() == seekGeneration) {
@@ -652,6 +796,9 @@ internal class AppStatePlaybackCoordinator(
             addAll(insertIndex, tracks)
         }
         state.miniPlayerState = playerState.copy(tracks = updatedTracks)
+        if (playerState.target == PlaybackTarget.LocalDevice) {
+            state.localPlaybackCoordinator.insertIntoLocalQueue(insertIndex, tracks)
+        }
         state.errorMessage = null
         state.actionMessage = when (placement) {
             QueuePlacement.Next -> Strings.queueAddedNext(displayTitle)
@@ -676,7 +823,7 @@ internal class AppStatePlaybackCoordinator(
         }
     }
 
-    fun startSleepTimer(hours: Int, minutes: Int, room: SonosRoom) {
+    fun startSleepTimer(hours: Int, minutes: Int) {
         val safeHours = hours.coerceIn(0, 23)
         val safeMinutes = minutes.coerceIn(0, 59)
         val totalMinutes = (safeHours * 60) + safeMinutes
@@ -687,7 +834,7 @@ internal class AppStatePlaybackCoordinator(
         val durationMillis = totalMinutes * 60_000L
         PlaybackForegroundService.setSleepTimer(
             context = state.context,
-            room = room,
+            room = state.miniPlayerState?.sonosRoom ?: state.selectedSonosRoom,
             durationMillis = durationMillis,
         )
         state.errorMessage = null
@@ -713,14 +860,14 @@ internal class AppStatePlaybackCoordinator(
             val initialTrack = tracks.getOrNull(normalizedInitialIndex) ?: return@launch
             PlaybackForegroundService.onPlaybackAction = { action ->
                 val playerState = state.miniPlayerState
-                if (playerState != null) {
+                if (playerState != null && playerState.sonosRoom != null) {
                     when (action) {
                         PlaybackForegroundService.PlaybackAction.Previous -> {
-                            if (playerState.currentIndex > 0) playQueueIndex(playerState.currentIndex - 1, 0L, playerState.room)
+                            if (playerState.currentIndex > 0) playQueueIndex(playerState.currentIndex - 1, 0L, playerState.target)
                         }
                         PlaybackForegroundService.PlaybackAction.TogglePause -> togglePause(playerState)
                         PlaybackForegroundService.PlaybackAction.Next -> {
-                            if (playerState.currentIndex < playerState.tracks.lastIndex) playQueueIndex(playerState.currentIndex + 1, 0L, playerState.room)
+                            if (playerState.currentIndex < playerState.tracks.lastIndex) playQueueIndex(playerState.currentIndex + 1, 0L, playerState.target)
                         }
                     }
                 }
@@ -755,7 +902,7 @@ internal class AppStatePlaybackCoordinator(
                 delay(1_000)
 
                 val latestMiniPlayerState = state.miniPlayerState ?: break
-                if (latestMiniPlayerState.room.coordinatorUuid != room.coordinatorUuid) break
+                if (latestMiniPlayerState.sonosRoom?.coordinatorUuid != room.coordinatorUuid) break
 
                 val currentQueue = latestMiniPlayerState.tracks
                 val status = runCatching { state.sonosController.getPlaybackStatus(room) }.getOrNull() ?: continue
@@ -904,7 +1051,7 @@ internal class AppStatePlaybackCoordinator(
                         if (nextIndex == null || nextIndex == currentIndex) break
                         currentQueue.getOrNull(nextIndex) ?: break
                         state.scope.launch {
-                            playQueueIndex(nextIndex, 0L, room)
+                            playQueueIndex(nextIndex, 0L, PlaybackTarget.Sonos(room))
                         }
                         break
                     }

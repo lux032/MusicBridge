@@ -8,7 +8,6 @@ import com.lux032.musicbridge.plex.PlexPlaylistTracksResult
 import com.lux032.musicbridge.plex.PlexSection
 import com.lux032.musicbridge.plex.PlexTrackStream
 import com.lux032.musicbridge.plex.isFavorite
-import com.lux032.musicbridge.sonos.SonosRoom
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -156,7 +155,7 @@ internal class AppStateLibraryCoordinator(
         state.navigateTo(AppSection.ArtistAlbums)
     }
 
-    fun shuffleArtist(artist: ArtistSummary, room: SonosRoom) {
+    fun shuffleArtist(artist: ArtistSummary) {
         if (state.isPlaybackCommandLoading || artist.albums.isEmpty()) return
 
         state.isPlaybackCommandLoading = true
@@ -190,7 +189,7 @@ internal class AppStateLibraryCoordinator(
                     tracks = tracks,
                 )
             }.onSuccess { result ->
-                state.startPlaylistPlayback(result, room, shuffle = false)
+                state.startPlaylistPlayback(result, shuffle = false)
                 state.actionMessage = "正在随机播放 ${artist.name} 的 ${result.tracks.size} 首歌曲"
             }.onFailure {
                 state.errorMessage = it.message ?: "加载歌手歌曲失败"

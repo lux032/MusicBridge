@@ -19,6 +19,9 @@ import com.lux032.musicbridge.plex.PlexPlaylistTracksResult
 import com.lux032.musicbridge.plex.PlexTrackStream
 import com.lux032.musicbridge.plex.PlexTranscodeProxy
 import com.lux032.musicbridge.plex.isFavorite
+import com.lux032.musicbridge.local.LocalAudioCache
+import com.lux032.musicbridge.local.LocalPlaybackEngine
+import com.lux032.musicbridge.local.NetworkQualityMonitor
 import com.lux032.musicbridge.music.Music032Client
 import com.lux032.musicbridge.music.MusicSourceClient
 import com.lux032.musicbridge.service.PlaybackForegroundService
@@ -44,14 +47,34 @@ class AppState(
     internal val albumLocalStore = AlbumLocalStore(context)
     internal val sonosController = SonosController()
     internal val plexTranscodeProxy = PlexTranscodeProxy.getInstance(context)
+    internal val networkQualityMonitor = NetworkQualityMonitor(context)
+    internal val localPlaybackEngine = LocalPlaybackEngine(
+        context = context,
+        cacheMaxBytes = appPreferences.loadLocalCacheSize().bytes,
+    )
 
     var opusTranscodeMode by mutableStateOf(appPreferences.getOpusTranscodeMode())
+
+    var selectedPlaybackTarget by mutableStateOf(appPreferences.loadPlaybackTarget())
+        private set
+
+    /** The Sonos room currently targeted, if any — convenience for Sonos-only UI/logic. */
+    val selectedSonosRoom: SonosRoom?
+        get() = (selectedPlaybackTarget as? PlaybackTarget.Sonos)?.room
+
+    var wifiStreamQuality by mutableStateOf(appPreferences.loadLocalStreamQuality(wifi = true))
+        private set
+    var cellularStreamQuality by mutableStateOf(appPreferences.loadLocalStreamQuality(wifi = false))
+        private set
+    var localCacheSize by mutableStateOf(appPreferences.loadLocalCacheSize())
+        private set
 
     private val initialProfiles = appPreferences.loadServerProfiles()
     private val initialActiveServerId = appPreferences.loadActiveServerId(initialProfiles)
     private val initialPreferences = initialProfiles.firstOrNull { it.id == initialActiveServerId } ?: MusicServerProfile()
     private val libraryCoordinator = AppStateLibraryCoordinator(this)
     private val playbackCoordinator = AppStatePlaybackCoordinator(this)
+    internal val localPlaybackCoordinator = AppStateLocalPlaybackCoordinator(this)
 
     val navigationStack = mutableStateListOf(AppSection.Home)
     val serverProfiles = mutableStateListOf<MusicServerProfile>().apply { addAll(initialProfiles) }
@@ -75,7 +98,6 @@ class AppState(
     var artistPresentation by mutableStateOf(ArtistPresentation.Covers)
     var trackResult by mutableStateOf<PlexAlbumTracksResult?>(null)
     var sonosRooms by mutableStateOf<List<SonosRoom>>(emptyList())
-    var selectedSonosRoom by mutableStateOf<SonosRoom?>(null)
     var sonosDiscoveryAttempted by mutableStateOf(false)
     var sonosVolume by mutableFloatStateOf(0f)
     var hasLoadedSonosVolume by mutableStateOf(false)
@@ -231,6 +253,35 @@ class AppState(
         }
     }
 
+    fun selectPlaybackTarget(target: PlaybackTarget) {
+        selectedPlaybackTarget = target
+        appPreferences.savePlaybackTarget(target)
+    }
+
+    fun updateLocalStreamQuality(wifi: Boolean, quality: LocalStreamQuality) {
+        if (wifi) wifiStreamQuality = quality else cellularStreamQuality = quality
+        appPreferences.saveLocalStreamQuality(wifi, quality)
+        actionMessage = "已更新${if (wifi) "WiFi" else "蜂窝网络"}音质：${quality.label}"
+    }
+
+    fun updateLocalCacheSize(size: LocalCacheSize) {
+        localCacheSize = size
+        appPreferences.saveLocalCacheSize(size)
+        LocalAudioCache.setMaxBytes(size.bytes)
+        actionMessage = "本机缓存上限已设为 ${size.megabytesLabel}"
+    }
+
+    fun clearLocalAudioCache() {
+        LocalAudioCache.clear()
+        actionMessage = "已清空本机缓存"
+    }
+
+    fun localCacheUsedBytes(): Long = LocalAudioCache.usedBytes()
+
+    /** Quality applied to new local playback URLs, based on the current network. */
+    internal fun currentLocalStreamQuality(): LocalStreamQuality =
+        if (networkQualityMonitor.currentIsWifi()) wifiStreamQuality else cellularStreamQuality
+
     internal fun clientFor(sourceId: String): MusicSourceClient =
         client(
             serverProfiles.firstOrNull { it.id == sourceId }
@@ -275,6 +326,7 @@ class AppState(
             albumPlaybackJob?.cancel()
             playbackReportingJob?.cancel()
             miniPlayerState = null
+            localPlaybackEngine.stopPlayback()
             PlaybackForegroundService.stop(context)
         }
         serverProfiles.removeAt(index)
@@ -330,7 +382,7 @@ class AppState(
 
     fun openArtistAlbumsByName(artistName: String?) = libraryCoordinator.openArtistAlbumsByName(artistName)
 
-    fun shuffleArtist(artist: ArtistSummary, room: SonosRoom) = libraryCoordinator.shuffleArtist(artist, room)
+    fun shuffleArtist(artist: ArtistSummary) = libraryCoordinator.shuffleArtist(artist)
 
     fun loadPlaylists() = libraryCoordinator.loadPlaylists()
 
@@ -358,16 +410,14 @@ class AppState(
         album: PlexAlbum,
         tracks: List<PlexTrackStream>,
         trackIndex: Int,
-        room: SonosRoom,
         initialPositionMillis: Long = 0L,
-    ) = playbackCoordinator.startSingleTrackPlayback(album, tracks, trackIndex, room, initialPositionMillis)
+    ) = playbackCoordinator.startSingleTrackPlayback(album, tracks, trackIndex, initialPositionMillis)
 
     fun startAlbumPlayback(
         albumTrackResult: PlexAlbumTracksResult,
-        room: SonosRoom,
         startIndex: Int = 0,
         initialPositionMillis: Long = 0L,
-    ) = playbackCoordinator.startAlbumPlayback(albumTrackResult, room, startIndex, initialPositionMillis)
+    ) = playbackCoordinator.startAlbumPlayback(albumTrackResult, startIndex, initialPositionMillis)
 
     fun refreshSonosRooms() = playbackCoordinator.refreshSonosRooms()
 
@@ -377,18 +427,15 @@ class AppState(
 
     fun startPlaylistPlayback(
         playlistResult: PlexPlaylistTracksResult,
-        room: SonosRoom,
         shuffle: Boolean = false,
-    ) = playbackCoordinator.startPlaylistPlayback(playlistResult, room, shuffle)
+    ) = playbackCoordinator.startPlaylistPlayback(playlistResult, shuffle)
 
     fun togglePause(state: MiniPlayerState) = playbackCoordinator.togglePause(state)
 
-    fun selectSonosRoom(room: SonosRoom) = playbackCoordinator.selectSonosRoom(room)
-
     fun updatePlaybackMode(mode: PlaybackMode) = playbackCoordinator.updatePlaybackMode(mode)
 
-    fun playQueueIndex(index: Int, positionMillis: Long = 0L, room: SonosRoom? = null) =
-        playbackCoordinator.playQueueIndex(index, positionMillis, room)
+    fun playQueueIndex(index: Int, positionMillis: Long = 0L, target: PlaybackTarget? = null) =
+        playbackCoordinator.playQueueIndex(index, positionMillis, target)
 
     fun enqueueTrack(track: PlexTrackStream, placement: QueuePlacement) =
         playbackCoordinator.enqueueTracks(listOf(track), placement, track.title)
@@ -396,7 +443,7 @@ class AppState(
     fun enqueueAlbum(album: PlexAlbum, placement: QueuePlacement) =
         playbackCoordinator.enqueueAlbum(album, placement)
 
-    fun switchPlaybackRoom(room: SonosRoom) = playbackCoordinator.switchPlaybackRoom(room)
+    fun switchPlaybackTarget(target: PlaybackTarget) = playbackCoordinator.switchPlaybackTarget(target)
 
     fun seekPlayback(state: MiniPlayerState, positionMillis: Long) =
         playbackCoordinator.seekPlayback(state, positionMillis)
@@ -404,12 +451,13 @@ class AppState(
     val sleepTimerState
         get() = PlaybackForegroundService.sleepTimerState
 
-    fun startSleepTimer(hours: Int, minutes: Int, room: SonosRoom) =
-        playbackCoordinator.startSleepTimer(hours, minutes, room)
+    fun startSleepTimer(hours: Int, minutes: Int) =
+        playbackCoordinator.startSleepTimer(hours, minutes)
 
     fun cancelSleepTimer() = playbackCoordinator.cancelSleepTimer()
 
     override fun onCleared() {
+        localPlaybackEngine.release()
         scope.cancel()
         super.onCleared()
     }
