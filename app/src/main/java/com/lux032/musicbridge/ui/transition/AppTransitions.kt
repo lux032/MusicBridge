@@ -55,16 +55,23 @@ object TransitionDurations {
     const val PageFadeInMillis = 240
     const val PageFadeOutMillis = 180
     const val DismissSettleMillis = 160
+    /** Player expand/collapse crossfade — faster than the generic page fades; the shared
+     *  artwork/container morph is the star, so the pages must not lag behind it. */
+    const val PlayerFadeInMillis = 140
+    const val PlayerFadeOutMillis = 110
     /** Push/Pop horizontal slide — snappier than the 600ms ambient background gradient,
      *  slow enough for the parallax to read. */
     const val PageSlideMillis = 320
     const val TabFadeInMillis = 280
 }
 
-/** Springy bounds morph for shared elements — fast settle (~300ms) with a soft landing. */
+/** Bounds morph for shared elements. A fixed 240ms decelerate curve: springs looked right
+ *  on paper but measured ~350ms on-device (soft tail + velocity thresholds stretch the
+ *  settle), which read as a stall next to ~250ms mainstream players. The tween's end is
+ *  deterministic, so expand and collapse both land exactly on time. */
 @OptIn(ExperimentalSharedTransitionApi::class)
 val PlayerBoundsTransform: BoundsTransform = BoundsTransform { _: Rect, _: Rect ->
-    spring(dampingRatio = 0.85f, stiffness = 500f)
+    tween(durationMillis = 240, easing = FastOutSlowInEasing)
 }
 
 /**
@@ -83,8 +90,8 @@ fun AnimatedContentTransitionScope<AppSection>.sectionTransitionSpec(
         initialState == AppSection.PlaybackDetail
     if (playerInvolved) {
         return ContentTransform(
-            targetContentEnter = fadeIn(tween(TransitionDurations.PageFadeInMillis)),
-            initialContentExit = fadeOut(tween(TransitionDurations.PageFadeOutMillis)),
+            targetContentEnter = fadeIn(tween(TransitionDurations.PlayerFadeInMillis)),
+            initialContentExit = fadeOut(tween(TransitionDurations.PlayerFadeOutMillis)),
             sizeTransform = SizeTransform(clip = false),
         )
     }
@@ -186,9 +193,9 @@ fun Modifier.staggeredPlayerEnter(@Suppress("UNUSED_PARAMETER") index: Int): Mod
     val animScope = LocalAnimatedVisibilityScope.current ?: return this
     return with(animScope) {
         this@staggeredPlayerEnter.animateEnterExit(
-            enter = fadeIn(tween(TransitionDurations.PageFadeInMillis)) +
-                slideInVertically(tween(TransitionDurations.PageFadeInMillis)) { it / 16 },
-            exit = fadeOut(tween(120)),
+            enter = fadeIn(tween(TransitionDurations.PlayerFadeInMillis)) +
+                slideInVertically(tween(TransitionDurations.PlayerFadeInMillis)) { it / 24 },
+            exit = fadeOut(tween(100)),
         )
     }
 }
