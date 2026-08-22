@@ -335,7 +335,10 @@ internal fun PlaybackDetailSection(
             PlayerControlButton(
                 icon = PlayerIcon.Previous,
                 onClick = onPrevious,
-                enabled = currentState.currentIndex > 0,
+                // Local playback's previous also means "restart this track" (standard
+                // behavior), so it must stay tappable even on the first/only track.
+                enabled = currentState.target == PlaybackTarget.LocalDevice ||
+                    currentState.currentIndex > 0,
                 sizeOverride = if (compact) 46.dp else 56.dp,
                 iconSizeOverride = if (compact) 20.dp else 23.dp,
                 unhighlightedContainerColor = Color.White.copy(alpha = 0.08f),

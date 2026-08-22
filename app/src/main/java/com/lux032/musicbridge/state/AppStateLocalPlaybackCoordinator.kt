@@ -51,7 +51,8 @@ internal class AppStateLocalPlaybackCoordinator(
                 state.scope.launch {
                     val current = state.miniPlayerState ?: return@launch
                     if (current.target != PlaybackTarget.LocalDevice) return@launch
-                    state.miniPlayerState = current.copy(isPaused = true)
+                    state.localPlaybackEngine.rewindToStartAndPause()
+                    state.miniPlayerState = current.copy(isPaused = true, currentPositionMillis = 0L)
                     state.actionMessage = "播放结束：${current.album.title}"
                 }
             }
@@ -164,6 +165,24 @@ internal class AppStateLocalPlaybackCoordinator(
             ?.takeIf { it.target == PlaybackTarget.LocalDevice }
             ?.copy(currentPositionMillis = targetMillis)
         state.actionMessage = "已跳转到 ${formatDuration(targetMillis)}"
+    }
+
+    /**
+     * Standard previous-button behavior: restarts the current track when it has been
+     * playing for a while, otherwise jumps to the previous queue item (the engine's
+     * seekToPrevious decides, and reports the resulting index synchronously).
+     */
+    fun playLocalPrevious(playerState: MiniPlayerState) {
+        val engine = state.localPlaybackEngine
+        engine.seekToPrevious()
+        val newIndex = engine.currentIndex
+        val track = playerState.tracks.getOrNull(newIndex) ?: return
+        state.miniPlayerState = playerState.copy(
+            currentIndex = newIndex,
+            isPaused = false,
+            currentPositionMillis = 0L,
+            durationMillis = track.durationMillis,
+        )
     }
 
     fun playLocalIndex(index: Int, positionMillis: Long) {

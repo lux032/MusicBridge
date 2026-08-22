@@ -472,13 +472,7 @@ fun PlexAlbumScreen(
                             isLoading = state.isPlaybackCommandLoading,
                             isFavoriteLoading = state.isFavoriteMutationLoading,
                             onBack = state::navigateBack,
-                            onPrevious = {
-                                val playerState = state.miniPlayerState ?: return@PlaybackDetailSection
-                                val newIndex = (playerState.currentIndex - 1).coerceAtLeast(0)
-                                if (newIndex != playerState.currentIndex) {
-                                    state.playQueueIndex(newIndex)
-                                }
-                            },
+                            onPrevious = { state.playPrevious() },
                             onNext = {
                                 val playerState = state.miniPlayerState ?: return@PlaybackDetailSection
                                 val newIndex = (playerState.currentIndex + 1).coerceAtMost(playerState.tracks.lastIndex)

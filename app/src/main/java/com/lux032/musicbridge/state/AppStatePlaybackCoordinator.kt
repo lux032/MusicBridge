@@ -637,6 +637,23 @@ internal class AppStatePlaybackCoordinator(
         state.actionMessage = "播放模式已切换为：${mode.label}"
     }
 
+    /**
+     * Previous-button entry point. Local playback restarts the current track first and
+     * only steps back on a quick second press (standard music-app behavior, mirrored by
+     * the media notification). Sonos keeps a plain skip — the speaker owns its timeline.
+     */
+    fun playPrevious() {
+        val playerState = state.miniPlayerState ?: return
+        if (playerState.target == PlaybackTarget.LocalDevice) {
+            state.localPlaybackCoordinator.playLocalPrevious(playerState)
+            return
+        }
+        val newIndex = (playerState.currentIndex - 1).coerceAtLeast(0)
+        if (newIndex != playerState.currentIndex) {
+            playQueueIndex(newIndex, 0L, playerState.target)
+        }
+    }
+
     fun playQueueIndex(index: Int, positionMillis: Long, target: PlaybackTarget?) {
         val playerState = state.miniPlayerState ?: return
         val targetIndex = index.coerceIn(0, playerState.tracks.lastIndex)

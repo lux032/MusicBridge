@@ -342,6 +342,23 @@ class LocalPlaybackEngine(
 
     fun pause() = player.pause()
 
+    /**
+     * Standard "previous" transport: ExoPlayer restarts the current track when it has been
+     * playing for more than its max-seek-to-previous threshold (3s), and only jumps to the
+     * previous queue item below that (shuffle-aware). Matches the media notification's
+     * previous button, which drives the same command.
+     */
+    fun seekToPrevious() = player.seekToPrevious()
+
+    /**
+     * Parks a finished queue: rewinds the final track and stays paused at 0:00 instead of
+     * sitting in a dead ENDED state, so the play button simply starts the track over.
+     */
+    fun rewindToStartAndPause() {
+        player.pause()
+        player.seekTo(0L)
+    }
+
     fun resume() = player.play()
 
     fun seekTo(positionMillis: Long) = player.seekTo(positionMillis.coerceAtLeast(0L))
