@@ -28,6 +28,19 @@ internal data class AppLayoutInfo(
             isTablet -> 152.dp
             else -> 148.dp
         }
+    /**
+     * Fixed column count for full-page album grids. Adaptive-with-minimum columns collapse
+     * to a single stretched cover on phone-width screens once side padding and the index
+     * bar reservation eat into the row, so these pages pin the count instead: 3 on phone
+     * portrait (matching the artist detail page and home preview grids).
+     */
+    val albumGridColumns: Int
+        get() = when {
+            isWide -> 6
+            isTablet -> if (isLandscape) 5 else 4
+            isLandscape -> 5
+            else -> 3
+        }
     val artistGridMinimumWidth: Dp get() = if (isWide) 168.dp else 160.dp
     val detailArtworkMaximumWidth: Dp get() = if (isWide) 440.dp else 560.dp
     val collectionHeroMaximumWidth: Dp get() = if (isWide) 280.dp else 560.dp

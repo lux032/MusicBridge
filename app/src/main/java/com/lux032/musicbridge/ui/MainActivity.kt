@@ -32,6 +32,8 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -350,12 +352,18 @@ fun PlexAlbumScreen(
                     selectedAlbum = state.selectedAlbum,
                     searchQuery = state.albumSearchQuery,
                     isSearchLoading = state.isAlbumSearchLoading,
+                    sortOption = state.albumSortOption,
+                    favoritesOnly = state.albumFavoritesOnly,
+                    decadeFilter = state.albumDecadeFilter,
                     bottomContentPadding = contentBottomPadding,
                     gridState = allAlbumsGridState,
                     onSearchQueryChange = { state.albumSearchQuery = it },
                     onBack = state::navigateBack,
                     onAlbumClick = state::openAlbumDetail,
                     onAlbumQueueAction = state::enqueueAlbum,
+                    onSortOptionChange = state::updateAlbumSortOption,
+                    onFavoritesOnlyChange = state::updateAlbumFavoritesOnly,
+                    onDecadeFilterChange = state::updateAlbumDecadeFilter,
                 )
             } else {
                 if (currentSection == AppSection.Artists) {

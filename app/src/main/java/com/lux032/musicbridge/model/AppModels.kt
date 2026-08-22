@@ -79,6 +79,56 @@ enum class QueuePlacement {
     End,
 }
 
+/** Sort orders for the all-albums grid. Title/Artist keep the alphabet index bar. */
+enum class AlbumSortOption {
+    Title,
+    Artist,
+    YearDesc,
+    YearAsc,
+    RecentlyAdded,
+    RecentlyPlayed;
+
+    val label: String
+        get() = when (this) {
+            Title -> Strings.sortTitle
+            Artist -> Strings.sortArtist
+            YearDesc -> Strings.sortYearDesc
+            YearAsc -> Strings.sortYearAsc
+            RecentlyAdded -> Strings.recentAdded
+            RecentlyPlayed -> Strings.recentPlayed
+        }
+}
+
+/** Decade buckets for filtering the album grid by release year. Albums with no year
+ *  metadata only appear under [All]. */
+enum class AlbumDecadeFilter {
+    All,
+    D2020s,
+    D2010s,
+    D2000s,
+    D1990s,
+    Earlier;
+
+    val label: String
+        get() = when (this) {
+            All -> Strings.decadeAll
+            D2020s -> "2020s"
+            D2010s -> "2010s"
+            D2000s -> "2000s"
+            D1990s -> "90s"
+            Earlier -> Strings.decadeEarlier
+        }
+
+    fun matches(year: Int?): Boolean = when (this) {
+        All -> true
+        D2020s -> year != null && year >= 2020
+        D2010s -> year != null && year in 2010..2019
+        D2000s -> year != null && year in 2000..2009
+        D1990s -> year != null && year in 1990..1999
+        Earlier -> year != null && year < 1990
+    }
+}
+
 /** Local-playback stream quality. ORIGINAL plays the source file as-is; the bitrate
  *  tiers ask Plex to transcode down (used to save cellular data). */
 enum class LocalStreamQuality(val id: String, val maxAudioBitrateKbps: Int?) {

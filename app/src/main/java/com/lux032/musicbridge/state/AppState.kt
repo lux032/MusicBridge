@@ -69,6 +69,15 @@ class AppState(
     var localCacheSize by mutableStateOf(appPreferences.loadLocalCacheSize())
         private set
 
+    /** All-albums grid presentation, persisted so the user's choices survive navigation
+     *  and app restarts. */
+    var albumSortOption by mutableStateOf(appPreferences.loadAlbumSortOption())
+        private set
+    var albumFavoritesOnly by mutableStateOf(appPreferences.loadAlbumFavoritesOnly())
+        private set
+    var albumDecadeFilter by mutableStateOf(appPreferences.loadAlbumDecadeFilter())
+        private set
+
     private val initialProfiles = appPreferences.loadServerProfiles()
     private val initialActiveServerId = appPreferences.loadActiveServerId(initialProfiles)
     private val initialPreferences = initialProfiles.firstOrNull { it.id == initialActiveServerId } ?: MusicServerProfile()
@@ -277,6 +286,21 @@ class AppState(
     }
 
     fun localCacheUsedBytes(): Long = LocalAudioCache.usedBytes()
+
+    fun updateAlbumSortOption(option: AlbumSortOption) {
+        albumSortOption = option
+        appPreferences.saveAlbumSortOption(option)
+    }
+
+    fun updateAlbumFavoritesOnly(enabled: Boolean) {
+        albumFavoritesOnly = enabled
+        appPreferences.saveAlbumFavoritesOnly(enabled)
+    }
+
+    fun updateAlbumDecadeFilter(filter: AlbumDecadeFilter) {
+        albumDecadeFilter = filter
+        appPreferences.saveAlbumDecadeFilter(filter)
+    }
 
     /** Quality applied to new local playback URLs, based on the current network. */
     internal fun currentLocalStreamQuality(): LocalStreamQuality =

@@ -165,4 +165,16 @@ object Strings {
     val cellularQualityDesc get() = if (isZhCN) "蜂窝网络下本机播放的音质" else "Playback quality on cellular"
     val localCacheSizeTitle get() = if (isZhCN) "缓存上限" else "Cache Limit"
     val localCacheUsedDesc get() = if (isZhCN) { used: String, limit: String -> "已缓存 $used / 上限 $limit" } else { used: String, limit: String -> "$used cached / $limit limit" }
+    val sortTitle get() = if (isZhCN) "标题 A→Z" else "Title A–Z"
+    val sortArtist get() = if (isZhCN) "艺人 A→Z" else "Artist A–Z"
+    val sortYearDesc get() = if (isZhCN) "年份 新→旧" else "Year, newest first"
+    val sortYearAsc get() = if (isZhCN) "年份 旧→新" else "Year, oldest first"
+    val sortFieldTitle get() = if (isZhCN) "排序" else "Sort"
+    val sortDialogTitle get() = if (isZhCN) "排序方式" else "Sort By"
+    val filterFavoriteOnly get() = if (isZhCN) "仅收藏" else "Favorites"
+    val filterDecadeTitle get() = if (isZhCN) "年代" else "Decade"
+    val decadeAll get() = if (isZhCN) "全部" else "All"
+    val decadeEarlier get() = if (isZhCN) "更早" else "Earlier"
+    val noFilteredAlbums get() = if (isZhCN) "没有符合当前筛选的专辑" else "No Albums Match the Filters"
+    val noFilteredAlbumsDesc get() = if (isZhCN) "试试调整筛选条件，或清除搜索关键词。" else "Try adjusting the filters or clearing the search query."
 }

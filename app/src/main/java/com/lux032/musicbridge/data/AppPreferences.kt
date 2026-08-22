@@ -276,6 +276,31 @@ class AppPreferences(context: Context) {
         sharedPreferences.edit { putString(KEY_LOCAL_CACHE_SIZE, size.id) }
     }
 
+    fun loadAlbumSortOption(): AlbumSortOption =
+        sharedPreferences.getString(KEY_ALBUM_SORT_OPTION, null)
+            ?.let { runCatching { AlbumSortOption.valueOf(it) }.getOrNull() }
+            ?: AlbumSortOption.Title
+
+    fun saveAlbumSortOption(option: AlbumSortOption) {
+        sharedPreferences.edit { putString(KEY_ALBUM_SORT_OPTION, option.name) }
+    }
+
+    fun loadAlbumFavoritesOnly(): Boolean =
+        sharedPreferences.getBoolean(KEY_ALBUM_FAVORITES_ONLY, false)
+
+    fun saveAlbumFavoritesOnly(enabled: Boolean) {
+        sharedPreferences.edit { putBoolean(KEY_ALBUM_FAVORITES_ONLY, enabled) }
+    }
+
+    fun loadAlbumDecadeFilter(): AlbumDecadeFilter =
+        sharedPreferences.getString(KEY_ALBUM_DECADE_FILTER, null)
+            ?.let { runCatching { AlbumDecadeFilter.valueOf(it) }.getOrNull() }
+            ?: AlbumDecadeFilter.All
+
+    fun saveAlbumDecadeFilter(filter: AlbumDecadeFilter) {
+        sharedPreferences.edit { putString(KEY_ALBUM_DECADE_FILTER, filter.name) }
+    }
+
     private fun clearLegacyServerKeys() {
         sharedPreferences.edit {
             remove(KEY_USERNAME)
@@ -320,6 +345,9 @@ class AppPreferences(context: Context) {
         private const val KEY_LOCAL_QUALITY_WIFI = "local_stream_quality_wifi_v1"
         private const val KEY_LOCAL_QUALITY_CELLULAR = "local_stream_quality_cellular_v1"
         private const val KEY_LOCAL_CACHE_SIZE = "local_cache_size_v1"
+        private const val KEY_ALBUM_SORT_OPTION = "album_sort_option_v1"
+        private const val KEY_ALBUM_FAVORITES_ONLY = "album_favorites_only_v1"
+        private const val KEY_ALBUM_DECADE_FILTER = "album_decade_filter_v1"
         private const val TARGET_LOCAL = "local"
         private const val TARGET_SONOS = "sonos"
         private const val ROOM_URL_SEPARATOR = " "

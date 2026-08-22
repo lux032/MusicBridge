@@ -33,6 +33,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -171,9 +172,9 @@ internal fun BottomNavigationBar(
         label = "nav_pill_trailing_edge",
     )
 
-    // Floating dark-glass pill: mostly opaque palette base with a light hairline border.
-    // Darker than the player page's action bar — on the home feed the nearly-transparent
-    // white glass washes out over album artwork, so the bar needs more body of its own.
+    // Floating dark-glass pill: nearly opaque palette base with a light hairline border.
+    // The bar floats above scrolling artwork/text, so it must be opaque enough that content
+    // sliding underneath never bleeds through and collides with the tab labels.
     Surface(
         modifier = modifier
             .fillMaxWidth()
@@ -183,7 +184,7 @@ internal fun BottomNavigationBar(
                 bottom = navigationBarBottomInset + 10.dp,
             ),
         shape = RoundedCornerShape(28.dp),
-        color = palette.backgroundBottom.copy(alpha = 0.82f),
+        color = palette.backgroundBottom.copy(alpha = 0.94f),
         border = BorderStroke(1.dp, Color.White.copy(alpha = 0.10f)),
     ) {
         var rowSize by remember { mutableStateOf(IntSize.Zero) }
@@ -446,8 +447,12 @@ internal fun AlbumCoverCard(
             onClick = onClick,
             onLongClick = { if (onQueueAction != null) showQueueMenu = true },
         ),
-        shape = RoundedCornerShape(if (compact) 18.dp else 16.dp),
-        color = if (compact) Color.Transparent else Color.Transparent,
+        // Rectangle on purpose: the Surface is a transparent click container, and a rounded
+        // shape here would make Surface clip its content — the rounded bottom corners shaved
+        // off the bottom of the first/last character of the artist line (音 looked broken).
+        // The artwork carries its own rounded clip, so nothing visual depends on this shape.
+        shape = RectangleShape,
+        color = Color.Transparent,
         border = BorderStroke(0.dp, Color.Transparent),
         shadowElevation = 0.dp,
     ) {

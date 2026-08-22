@@ -3,6 +3,8 @@ package com.lux032.musicbridge
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -26,7 +28,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.PhoneAndroid
+import androidx.compose.material.icons.filled.Sort
 import androidx.compose.material.icons.filled.Speaker
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -423,7 +428,7 @@ internal fun AlbumCollectionSection(
 
     LazyVerticalGrid(
         state = gridState,
-        columns = GridCells.Adaptive(layoutInfo.albumGridMinimumWidth),
+        columns = GridCells.Fixed(layoutInfo.albumGridColumns),
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(
             start = layoutInfo.horizontalPadding,
@@ -501,36 +506,81 @@ internal fun AllAlbumsSection(
     selectedAlbum: PlexAlbum?,
     searchQuery: String,
     isSearchLoading: Boolean,
+    sortOption: AlbumSortOption,
+    favoritesOnly: Boolean,
+    decadeFilter: AlbumDecadeFilter,
     bottomContentPadding: androidx.compose.ui.unit.Dp,
     gridState: androidx.compose.foundation.lazy.grid.LazyGridState = rememberLazyGridState(),
     onSearchQueryChange: (String) -> Unit,
     onBack: () -> Unit,
     onAlbumClick: (PlexAlbum) -> Unit,
     onAlbumQueueAction: (PlexAlbum, QueuePlacement) -> Unit,
+    onSortOptionChange: (AlbumSortOption) -> Unit,
+    onFavoritesOnlyChange: (Boolean) -> Unit,
+    onDecadeFilterChange: (AlbumDecadeFilter) -> Unit,
 ) {
     val layoutInfo = LocalAppLayoutInfo.current
-    val albumGroups = remember(albums) {
-        buildIndexedGroups(albums) { it.title }
-    }
+    val palette = LocalArtworkPalette.current
+    var isSortDialogVisible by remember { mutableStateOf(false) }
+    var isDecadeDialogVisible by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     var jumpJob by remember { mutableStateOf<Job?>(null) }
+
+    val visibleAlbums = remember(albums, favoritesOnly, decadeFilter, sortOption) {
+        val filtered = albums
+            .filter { !favoritesOnly || it.isFavorite }
+            .filter { decadeFilter.matches(it.year) }
+        when (sortOption) {
+            // Title/Artist ordering happens inside buildIndexedGroups (pinyin/letter aware).
+            AlbumSortOption.Title,
+            AlbumSortOption.Artist -> filtered
+            AlbumSortOption.YearDesc -> filtered.sortedByDescending { it.year ?: Int.MIN_VALUE }
+            AlbumSortOption.YearAsc -> filtered.sortedBy { it.year ?: Int.MAX_VALUE }
+            AlbumSortOption.RecentlyAdded ->
+                filtered.sortedByDescending { it.addedAtEpochSeconds ?: 0L }
+            AlbumSortOption.RecentlyPlayed ->
+                filtered.sortedByDescending { it.lastViewedAtEpochSeconds ?: 0L }
+        }
+    }
+    val showIndexBar = sortOption == AlbumSortOption.Title || sortOption == AlbumSortOption.Artist
+    val albumGroups = remember(visibleAlbums, showIndexBar, sortOption) {
+        if (!showIndexBar) {
+            emptyList()
+        } else {
+            buildIndexedGroups(visibleAlbums) {
+                if (sortOption == AlbumSortOption.Artist) it.artistName else it.title
+            }
+        }
+    }
     val jumpTargets = remember(albumGroups) {
-        buildGridJumpTargets(
-            leadingItemCount = 3,
-            groups = albumGroups,
-        )
+        buildGridJumpTargets(leadingItemCount = 4, groups = albumGroups)
+    }
+    val heroSubtitle = buildString {
+        append(Strings.albumsCount(visibleAlbums.size))
+        append(" · ")
+        append(sortOption.label)
+        if (favoritesOnly) {
+            append(" · ")
+            append(Strings.filterFavoriteOnly)
+        }
+        if (decadeFilter != AlbumDecadeFilter.All) {
+            append(" · ")
+            append(decadeFilter.label)
+        }
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
         LazyVerticalGrid(
             state = gridState,
-            columns = GridCells.Adaptive(layoutInfo.albumGridMinimumWidth),
+            columns = GridCells.Fixed(layoutInfo.albumGridColumns),
             modifier = Modifier
                 .fillMaxSize()
                 .padding(horizontal = layoutInfo.horizontalPadding),
             contentPadding = PaddingValues(
                 top = 16.dp,
-                end = 42.dp,
+                // The 42dp strip is reserved for the alphabet index bar; without it (year /
+                // recency sorts) the grid reclaims the space instead of leaving a dead gap.
+                end = if (showIndexBar) 42.dp else 0.dp,
                 bottom = bottomContentPadding,
             ),
             verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -551,11 +601,7 @@ internal fun AllAlbumsSection(
                         fontWeight = FontWeight.Bold,
                     )
                     Text(
-                        text = if (searchQuery.isBlank()) {
-                            Strings.allAlbumsDesc(albums.size)
-                        } else {
-                            Strings.searchResults(searchQuery, albums.size)
-                        },
+                        text = heroSubtitle,
                         color = AppColors.TextSecondary,
                     )
                 }
@@ -569,24 +615,61 @@ internal fun AllAlbumsSection(
                     singleLine = true,
                 )
             }
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    AlbumControlChip(
+                        icon = Icons.Filled.Sort,
+                        label = sortOption.label,
+                        selected = false,
+                        onClick = { isSortDialogVisible = true },
+                    )
+                    AlbumControlChip(
+                        icon = Icons.Filled.Favorite,
+                        label = Strings.filterFavoriteOnly,
+                        selected = favoritesOnly,
+                        onClick = { onFavoritesOnlyChange(!favoritesOnly) },
+                    )
+                    AlbumControlChip(
+                        icon = null,
+                        label = "${Strings.filterDecadeTitle} · ${decadeFilter.label}",
+                        selected = decadeFilter != AlbumDecadeFilter.All,
+                        onClick = { isDecadeDialogVisible = true },
+                    )
+                }
+            }
             if (isSearchLoading) {
                 item(span = { GridItemSpan(maxLineSpan) }) {
                     LoadingCard(message = Strings.searchingLocal)
                 }
-            } else if (albums.isEmpty()) {
+            } else if (visibleAlbums.isEmpty()) {
                 item(span = { GridItemSpan(maxLineSpan) }) {
-                    EmptyStateCard(
-                        title = if (searchQuery.isBlank()) Strings.noLocalAlbums else Strings.noSearchResults,
-                        body = if (searchQuery.isBlank()) {
-                            Strings.noLocalAlbumsDesc
-                        } else {
-                            Strings.noSearchResultsDesc
-                        },
-                        actionLabel = Strings.backToHome,
-                        onAction = onBack,
-                    )
+                    when {
+                        albums.isNotEmpty() -> EmptyStateCard(
+                            title = Strings.noFilteredAlbums,
+                            body = Strings.noFilteredAlbumsDesc,
+                            actionLabel = Strings.backToHome,
+                            onAction = onBack,
+                        )
+                        searchQuery.isBlank() -> EmptyStateCard(
+                            title = Strings.noLocalAlbums,
+                            body = Strings.noLocalAlbumsDesc,
+                            actionLabel = Strings.backToHome,
+                            onAction = onBack,
+                        )
+                        else -> EmptyStateCard(
+                            title = Strings.noSearchResults,
+                            body = Strings.noSearchResultsDesc,
+                            actionLabel = Strings.backToHome,
+                            onAction = onBack,
+                        )
+                    }
                 }
-            } else {
+            } else if (showIndexBar) {
                 albumGroups.forEach { group ->
                     item(
                         key = "album-header-${group.label}",
@@ -612,10 +695,27 @@ internal fun AllAlbumsSection(
                         }
                     }
                 }
+            } else {
+                items(
+                    items = visibleAlbums,
+                    key = { album -> album.ratingKey },
+                    contentType = { "album" },
+                ) { album ->
+                    Box(modifier = Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)) {
+                        AlbumCoverCard(
+                            album = album,
+                            selected = selectedAlbum?.ratingKey == album.ratingKey,
+                            onClick = { onAlbumClick(album) },
+                            onQueueAction = { onAlbumQueueAction(album, it) },
+                            compact = false,
+                            sharedArtworkKey = AlbumSharedKeys.artwork(album),
+                        )
+                    }
+                }
             }
         }
 
-        if (!isSearchLoading && jumpTargets.size > 1) {
+        if (showIndexBar && !isSearchLoading && jumpTargets.size > 1) {
             VerticalIndexBar(
                 labels = jumpTargets.map { it.first },
                 modifier = Modifier.padding(top = 100.dp, end = 4.dp, bottom = 12.dp),
@@ -628,6 +728,122 @@ internal fun AllAlbumsSection(
             )
         }
     }
+
+    if (isSortDialogVisible) {
+        AlbumOptionPickerDialog(
+            title = Strings.sortDialogTitle,
+            options = AlbumSortOption.entries,
+            selected = sortOption,
+            labelOf = { it.label },
+            onSelect = onSortOptionChange,
+            onDismiss = { isSortDialogVisible = false },
+        )
+    }
+    if (isDecadeDialogVisible) {
+        AlbumOptionPickerDialog(
+            title = Strings.filterDecadeTitle,
+            options = AlbumDecadeFilter.entries,
+            selected = decadeFilter,
+            labelOf = { it.label },
+            onSelect = onDecadeFilterChange,
+            onDismiss = { isDecadeDialogVisible = false },
+        )
+    }
+}
+
+@Composable
+private fun AlbumControlChip(
+    icon: androidx.compose.ui.graphics.vector.ImageVector?,
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    val accent = LocalArtworkPalette.current.accent
+    Surface(
+        modifier = Modifier.clickable(onClick = onClick),
+        shape = RoundedCornerShape(18.dp),
+        color = if (selected) AppColors.CardSurfaceStrong else AppColors.CardSurface,
+        border = BorderStroke(1.dp, if (selected) accent else AppColors.Border),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            icon?.let {
+                Icon(
+                    imageVector = it,
+                    contentDescription = null,
+                    tint = if (selected) accent else AppColors.TextSecondary,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+            Text(
+                text = label,
+                color = if (selected) accent else AppColors.TextSecondary,
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.Medium,
+            )
+        }
+    }
+}
+
+/** Single-choice option list dialog in the same style as the output-device picker. */
+@Composable
+private fun <T> AlbumOptionPickerDialog(
+    title: String,
+    options: List<T>,
+    selected: T,
+    labelOf: (T) -> String,
+    onSelect: (T) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {},
+        title = {
+            Text(
+                text = title,
+                color = AppColors.TextPrimary,
+                fontWeight = FontWeight.Bold,
+            )
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                options.forEach { option ->
+                    val isSelected = option == selected
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                onDismiss()
+                                onSelect(option)
+                            },
+                        shape = RoundedCornerShape(14.dp),
+                        color = if (isSelected) AppColors.CardSurfaceStrong else AppColors.CardSurface,
+                        border = BorderStroke(1.dp, if (isSelected) LocalArtworkPalette.current.accent else AppColors.Border),
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(labelOf(option), color = AppColors.TextPrimary)
+                            if (isSelected) {
+                                Icon(
+                                    imageVector = Icons.Filled.Check,
+                                    contentDescription = null,
+                                    tint = LocalArtworkPalette.current.accent,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+    )
 }
 
 @Composable
