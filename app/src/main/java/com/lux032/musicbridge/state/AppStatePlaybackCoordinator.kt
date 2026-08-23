@@ -322,6 +322,8 @@ internal class AppStatePlaybackCoordinator(
                 )
             }.onSuccess {
                 if (isCurrentPlaybackRequest(requestGeneration)) {
+                    state.playbackReportingJob?.cancel()
+                    resetFinishedSonosQueue(room)
                     state.actionMessage = "专辑播放结束：${albumTrackResult.album.title}"
                 }
             }.onFailure { error ->
@@ -541,6 +543,12 @@ internal class AppStatePlaybackCoordinator(
                         )
                     },
                 )
+            }.onSuccess {
+                if (isCurrentPlaybackRequest(requestGeneration)) {
+                    state.playbackReportingJob?.cancel()
+                    resetFinishedSonosQueue(room)
+                    state.actionMessage = "播放列表播放结束：${playlistResult.playlist.title}"
+                }
             }.onFailure { error ->
                 if (error !is CancellationException && isCurrentPlaybackRequest(requestGeneration)) {
                     state.errorMessage = error.message ?: "播放失败"
@@ -1001,13 +1009,17 @@ internal class AppStatePlaybackCoordinator(
                     hasObservedPlayback = false
                 }
 
-                if (positionMillis > 0L || playbackState != "stopped") {
+                // Sonos resets REL_TIME to zero when the transport reaches STOPPED. For an
+                // Opus restart seek, adding the source offset to that zero would resurrect
+                // the last seek position and overwrite the real end-of-track progress.
+                val stoppedAtResetPosition = playbackState == "stopped" && rawPositionMillis == 0L
+                if (!stoppedAtResetPosition) {
                     currentTrackTimeMillis = positionMillis
                 }
                 if (durationMillis != null) {
                     currentTrackDurationMillis = durationMillis
                 }
-                if (playbackState != "stopped" || positionMillis > 0L) {
+                if (playbackState != "stopped" || !stoppedAtResetPosition) {
                     hasObservedPlayback = true
                 }
 
@@ -1083,7 +1095,11 @@ internal class AppStatePlaybackCoordinator(
                         val currentIndex = currentQueue.indexOfFirst { it.ratingKey == currentTrack.ratingKey && it.sourceId == currentTrack.sourceId }
                             .takeIf { it >= 0 } ?: break
                         val nextIndex = resolveNextPlaybackIndex(currentQueue.size, currentIndex)
-                        if (nextIndex == null || nextIndex == currentIndex) break
+                        if (nextIndex == null) {
+                            resetFinishedSonosQueue(room)
+                            break
+                        }
+                        if (nextIndex == currentIndex) break
                         currentQueue.getOrNull(nextIndex) ?: break
                         state.scope.launch {
                             playQueueIndex(nextIndex, 0L, PlaybackTarget.Sonos(room))
@@ -1099,6 +1115,19 @@ internal class AppStatePlaybackCoordinator(
                 PlaybackForegroundService.stop(state.context)
             }
         }
+    }
+
+    private fun resetFinishedSonosQueue(room: SonosRoom) {
+        val current = state.miniPlayerState ?: return
+        if (current.sonosRoom?.coordinatorUuid != room.coordinatorUuid) return
+
+        opusRestartSeek = null
+        state.isPlaybackCommandLoading = false
+        state.miniPlayerState = current.copy(
+            isPaused = true,
+            isBuffering = false,
+            currentPositionMillis = 0L,
+        )
     }
 
     private fun nextPlaybackRequestGeneration(): Long {
