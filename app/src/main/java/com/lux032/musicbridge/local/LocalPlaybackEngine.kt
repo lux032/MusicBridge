@@ -7,6 +7,7 @@ import android.net.NetworkCapabilities
 import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
+import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
@@ -14,6 +15,8 @@ import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.cache.CacheDataSource
+import androidx.media3.datasource.cache.CacheWriter
+import androidx.media3.datasource.cache.ContentMetadata
 import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
 import androidx.media3.exoplayer.ExoPlayer
@@ -22,13 +25,18 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.io.File
+import java.util.concurrent.Executors
+import java.util.concurrent.Future
 
 /** One playable queue entry for the on-device player. */
 data class LocalQueueItem(
     val url: String,
+    val cacheKey: String,
+    val isTranscoded: Boolean,
     val title: String,
     val artist: String?,
     val artworkUrl: String?,
+    val durationMillis: Long?,
 )
 
 /**
@@ -84,6 +92,14 @@ object LocalAudioCache {
 
     private var cache: SimpleCache? = null
     private var evictor: ResizableCacheEvictor? = null
+    private val precacheExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "local-audio-precache").apply {
+            isDaemon = true
+            priority = Thread.MIN_PRIORITY
+        }
+    }
+    private var precacheTask: Future<*>? = null
+    private var precacheKeys: List<String> = emptyList()
 
     @Synchronized
     fun configure(context: Context, maxBytes: Long): SimpleCache {
@@ -109,9 +125,46 @@ object LocalAudioCache {
 
     @Synchronized
     fun clear() {
+        precacheTask?.cancel(true)
+        precacheTask = null
+        precacheKeys = emptyList()
         runCatching {
             val simpleCache = cache ?: return
             simpleCache.keys.forEach { key -> simpleCache.removeResource(key) }
+        }
+    }
+
+    @Synchronized
+    fun isFullyCached(key: String): Boolean {
+        val simpleCache = cache ?: return false
+        val length = ContentMetadata.getContentLength(simpleCache.getContentMetadata(key))
+        return length > 0L && simpleCache.isCached(key, 0L, length)
+    }
+
+    /** Downloads queue resources sequentially into the same persistent cache used by ExoPlayer. */
+    @Synchronized
+    fun precache(items: List<LocalQueueItem>, upstreamFactory: androidx.media3.datasource.DataSource.Factory) {
+        val requestedKeys = items.map(LocalQueueItem::cacheKey)
+        if (requestedKeys == precacheKeys && precacheTask?.isDone == false) return
+        precacheTask?.cancel(true)
+        precacheKeys = requestedKeys
+        if (items.isEmpty()) return
+        val simpleCache = cache ?: return
+        precacheTask = precacheExecutor.submit {
+            items.forEach { item ->
+                if (Thread.currentThread().isInterrupted || isFullyCached(item.cacheKey)) return@forEach
+                val cacheDataSource = CacheDataSource.Factory()
+                    .setCache(simpleCache)
+                    .setUpstreamDataSourceFactory(upstreamFactory)
+                    .setFlags(CacheDataSource.FLAG_BLOCK_ON_CACHE or CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+                    .createDataSource()
+                val dataSpec = androidx.media3.datasource.DataSpec.Builder()
+                    .setUri(item.url)
+                    .setKey(item.cacheKey)
+                    .setFlags(androidx.media3.datasource.DataSpec.FLAG_MIGHT_NOT_USE_FULL_NETWORK_SPEED)
+                    .build()
+                runCatching { CacheWriter(cacheDataSource, dataSpec, null, null).cache() }
+            }
         }
     }
 }
@@ -165,14 +218,12 @@ class LocalPlaybackEngine(
     interface Listener {
         fun onTrackChanged(index: Int)
         fun onIsPlayingChanged(isPlaying: Boolean)
+        fun onBufferingChanged(isBuffering: Boolean)
         fun onQueueEnded()
         fun onPlayerError(message: String)
     }
 
     var listener: Listener? = null
-
-    /** The wrapped player, exposed so [LocalPlaybackService] can publish it as a MediaSession. */
-    internal val exoPlayer: ExoPlayer get() = player
 
     companion object {
         /**
@@ -186,55 +237,11 @@ class LocalPlaybackEngine(
     private val cacheDataSourceFactory = CacheDataSource.Factory()
         .setCache(LocalAudioCache.configure(context.applicationContext, cacheMaxBytes))
         .setUpstreamDataSourceFactory(httpDataSourceFactory)
-        .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
-
-    /**
-     * Routes reads through the audio cache for plain file streams, but bypasses it for
-     * Plex live-transcode URLs: each of those responses is unique (seek offsets are
-     * baked into the URL), so caching them only pollutes the LRU cache.
-     */
-    private class SelectiveCacheDataSource(
-        private val cached: androidx.media3.datasource.DataSource,
-        private val direct: androidx.media3.datasource.DataSource,
-    ) : androidx.media3.datasource.DataSource {
-        private var active: androidx.media3.datasource.DataSource? = null
-
-        override fun open(dataSpec: androidx.media3.datasource.DataSpec): Long {
-            val useCache = !dataSpec.uri.toString().contains("/:/transcode/universal/start", ignoreCase = true)
-            val delegate = if (useCache) cached else direct
-            active = delegate
-            return delegate.open(dataSpec)
-        }
-
-        override fun read(buffer: ByteArray, offset: Int, length: Int): Int =
-            active?.read(buffer, offset, length) ?: -1
-
-        override fun getUri(): android.net.Uri? = active?.uri
-
-        override fun getResponseHeaders(): Map<String, List<String>> =
-            active?.responseHeaders.orEmpty()
-
-        override fun close() {
-            active?.close()
-            active = null
-        }
-
-        override fun addTransferListener(transferListener: androidx.media3.datasource.TransferListener) {
-            cached.addTransferListener(transferListener)
-            direct.addTransferListener(transferListener)
-        }
-    }
+        .setFlags(CacheDataSource.FLAG_BLOCK_ON_CACHE or CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
 
     private val player: ExoPlayer = ExoPlayer.Builder(context.applicationContext)
         .setMediaSourceFactory(
-            DefaultMediaSourceFactory(
-                androidx.media3.datasource.DataSource.Factory {
-                    SelectiveCacheDataSource(
-                        cached = cacheDataSourceFactory.createDataSource(),
-                        direct = httpDataSourceFactory.createDataSource(),
-                    )
-                },
-            ),
+            DefaultMediaSourceFactory(cacheDataSourceFactory),
         )
         .setAudioAttributes(
             AudioAttributes.Builder()
@@ -247,20 +254,63 @@ class LocalPlaybackEngine(
         .setWakeMode(C.WAKE_MODE_NETWORK)
         .build()
 
+    /** Original queue metadata is retained because a live transcode seek replaces only
+     *  the current MediaItem URL, and that URL must be restored before a later replay. */
+    private val queueItems = mutableListOf<LocalQueueItem>()
+    private val positionBaseMillis = mutableListOf<Long>()
+    private var lastCurrentIndex = C.INDEX_UNSET
+    private var queuePrecacheCount = 0
+
+    /**
+     * MediaSession-facing wrapper. Plex restarts a live transcode at the requested source
+     * offset, while ExoPlayer sees that new response as starting at zero. Expose the logical
+     * source-track position to Android's notification/lock-screen controllers and route their
+     * seek commands through the same transcode-aware path. Direct-file playback has a zero
+     * base and therefore retains ExoPlayer's native position and seek behaviour unchanged.
+     */
+    internal val mediaSessionPlayer: Player = object : ForwardingPlayer(player) {
+        override fun getCurrentPosition(): Long = this@LocalPlaybackEngine.currentPositionMillis
+
+        override fun getBufferedPosition(): Long = this@LocalPlaybackEngine.bufferedPositionMillis
+
+        override fun getDuration(): Long = this@LocalPlaybackEngine.durationMillis ?: C.TIME_UNSET
+
+        override fun seekTo(positionMs: Long) {
+            this@LocalPlaybackEngine.seekTo(positionMs)
+        }
+
+        override fun seekTo(mediaItemIndex: Int, positionMs: Long) {
+            this@LocalPlaybackEngine.seekToItem(mediaItemIndex, positionMs)
+        }
+    }
+
     private val playerListener = object : Player.Listener {
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+            val newIndex = player.currentMediaItemIndex
+            val previousIndex = lastCurrentIndex
+            lastCurrentIndex = newIndex
+            if (previousIndex != C.INDEX_UNSET && previousIndex != newIndex) {
+                restoreOriginalQueueItem(previousIndex)
+            }
             if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO ||
                 reason == Player.MEDIA_ITEM_TRANSITION_REASON_SEEK
             ) {
-                listener?.onTrackChanged(player.currentMediaItemIndex)
+                schedulePrecacheFrom(newIndex)
+                listener?.onTrackChanged(newIndex)
             }
         }
 
         override fun onIsPlayingChanged(isPlaying: Boolean) {
+            if (isPlaying && queueItems.getOrNull(currentIndex)?.isTranscoded == false) {
+                schedulePrecacheFrom(currentIndex)
+            }
             listener?.onIsPlayingChanged(isPlaying)
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
+            listener?.onBufferingChanged(
+                playbackState == Player.STATE_BUFFERING && player.playWhenReady,
+            )
             if (playbackState == Player.STATE_ENDED) {
                 listener?.onQueueEnded()
             }
@@ -277,30 +327,74 @@ class LocalPlaybackEngine(
     }
 
     val currentIndex: Int get() = player.currentMediaItemIndex
-    val currentPositionMillis: Long get() = player.currentPosition.coerceAtLeast(0L)
-    val durationMillis: Long? get() = player.duration.takeIf { it > 0L }
+    val currentPositionMillis: Long
+        get() = logicalPositionMillis(currentIndex, player.currentPosition)
+    private val bufferedPositionMillis: Long
+        get() = logicalPositionMillis(currentIndex, player.bufferedPosition)
+    val durationMillis: Long?
+        get() {
+            val index = currentIndex
+            val item = queueItems.getOrNull(index)
+                ?: return player.duration.takeIf { it > 0L }
+            return if (item.url.isPlexLiveTranscodeUrl()) {
+                item.durationMillis?.takeIf { it > 0L }
+            } else {
+                player.duration.takeIf { it > 0L }
+            }
+        }
     val isPlaying: Boolean get() = player.isPlaying
+    val isPlayRequested: Boolean get() = player.playWhenReady
+    val isBuffering: Boolean
+        get() = player.playbackState == Player.STATE_BUFFERING && player.playWhenReady
     val isEnded: Boolean get() = player.playbackState == Player.STATE_ENDED
     val isActive: Boolean get() = player.playbackState != Player.STATE_IDLE && player.mediaItemCount > 0
 
-    private fun buildMediaItem(url: String, title: String, artist: String?, artworkUrl: String?): MediaItem {
+    private fun buildMediaItem(item: LocalQueueItem, url: String = item.url): MediaItem {
         val metadata = MediaMetadata.Builder()
-            .setTitle(title)
-            .setArtist(artist)
-            .apply { artworkUrl?.let { setArtworkUri(android.net.Uri.parse(it)) } }
+            .setTitle(item.title)
+            .setArtist(item.artist)
+            .apply { item.artworkUrl?.let { setArtworkUri(android.net.Uri.parse(it)) } }
             .build()
         return MediaItem.Builder()
             .setUri(url)
+            .setCustomCacheKey(
+                if (url == item.url) item.cacheKey else "${item.cacheKey}:offset:${url.substringAfter("offset=", "0").substringBefore('&')}"
+            )
             .setMediaMetadata(metadata)
             .build()
     }
 
-    fun setQueue(items: List<LocalQueueItem>, startIndex: Int, startPositionMillis: Long) {
-        val mediaItems = items.map { buildMediaItem(it.url, it.title, it.artist, it.artworkUrl) }
+    fun setQueue(
+        items: List<LocalQueueItem>,
+        startIndex: Int,
+        startPositionMillis: Long,
+        precacheCount: Int = 0,
+    ) {
+        queueItems.clear()
+        queueItems.addAll(items)
+        positionBaseMillis.clear()
+        repeat(items.size) { positionBaseMillis += 0L }
+        val safeIndex = startIndex.coerceIn(0, (items.size - 1).coerceAtLeast(0))
+        val safeStartMillis = startPositionMillis.coerceAtLeast(0L)
+        val selectedItem = items.getOrNull(safeIndex)
+        val selectedSeekPlan = selectedItem
+            ?.takeUnless { LocalAudioCache.isFullyCached(it.cacheKey) }
+            ?.let { buildLocalSeekPlan(it.url, safeStartMillis) }
+        val selectedOffsetMillis = selectedSeekPlan?.logicalBaseMillis ?: 0L
+        if (safeIndex in positionBaseMillis.indices) {
+            positionBaseMillis[safeIndex] = selectedOffsetMillis
+        }
+        val mediaItems = items.mapIndexed { index, item ->
+            val url = if (index == safeIndex) selectedSeekPlan?.url ?: item.url else item.url
+            buildMediaItem(item, url)
+        }
+        lastCurrentIndex = safeIndex
+        queuePrecacheCount = precacheCount.coerceAtLeast(0)
+        if (selectedItem?.isTranscoded == true) schedulePrecacheFrom(safeIndex)
         player.setMediaItems(
             mediaItems,
-            startIndex.coerceIn(0, (items.size - 1).coerceAtLeast(0)),
-            startPositionMillis.coerceAtLeast(0L),
+            safeIndex,
+            selectedSeekPlan?.playerPositionMillis ?: safeStartMillis,
         )
         player.prepare()
         player.play()
@@ -308,13 +402,16 @@ class LocalPlaybackEngine(
 
     fun insertQueueItems(insertIndex: Int, items: List<LocalQueueItem>) {
         if (!isActive) return
-        val mediaItems = items.map { buildMediaItem(it.url, it.title, it.artist, it.artworkUrl) }
-        player.addMediaItems(insertIndex.coerceIn(0, player.mediaItemCount), mediaItems)
+        val safeIndex = insertIndex.coerceIn(0, player.mediaItemCount)
+        queueItems.addAll(safeIndex, items)
+        positionBaseMillis.addAll(safeIndex, List(items.size) { 0L })
+        if (lastCurrentIndex >= safeIndex) lastCurrentIndex += items.size
+        player.addMediaItems(safeIndex, items.map(::buildMediaItem))
     }
 
     fun playAt(index: Int, positionMillis: Long = 0L) {
         if (index !in 0 until player.mediaItemCount) return
-        player.seekTo(index, positionMillis.coerceAtLeast(0L))
+        seekToItem(index, positionMillis)
         player.play()
     }
 
@@ -348,7 +445,16 @@ class LocalPlaybackEngine(
      * previous queue item below that (shuffle-aware). Matches the media notification's
      * previous button, which drives the same command.
      */
-    fun seekToPrevious() = player.seekToPrevious()
+    fun seekToPrevious() {
+        val item = queueItems.getOrNull(currentIndex)
+        if (item?.url?.isPlexLiveTranscodeUrl() == true &&
+            currentPositionMillis > player.maxSeekToPreviousPosition
+        ) {
+            seekTo(0L)
+        } else {
+            player.seekToPrevious()
+        }
+    }
 
     /**
      * Parks a finished queue: rewinds the final track and stays paused at 0:00 instead of
@@ -356,12 +462,84 @@ class LocalPlaybackEngine(
      */
     fun rewindToStartAndPause() {
         player.pause()
-        player.seekTo(0L)
+        seekTo(0L)
     }
 
     fun resume() = player.play()
 
-    fun seekTo(positionMillis: Long) = player.seekTo(positionMillis.coerceAtLeast(0L))
+    /**
+     * Seeks direct files natively. Plex live transcodes cannot satisfy byte/range seeks, so
+     * they are restarted with Plex's source-time `offset` and a logical position base.
+     * Returns the effective logical target (Plex offsets have whole-second precision).
+     */
+    fun seekTo(positionMillis: Long): Long = seekToItem(currentIndex, positionMillis)
+
+    private fun seekToItem(index: Int, positionMillis: Long): Long {
+        if (index !in queueItems.indices || index !in 0 until player.mediaItemCount) return 0L
+        val item = queueItems[index]
+        val plan = buildLocalSeekPlan(item.url, positionMillis)
+        val fullLocalCopy = LocalAudioCache.isFullyCached(item.cacheKey)
+        if (!plan.restartsLiveTranscode || fullLocalCopy) {
+            val wasPlayingOffsetVariant = positionBaseMillis[index] != 0L
+            positionBaseMillis[index] = 0L
+            if (fullLocalCopy && wasPlayingOffsetVariant) {
+                val shouldPlay = player.playWhenReady
+                player.replaceMediaItem(index, buildMediaItem(item))
+                player.prepare()
+                player.playWhenReady = shouldPlay
+            }
+            val nativeTargetMillis = if (fullLocalCopy && plan.restartsLiveTranscode) {
+                positionMillis.coerceAtLeast(0L)
+            } else {
+                plan.playerPositionMillis
+            }
+            player.seekTo(index, nativeTargetMillis)
+            return nativeTargetMillis
+        }
+
+        val shouldPlay = player.playWhenReady
+        positionBaseMillis[index] = plan.logicalBaseMillis
+        player.replaceMediaItem(index, buildMediaItem(item, plan.url))
+        player.seekTo(index, plan.playerPositionMillis)
+        player.prepare()
+        player.playWhenReady = shouldPlay
+        return plan.effectiveTargetMillis
+    }
+
+    private fun logicalPositionMillis(index: Int, playerPositionMillis: Long): Long {
+        val rawPositionMillis = playerPositionMillis.coerceAtLeast(0L)
+        val item = queueItems.getOrNull(index) ?: return rawPositionMillis
+        if (!item.url.isPlexLiveTranscodeUrl()) return rawPositionMillis
+        val baseMillis = positionBaseMillis.getOrNull(index) ?: 0L
+        val logicalMillis = baseMillis + rawPositionMillis
+        return item.durationMillis
+            ?.takeIf { it > 0L }
+            ?.let { logicalMillis.coerceAtMost(it) }
+            ?: logicalMillis
+    }
+
+    private fun restoreOriginalQueueItem(index: Int) {
+        if (index !in queueItems.indices || index !in positionBaseMillis.indices) return
+        if (positionBaseMillis[index] == 0L || index == player.currentMediaItemIndex) return
+        positionBaseMillis[index] = 0L
+        player.replaceMediaItem(index, buildMediaItem(queueItems[index]))
+    }
+
+    private fun schedulePrecacheFrom(index: Int) {
+        if (index !in queueItems.indices) return
+        val current = queueItems[index]
+        // A local Opus stream is deliberately pulled to completion. Direct/original playback
+        // keeps its existing instant-start path; only later queue items are prefetched for it.
+        val items = if (current.isTranscoded) {
+            queueItems.drop(index).take(queuePrecacheCount + 1)
+        } else {
+            queueItems.drop(index + 1).take(queuePrecacheCount)
+        }
+        LocalAudioCache.precache(
+            items,
+            httpDataSourceFactory,
+        )
+    }
 
     fun stopPlayback() = player.stop()
 

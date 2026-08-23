@@ -39,7 +39,7 @@ class LocalPlaybackService : MediaSessionService() {
             launchIntent,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
-        mediaSession = MediaSession.Builder(this, engine.exoPlayer)
+        mediaSession = MediaSession.Builder(this, engine.mediaSessionPlayer)
             .setSessionActivity(sessionActivity)
             .build()
     }

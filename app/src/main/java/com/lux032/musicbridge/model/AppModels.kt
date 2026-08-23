@@ -29,6 +29,7 @@ data class MiniPlayerState(
     val currentIndex: Int,
     val target: PlaybackTarget,
     val isPaused: Boolean,
+    val isBuffering: Boolean = false,
     val currentPositionMillis: Long = 0L,
     val durationMillis: Long? = null,
 ) {
@@ -129,8 +130,7 @@ enum class AlbumDecadeFilter {
     }
 }
 
-/** Local-playback stream quality. ORIGINAL plays the source file as-is; the bitrate
- *  tiers ask Plex to transcode down (used to save cellular data). */
+/** Legacy local quality values, retained only to migrate v1 preferences. */
 enum class LocalStreamQuality(val id: String, val maxAudioBitrateKbps: Int?) {
     ORIGINAL("original", null),
     HIGH_320("high_320", 320),
@@ -152,6 +152,62 @@ enum class LocalStreamQuality(val id: String, val maxAudioBitrateKbps: Int?) {
             entries.firstOrNull { it.id == id } ?: ORIGINAL
     }
 }
+
+/** Source-bitrate ceiling for on-device playback. Files at or below the ceiling stay direct. */
+enum class LocalStreamingLimit(val id: String, val maxSourceBitrateKbps: Int?) {
+    MAXIMUM("maximum", null),
+    KBPS_2000("2000", 2000),
+    KBPS_1000("1000", 1000),
+    KBPS_320("320", 320),
+    KBPS_256("256", 256),
+    KBPS_192("192", 192),
+    KBPS_128("128", 128),
+    KBPS_96("96", 96);
+
+    val label: String get() = maxSourceBitrateKbps?.let { "$it kbps" } ?: Strings.qualityMaximum
+
+    companion object {
+        val DEFAULT_WIFI = MAXIMUM
+        val DEFAULT_CELLULAR = KBPS_320
+        fun fromId(id: String?): LocalStreamingLimit = entries.firstOrNull { it.id == id } ?: MAXIMUM
+    }
+}
+
+/** Plexamp-style Opus output tiers used only by Android local playback. */
+enum class LocalOpusBitrate(val id: String, val kbps: Int) {
+    KBPS_256("256", 256),
+    KBPS_192("192", 192),
+    KBPS_160("160", 160),
+    KBPS_128("128", 128),
+    KBPS_96("96", 96),
+    KBPS_64("64", 64);
+
+    val label: String get() = "$kbps kbps"
+
+    companion object {
+        val DEFAULT = KBPS_128
+        fun fromId(id: String?): LocalOpusBitrate = entries.firstOrNull { it.id == id } ?: DEFAULT
+    }
+}
+
+enum class LocalPrecacheCount(val id: String, val count: Int) {
+    OFF("0", 0), ONE("1", 1), TWO("2", 2), THREE("3", 3),
+    FIVE("5", 5), TEN("10", 10), FIFTEEN("15", 15);
+
+    val label: String get() = if (count == 0) "关闭" else "$count 首"
+
+    companion object {
+        val DEFAULT_WIFI = THREE
+        val DEFAULT_CELLULAR = ONE
+        fun fromId(id: String?): LocalPrecacheCount = entries.firstOrNull { it.id == id } ?: OFF
+    }
+}
+
+data class LocalPlaybackPolicy(
+    val streamingLimit: LocalStreamingLimit,
+    val opusBitrate: LocalOpusBitrate,
+    val precacheCount: LocalPrecacheCount,
+)
 
 /** Cap for the on-device audio cache, in megabytes. */
 enum class LocalCacheSize(val id: String, val megabytes: Int) {

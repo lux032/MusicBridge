@@ -2,7 +2,7 @@ package com.lux032.musicbridge.plex
 
 import android.os.Build
 import android.util.Base64
-import com.lux032.musicbridge.LocalStreamQuality
+import com.lux032.musicbridge.LocalPlaybackPolicy
 import com.lux032.musicbridge.OpusTranscodeMode
 import com.lux032.musicbridge.music.MusicSourceClient
 import kotlinx.coroutines.Dispatchers
@@ -63,6 +63,7 @@ data class PlexTrackStream(
     val artistName: String? = null,
     val thumbUrl: String? = null,
     val sourceAudioCodec: String? = null,
+    val sourceAudioBitrateKbps: Int? = null,
     val playbackMimeType: String? = null,
     val sourceId: String = "",
 )
@@ -317,6 +318,7 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient {
                     artistName = track.getAttribute("grandparentTitle").trim().ifBlank { null },
                     thumbUrl = track.trackThumbUrl(server.uri, accessToken),
                     sourceAudioCodec = sourceAudioCodec,
+                    sourceAudioBitrateKbps = track.firstAudioBitrateKbps(),
                     playbackMimeType = sourceAudioCodec.transcodedPlaybackMimeType(config.opusTranscodeMode),
                     sourceId = config.sourceId,
                 ))
@@ -642,6 +644,7 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient {
                         artistName = track.getAttribute("grandparentTitle").trim().ifBlank { null },
                         thumbUrl = track.trackThumbUrl(server.uri, accessToken),
                         sourceAudioCodec = sourceAudioCodec,
+                        sourceAudioBitrateKbps = track.firstAudioBitrateKbps(),
                         playbackMimeType = sourceAudioCodec.transcodedPlaybackMimeType(config.opusTranscodeMode),
                         sourceId = config.sourceId,
                     )
@@ -696,6 +699,7 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient {
                         artistName = track.getAttribute("grandparentTitle").trim().ifBlank { null },
                         thumbUrl = track.trackThumbUrl(server.uri, accessToken),
                         sourceAudioCodec = sourceAudioCodec,
+                        sourceAudioBitrateKbps = track.firstAudioBitrateKbps(),
                         playbackMimeType = sourceAudioCodec.transcodedPlaybackMimeType(config.opusTranscodeMode),
                         sourceId = config.sourceId,
                     )
@@ -1071,20 +1075,33 @@ internal fun PlexTrackStream.withOpusTranscodeMode(
 
 /**
  * Rewrites a Plex track's stream URL for on-device playback at the requested quality.
- * ORIGINAL plays the source file directly (ExoPlayer decodes opus/flac natively and seeks
- * via HTTP range). Bitrate tiers ask Plex for a universal transcode to MP3 — used to
- * save cellular data. Non-Plex sources (032) are returned unchanged for now.
+ * Sources at or below the selected network ceiling are played directly. Larger Plex files
+ * use an Ogg/Opus universal transcode at the independently selected Opus bitrate. Non-Plex
+ * sources (032) are returned unchanged for now.
  *
  * Note [streamUrl] is built for Sonos: opus tracks arrive as live-transcode URLs that
  * support neither ranges nor reuse. Those are normalized back to the direct file URL
  * first — on-device playback has no use for the Sonos opus workarounds.
  */
-internal fun PlexTrackStream.withLocalStreamQuality(
-    quality: LocalStreamQuality,
+internal fun PlexTrackStream.withLocalPlaybackPolicy(
+    policy: LocalPlaybackPolicy,
     clientIdentifier: String,
 ): PlexTrackStream {
     val direct = withDirectFileUrl()
-    val bitrateKbps = quality.maxAudioBitrateKbps ?: return direct
+    val limitKbps = policy.streamingLimit.maxSourceBitrateKbps
+    val sourceBitrate = direct.sourceAudioBitrateKbps
+    val isNativeOpusWithUnknownBitrate =
+        direct.sourceAudioCodec.equals("opus", ignoreCase = true) && sourceBitrate == null
+    val shouldTranscode = limitKbps != null &&
+        !isNativeOpusWithUnknownBitrate &&
+        (sourceBitrate == null || sourceBitrate > limitKbps)
+    android.util.Log.i(
+        "LocalPlaybackPolicy",
+        "codec=${direct.sourceAudioCodec.orEmpty()}, sourceKbps=${sourceBitrate ?: -1}, " +
+            "limitKbps=${limitKbps ?: -1}, transcode=$shouldTranscode",
+    )
+    if (!shouldTranscode) return direct
+    val bitrateKbps = policy.opusBitrate.kbps
     // Direct file URLs look like "<server>/library/parts/<id>/<ts>/file.ext?X-Plex-Token=...".
     val baseUrl = direct.streamUrl.substringBefore('?')
     if (!baseUrl.contains("/library/parts")) return direct
@@ -1097,10 +1114,10 @@ internal fun PlexTrackStream.withLocalStreamQuality(
     if (serverUri.isBlank() || token.isBlank()) return direct
 
     val profile =
-        "add-transcode-target(type=musicProfile&context=streaming&protocol=http&container=mp3&audioCodec=mp3&maxAudioBitrate=$bitrateKbps&replace=true)"
+        "add-transcode-target(type=musicProfile&context=streaming&protocol=http&container=ogg&audioCodec=opus&maxAudioBitrate=$bitrateKbps&replace=true)"
     val transcodedUrl = buildPlexUrl(
         serverUri = serverUri,
-        path = "/music/:/transcode/universal/start.mp3",
+        path = "/music/:/transcode/universal/start.ogg",
         queryParameters = listOf(
             "path" to "/library/metadata/$ratingKey",
             "mediaIndex" to "0",
@@ -1110,7 +1127,7 @@ internal fun PlexTrackStream.withLocalStreamQuality(
             "directPlay" to "0",
             "directStream" to "0",
             "directStreamAudio" to "0",
-            "audioCodec" to "mp3",
+            "audioCodec" to "opus",
             "maxAudioBitrate" to bitrateKbps.toString(),
             "audioChannelCount" to "2",
             "location" to "lan",
@@ -1124,7 +1141,7 @@ internal fun PlexTrackStream.withLocalStreamQuality(
             "X-Plex-Token" to token,
         ),
     )
-    return direct.copy(streamUrl = transcodedUrl, playbackMimeType = "audio/mpeg")
+    return direct.copy(streamUrl = transcodedUrl, playbackMimeType = "audio/ogg")
 }
 
 /**
@@ -1231,6 +1248,23 @@ private fun Element.firstAudioCodec(): String? {
     return null
 }
 
+private fun Element.firstAudioBitrateKbps(): Int? {
+    val mediaNodes = getElementsByTagName("Media")
+    for (index in 0 until mediaNodes.length) {
+        val media = mediaNodes.item(index) as? Element ?: continue
+        media.getAttribute("bitrate").trim().toIntOrNull()?.let { return it }
+    }
+    val durationMillis = getAttribute("duration").trim().toLongOrNull()?.takeIf { it > 0L }
+        ?: return null
+    val partNodes = getElementsByTagName("Part")
+    for (index in 0 until partNodes.length) {
+        val part = partNodes.item(index) as? Element ?: continue
+        val sizeBytes = part.getAttribute("size").trim().toLongOrNull()?.takeIf { it > 0L } ?: continue
+        return ((sizeBytes * 8L) / durationMillis).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+    }
+    return null
+}
+
 private fun Element.trackThumbUrl(serverUri: String, token: String): String? {
     val mediaPath = getAttribute("thumb")
         .trim()
@@ -1280,6 +1314,7 @@ private fun org.w3c.dom.NodeList.toTrackStreams(
                     artistName = track.getAttribute("grandparentTitle").trim().ifBlank { null },
                     thumbUrl = track.trackThumbUrl(serverUri, token),
                     sourceAudioCodec = sourceAudioCodec,
+                    sourceAudioBitrateKbps = track.firstAudioBitrateKbps(),
                     playbackMimeType = sourceAudioCodec.transcodedPlaybackMimeType(opusMode),
                     sourceId = sourceId,
                 )
@@ -1338,6 +1373,12 @@ private fun parseFavoriteTracksJson(
                     artistName = track.optString("grandparentTitle").trim().ifBlank { null },
                     thumbUrl = track.optTrackThumbUrl(serverUri, token),
                     sourceAudioCodec = sourceAudioCodec,
+                    sourceAudioBitrateKbps = media.optInt("bitrate").takeIf { it > 0 }
+                        ?: part.optLong("size").takeIf { it > 0L }?.let { sizeBytes ->
+                            track.optLongOrNull("duration")?.takeIf { it > 0L }?.let { durationMillis ->
+                                ((sizeBytes * 8L) / durationMillis).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+                            }
+                        },
                     playbackMimeType = sourceAudioCodec.transcodedPlaybackMimeType(opusMode),
                     sourceId = sourceId,
                 )

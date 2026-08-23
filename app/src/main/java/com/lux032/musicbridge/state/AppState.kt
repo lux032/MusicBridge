@@ -63,9 +63,15 @@ class AppState(
     val selectedSonosRoom: SonosRoom?
         get() = (selectedPlaybackTarget as? PlaybackTarget.Sonos)?.room
 
-    var wifiStreamQuality by mutableStateOf(appPreferences.loadLocalStreamQuality(wifi = true))
+    var wifiStreamingLimit by mutableStateOf(appPreferences.loadLocalStreamingLimit(wifi = true))
         private set
-    var cellularStreamQuality by mutableStateOf(appPreferences.loadLocalStreamQuality(wifi = false))
+    var cellularStreamingLimit by mutableStateOf(appPreferences.loadLocalStreamingLimit(wifi = false))
+        private set
+    var localOpusBitrate by mutableStateOf(appPreferences.loadLocalOpusBitrate())
+        private set
+    var wifiPrecacheCount by mutableStateOf(appPreferences.loadLocalPrecacheCount(wifi = true))
+        private set
+    var cellularPrecacheCount by mutableStateOf(appPreferences.loadLocalPrecacheCount(wifi = false))
         private set
     var localCacheSize by mutableStateOf(appPreferences.loadLocalCacheSize())
         private set
@@ -268,10 +274,22 @@ class AppState(
         appPreferences.savePlaybackTarget(target)
     }
 
-    fun updateLocalStreamQuality(wifi: Boolean, quality: LocalStreamQuality) {
-        if (wifi) wifiStreamQuality = quality else cellularStreamQuality = quality
-        appPreferences.saveLocalStreamQuality(wifi, quality)
-        actionMessage = "已更新${if (wifi) "WiFi" else "蜂窝网络"}音质：${quality.label}"
+    fun updateLocalStreamingLimit(wifi: Boolean, limit: LocalStreamingLimit) {
+        if (wifi) wifiStreamingLimit = limit else cellularStreamingLimit = limit
+        appPreferences.saveLocalStreamingLimit(wifi, limit)
+        actionMessage = "已更新${if (wifi) "WiFi" else "蜂窝网络"}流媒体上限：${limit.label}"
+    }
+
+    fun updateLocalOpusBitrate(bitrate: LocalOpusBitrate) {
+        localOpusBitrate = bitrate
+        appPreferences.saveLocalOpusBitrate(bitrate)
+        actionMessage = "本机转码已设为 Opus ${bitrate.label}"
+    }
+
+    fun updateLocalPrecacheCount(wifi: Boolean, count: LocalPrecacheCount) {
+        if (wifi) wifiPrecacheCount = count else cellularPrecacheCount = count
+        appPreferences.saveLocalPrecacheCount(wifi, count)
+        actionMessage = "已更新${if (wifi) "WiFi" else "蜂窝网络"}预缓存：${count.label}"
     }
 
     fun updateLocalCacheSize(size: LocalCacheSize) {
@@ -303,9 +321,15 @@ class AppState(
         appPreferences.saveAlbumDecadeFilter(filter)
     }
 
-    /** Quality applied to new local playback URLs, based on the current network. */
-    internal fun currentLocalStreamQuality(): LocalStreamQuality =
-        if (networkQualityMonitor.currentIsWifi()) wifiStreamQuality else cellularStreamQuality
+    /** Policy captured when a local queue is built; Sonos never reads these settings. */
+    internal fun currentLocalPlaybackPolicy(): LocalPlaybackPolicy {
+        val wifi = networkQualityMonitor.currentIsWifi()
+        return LocalPlaybackPolicy(
+            streamingLimit = if (wifi) wifiStreamingLimit else cellularStreamingLimit,
+            opusBitrate = localOpusBitrate,
+            precacheCount = if (wifi) wifiPrecacheCount else cellularPrecacheCount,
+        )
+    }
 
     internal fun clientFor(sourceId: String): MusicSourceClient =
         client(

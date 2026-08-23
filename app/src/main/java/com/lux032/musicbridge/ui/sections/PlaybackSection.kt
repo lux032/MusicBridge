@@ -347,6 +347,7 @@ internal fun PlaybackDetailSection(
             Spacer(modifier = Modifier.width(if (compact) 20.dp else 32.dp))
             GlowPlayerControlButton(
                 icon = if (currentState.isPaused) PlayerIcon.Play else PlayerIcon.Pause,
+                isLoading = currentState.isBuffering,
                 onClick = { onTogglePause(currentState) },
                 // Always tappable, like the mini player's button — gating play/pause on an
                 // in-flight network command made the button silently dead for seconds.
@@ -1138,6 +1139,7 @@ private fun PlaybackActionButton(
 @Composable
 private fun GlowPlayerControlButton(
     icon: PlayerIcon,
+    isLoading: Boolean = false,
     onClick: () -> Unit,
     enabled: Boolean,
     accent: Color,
@@ -1207,18 +1209,26 @@ private fun GlowPlayerControlButton(
                     )
                 )
                 .clickable(
-                    enabled = enabled,
+                    enabled = enabled && !isLoading,
                     interactionSource = interactionSource,
                     indication = ripple(bounded = true),
                     onClick = onClick,
                 ),
             contentAlignment = Alignment.Center,
         ) {
-            PlayerIconGraphic(
-                icon = icon,
-                tint = onAccent.copy(alpha = if (enabled) 1f else 0.35f),
-                modifier = Modifier.size(iconSize),
-            )
+            if (isLoading) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(iconSize),
+                    color = onAccent,
+                    strokeWidth = 2.5.dp,
+                )
+            } else {
+                PlayerIconGraphic(
+                    icon = icon,
+                    tint = onAccent.copy(alpha = if (enabled) 1f else 0.35f),
+                    modifier = Modifier.size(iconSize),
+                )
+            }
         }
     }
 }
@@ -1792,8 +1802,9 @@ internal fun BottomMiniPlayer(
                 }
                 PlayerControlButton(
                     icon = if (state.isPaused) PlayerIcon.Play else PlayerIcon.Pause,
+                    isLoading = state.isBuffering,
                     onClick = onTogglePause,
-                    enabled = !isPlayerOpen,
+                    enabled = !isPlayerOpen && !state.isBuffering,
                     highlighted = true,
                     sizeOverride = 54.dp,
                     iconSizeOverride = 24.dp,
@@ -1824,6 +1835,7 @@ internal fun BottomMiniPlayer(
 @Composable
 internal fun PlayerControlButton(
     icon: PlayerIcon,
+    isLoading: Boolean = false,
     onClick: () -> Unit,
     enabled: Boolean,
     highlighted: Boolean = false,
@@ -1855,7 +1867,7 @@ internal fun PlayerControlButton(
                 scaleY = scale
             }
             .clickable(
-                enabled = enabled,
+                enabled = enabled && !isLoading,
                 interactionSource = interactionSource,
                 indication = ripple(bounded = true),
                 onClick = onClick,
@@ -1866,11 +1878,19 @@ internal fun PlayerControlButton(
         shadowElevation = if (highlighted) 2.dp else 0.dp,
     ) {
         Box(contentAlignment = Alignment.Center) {
-            PlayerIconGraphic(
-                icon = icon,
-                tint = contentColor.copy(alpha = if (enabled) 1f else 0.35f),
-                modifier = Modifier.size(iconSize),
-            )
+            if (isLoading) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(iconSize),
+                    color = contentColor,
+                    strokeWidth = 2.5.dp,
+                )
+            } else {
+                PlayerIconGraphic(
+                    icon = icon,
+                    tint = contentColor.copy(alpha = if (enabled) 1f else 0.35f),
+                    modifier = Modifier.size(iconSize),
+                )
+            }
         }
     }
 }
@@ -1880,13 +1900,19 @@ internal fun SettingsSection(
     serverProfiles: List<MusicServerProfile>,
     activeServerId: String,
     opusTranscodeMode: OpusTranscodeMode = OpusTranscodeMode.DEFAULT,
-    wifiQuality: LocalStreamQuality,
-    cellularQuality: LocalStreamQuality,
+    wifiQuality: LocalStreamingLimit,
+    cellularQuality: LocalStreamingLimit,
+    localOpusBitrate: LocalOpusBitrate,
+    wifiPrecacheCount: LocalPrecacheCount,
+    cellularPrecacheCount: LocalPrecacheCount,
     localCacheSize: LocalCacheSize,
     localCacheUsedBytes: Long,
     onOpusTranscodeModeChange: (OpusTranscodeMode) -> Unit = {},
-    onWifiQualityChange: (LocalStreamQuality) -> Unit,
-    onCellularQualityChange: (LocalStreamQuality) -> Unit,
+    onWifiQualityChange: (LocalStreamingLimit) -> Unit,
+    onCellularQualityChange: (LocalStreamingLimit) -> Unit,
+    onLocalOpusBitrateChange: (LocalOpusBitrate) -> Unit,
+    onWifiPrecacheCountChange: (LocalPrecacheCount) -> Unit,
+    onCellularPrecacheCountChange: (LocalPrecacheCount) -> Unit,
     onLocalCacheSizeChange: (LocalCacheSize) -> Unit,
     onClearLocalCache: () -> Unit,
     onSaveServer: (MusicServerProfile, Boolean) -> Unit,
@@ -2102,10 +2128,16 @@ internal fun SettingsSection(
         LocalPlaybackSettingsCard(
             wifiQuality = wifiQuality,
             cellularQuality = cellularQuality,
+            localOpusBitrate = localOpusBitrate,
+            wifiPrecacheCount = wifiPrecacheCount,
+            cellularPrecacheCount = cellularPrecacheCount,
             localCacheSize = localCacheSize,
             localCacheUsedBytes = localCacheUsedBytes,
             onWifiQualityChange = onWifiQualityChange,
             onCellularQualityChange = onCellularQualityChange,
+            onLocalOpusBitrateChange = onLocalOpusBitrateChange,
+            onWifiPrecacheCountChange = onWifiPrecacheCountChange,
+            onCellularPrecacheCountChange = onCellularPrecacheCountChange,
             onLocalCacheSizeChange = onLocalCacheSizeChange,
             onClearLocalCache = onClearLocalCache,
         )
@@ -2119,17 +2151,25 @@ internal fun SettingsSection(
 
 @Composable
 internal fun LocalPlaybackSettingsCard(
-    wifiQuality: LocalStreamQuality,
-    cellularQuality: LocalStreamQuality,
+    wifiQuality: LocalStreamingLimit,
+    cellularQuality: LocalStreamingLimit,
+    localOpusBitrate: LocalOpusBitrate,
+    wifiPrecacheCount: LocalPrecacheCount,
+    cellularPrecacheCount: LocalPrecacheCount,
     localCacheSize: LocalCacheSize,
     localCacheUsedBytes: Long,
-    onWifiQualityChange: (LocalStreamQuality) -> Unit,
-    onCellularQualityChange: (LocalStreamQuality) -> Unit,
+    onWifiQualityChange: (LocalStreamingLimit) -> Unit,
+    onCellularQualityChange: (LocalStreamingLimit) -> Unit,
+    onLocalOpusBitrateChange: (LocalOpusBitrate) -> Unit,
+    onWifiPrecacheCountChange: (LocalPrecacheCount) -> Unit,
+    onCellularPrecacheCountChange: (LocalPrecacheCount) -> Unit,
     onLocalCacheSizeChange: (LocalCacheSize) -> Unit,
     onClearLocalCache: () -> Unit,
 ) {
     // true = editing the WiFi quality, false = cellular.
     var qualityPickerTarget by remember { mutableStateOf<Boolean?>(null) }
+    var isOpusBitrateDialogVisible by remember { mutableStateOf(false) }
+    var precachePickerTarget by remember { mutableStateOf<Boolean?>(null) }
     var isCacheSizeDialogVisible by remember { mutableStateOf(false) }
 
     Surface(
@@ -2163,6 +2203,21 @@ internal fun LocalPlaybackSettingsCard(
                 title = Strings.cellularQualityTitle,
                 value = cellularQuality.label,
                 onClick = { qualityPickerTarget = false },
+            )
+            SettingsValueRow(
+                title = Strings.localOpusBitrateTitle,
+                value = localOpusBitrate.label,
+                onClick = { isOpusBitrateDialogVisible = true },
+            )
+            SettingsValueRow(
+                title = Strings.wifiPrecacheTitle,
+                value = wifiPrecacheCount.label,
+                onClick = { precachePickerTarget = true },
+            )
+            SettingsValueRow(
+                title = Strings.cellularPrecacheTitle,
+                value = cellularPrecacheCount.label,
+                onClick = { precachePickerTarget = false },
             )
             HorizontalDivider(color = AppColors.Border, modifier = Modifier.padding(vertical = 4.dp))
             SettingsValueRow(
@@ -2213,7 +2268,7 @@ internal fun LocalPlaybackSettingsCard(
             },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    LocalStreamQuality.entries.forEach { quality ->
+                    LocalStreamingLimit.entries.forEach { quality ->
                         val isSelected = quality == currentQuality
                         Surface(
                             modifier = Modifier
@@ -2248,6 +2303,34 @@ internal fun LocalPlaybackSettingsCard(
                         }
                     }
                 }
+            },
+        )
+    }
+
+    if (isOpusBitrateDialogVisible) {
+        LocalPlaybackOptionDialog(
+            title = Strings.localOpusBitrateTitle,
+            values = LocalOpusBitrate.entries,
+            selected = localOpusBitrate,
+            label = LocalOpusBitrate::label,
+            onDismiss = { isOpusBitrateDialogVisible = false },
+            onSelect = {
+                isOpusBitrateDialogVisible = false
+                onLocalOpusBitrateChange(it)
+            },
+        )
+    }
+
+    precachePickerTarget?.let { isWifi ->
+        LocalPlaybackOptionDialog(
+            title = if (isWifi) Strings.wifiPrecacheTitle else Strings.cellularPrecacheTitle,
+            values = LocalPrecacheCount.entries,
+            selected = if (isWifi) wifiPrecacheCount else cellularPrecacheCount,
+            label = LocalPrecacheCount::label,
+            onDismiss = { precachePickerTarget = null },
+            onSelect = {
+                precachePickerTarget = null
+                if (isWifi) onWifiPrecacheCountChange(it) else onCellularPrecacheCountChange(it)
             },
         )
     }
@@ -2303,6 +2386,44 @@ internal fun LocalPlaybackSettingsCard(
             },
         )
     }
+}
+
+@Composable
+private fun <T> LocalPlaybackOptionDialog(
+    title: String,
+    values: List<T>,
+    selected: T,
+    label: (T) -> String,
+    onDismiss: () -> Unit,
+    onSelect: (T) -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {},
+        title = { Text(title, color = AppColors.TextPrimary, fontWeight = FontWeight.Bold) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                values.forEach { value ->
+                    val isSelected = value == selected
+                    Surface(
+                        modifier = Modifier.fillMaxWidth().selectable(isSelected) { onSelect(value) },
+                        shape = RoundedCornerShape(14.dp),
+                        color = if (isSelected) AppColors.CardSurfaceStrong else AppColors.CardSurface,
+                        border = BorderStroke(1.dp, if (isSelected) LocalArtworkPalette.current.accent else AppColors.Border),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(label(value), color = AppColors.TextPrimary)
+                            if (isSelected) Icon(Icons.Filled.Check, contentDescription = null, tint = LocalArtworkPalette.current.accent)
+                        }
+                    }
+                }
+            }
+        },
+    )
 }
 
 @Composable

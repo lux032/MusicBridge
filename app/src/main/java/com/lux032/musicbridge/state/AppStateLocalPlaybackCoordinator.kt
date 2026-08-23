@@ -5,10 +5,11 @@ import com.lux032.musicbridge.local.LocalPlaybackService
 import com.lux032.musicbridge.local.LocalQueueItem
 import com.lux032.musicbridge.plex.PlexAlbum
 import com.lux032.musicbridge.plex.PlexTrackStream
-import com.lux032.musicbridge.plex.withLocalStreamQuality
+import com.lux032.musicbridge.plex.withLocalPlaybackPolicy
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.security.MessageDigest
 
 /**
  * Drives on-device playback through [LocalPlaybackEngine]. Mirrors the Sonos side of
@@ -31,6 +32,7 @@ internal class AppStateLocalPlaybackCoordinator(
                     val track = current.tracks.getOrNull(index) ?: return@launch
                     state.miniPlayerState = current.copy(
                         currentIndex = index,
+                        isBuffering = state.localPlaybackEngine.isBuffering,
                         currentPositionMillis = 0L,
                         durationMillis = track.durationMillis,
                     )
@@ -42,8 +44,26 @@ internal class AppStateLocalPlaybackCoordinator(
                 state.scope.launch {
                     val current = state.miniPlayerState ?: return@launch
                     if (current.target != PlaybackTarget.LocalDevice) return@launch
-                    if (current.isPaused == !isPlaying) return@launch
-                    state.miniPlayerState = current.copy(isPaused = !isPlaying)
+                    val engine = state.localPlaybackEngine
+                    val paused = !engine.isPlayRequested
+                    if (current.isPaused == paused && current.isBuffering == engine.isBuffering) return@launch
+                    state.miniPlayerState = current.copy(
+                        isPaused = paused,
+                        isBuffering = engine.isBuffering,
+                    )
+                }
+            }
+
+            override fun onBufferingChanged(isBuffering: Boolean) {
+                state.scope.launch {
+                    val current = state.miniPlayerState ?: return@launch
+                    if (current.target != PlaybackTarget.LocalDevice) return@launch
+                    val paused = !state.localPlaybackEngine.isPlayRequested
+                    if (current.isPaused == paused && current.isBuffering == isBuffering) return@launch
+                    state.miniPlayerState = current.copy(
+                        isPaused = paused,
+                        isBuffering = isBuffering,
+                    )
                 }
             }
 
@@ -52,7 +72,11 @@ internal class AppStateLocalPlaybackCoordinator(
                     val current = state.miniPlayerState ?: return@launch
                     if (current.target != PlaybackTarget.LocalDevice) return@launch
                     state.localPlaybackEngine.rewindToStartAndPause()
-                    state.miniPlayerState = current.copy(isPaused = true, currentPositionMillis = 0L)
+                    state.miniPlayerState = current.copy(
+                        isPaused = true,
+                        isBuffering = false,
+                        currentPositionMillis = 0L,
+                    )
                     state.actionMessage = "播放结束：${current.album.title}"
                 }
             }
@@ -60,6 +84,7 @@ internal class AppStateLocalPlaybackCoordinator(
             override fun onPlayerError(message: String) {
                 state.scope.launch {
                     if (state.miniPlayerState?.target != PlaybackTarget.LocalDevice) return@launch
+                    state.miniPlayerState = state.miniPlayerState?.copy(isBuffering = false)
                     state.errorMessage = message
                 }
             }
@@ -87,6 +112,7 @@ internal class AppStateLocalPlaybackCoordinator(
             currentIndex = safeIndex,
             target = PlaybackTarget.LocalDevice,
             isPaused = false,
+            isBuffering = true,
             currentPositionMillis = initialPositionMillis.coerceAtLeast(0L),
             durationMillis = tracks.getOrNull(safeIndex)?.durationMillis,
         )
@@ -108,33 +134,47 @@ internal class AppStateLocalPlaybackCoordinator(
         startIndex: Int,
         startPositionMillis: Long,
     ) {
-        val quality = state.currentLocalStreamQuality()
+        val policy = state.currentLocalPlaybackPolicy()
         val engine = state.localPlaybackEngine
         engine.setPlaybackMode(state.playbackMode)
         engine.setQueue(
-            tracks.map { it.toLocalQueueItem(quality) },
+            tracks.map { it.toLocalQueueItem(policy) },
             startIndex,
             startPositionMillis,
+            policy.precacheCount.count,
         )
     }
 
-    private fun PlexTrackStream.toLocalQueueItem(quality: LocalStreamQuality): LocalQueueItem {
-        val effective = withLocalStreamQuality(quality, state.plexClientIdentifier)
+    private fun PlexTrackStream.toLocalQueueItem(policy: LocalPlaybackPolicy): LocalQueueItem {
+        val effective = withLocalPlaybackPolicy(policy, state.plexClientIdentifier)
+        val isTranscoded = effective.streamUrl.contains("/:/transcode/universal/start", ignoreCase = true)
+        val outputIdentity = if (isTranscoded) {
+            "opus:${policy.opusBitrate.kbps}"
+        } else {
+            "original"
+        }
+        val stableIdentity = listOf(sourceId, ratingKey, partKey, outputIdentity).joinToString("|")
+        val cacheKey = MessageDigest.getInstance("SHA-256")
+            .digest(stableIdentity.toByteArray(Charsets.UTF_8))
+            .joinToString("") { byte -> "%02x".format(byte) }
         return LocalQueueItem(
             url = effective.streamUrl,
+            cacheKey = "local:$cacheKey",
+            isTranscoded = isTranscoded,
             title = effective.title,
             artist = effective.artistName,
             artworkUrl = effective.thumbUrl,
+            durationMillis = effective.durationMillis,
         )
     }
 
     /** Inserts tracks into the live engine queue so its indices stay aligned with
      *  [MiniPlayerState.tracks] after an enqueue. */
     fun insertIntoLocalQueue(insertIndex: Int, tracks: List<PlexTrackStream>) {
-        val quality = state.currentLocalStreamQuality()
+        val policy = state.currentLocalPlaybackPolicy()
         state.localPlaybackEngine.insertQueueItems(
             insertIndex,
-            tracks.map { it.toLocalQueueItem(quality) },
+            tracks.map { it.toLocalQueueItem(policy) },
         )
     }
 
@@ -142,7 +182,7 @@ internal class AppStateLocalPlaybackCoordinator(
         val engine = state.localPlaybackEngine
         if (engine.isPlaying) {
             engine.pause()
-            state.miniPlayerState = state.miniPlayerState?.copy(isPaused = true)
+            state.miniPlayerState = state.miniPlayerState?.copy(isPaused = true, isBuffering = false)
             state.actionMessage = "已暂停播放"
         } else {
             // ExoPlayer ignores play() once the queue ran to STATE_ENDED — restart the
@@ -152,7 +192,10 @@ internal class AppStateLocalPlaybackCoordinator(
             } else {
                 engine.resume()
             }
-            state.miniPlayerState = state.miniPlayerState?.copy(isPaused = false)
+            state.miniPlayerState = state.miniPlayerState?.copy(
+                isPaused = false,
+                isBuffering = engine.isBuffering,
+            )
             state.actionMessage = "已继续播放"
         }
     }
@@ -160,11 +203,11 @@ internal class AppStateLocalPlaybackCoordinator(
     fun seekLocal(playerState: MiniPlayerState, positionMillis: Long) {
         val durationMillis = playerState.durationMillis?.takeIf { it > 0L } ?: Long.MAX_VALUE
         val targetMillis = positionMillis.coerceIn(0L, durationMillis)
-        state.localPlaybackEngine.seekTo(targetMillis)
+        val effectiveTargetMillis = state.localPlaybackEngine.seekTo(targetMillis)
         state.miniPlayerState = state.miniPlayerState
             ?.takeIf { it.target == PlaybackTarget.LocalDevice }
-            ?.copy(currentPositionMillis = targetMillis)
-        state.actionMessage = "已跳转到 ${formatDuration(targetMillis)}"
+            ?.copy(currentPositionMillis = effectiveTargetMillis)
+        state.actionMessage = "已跳转到 ${formatDuration(effectiveTargetMillis)}"
     }
 
     /**
@@ -180,6 +223,7 @@ internal class AppStateLocalPlaybackCoordinator(
         state.miniPlayerState = playerState.copy(
             currentIndex = newIndex,
             isPaused = false,
+            isBuffering = state.localPlaybackEngine.isBuffering,
             currentPositionMillis = 0L,
             durationMillis = track.durationMillis,
         )
@@ -193,6 +237,7 @@ internal class AppStateLocalPlaybackCoordinator(
         state.miniPlayerState = playerState.copy(
             currentIndex = safeIndex,
             isPaused = false,
+            isBuffering = state.localPlaybackEngine.isBuffering,
             currentPositionMillis = positionMillis.coerceAtLeast(0L),
             durationMillis = track.durationMillis,
         )
@@ -225,7 +270,8 @@ internal class AppStateLocalPlaybackCoordinator(
                     val track = current.tracks.getOrNull(index) ?: break
                     val positionMillis = engine.currentPositionMillis
                     val durationMillis = engine.durationMillis ?: track.durationMillis
-                    val isPaused = !engine.isPlaying
+                    val isPaused = !engine.isPlayRequested
+                    val isBuffering = engine.isBuffering
                     val playbackState = when {
                         engine.isEnded -> "stopped"
                         isPaused -> "paused"
@@ -235,6 +281,7 @@ internal class AppStateLocalPlaybackCoordinator(
                     state.miniPlayerState = current.copy(
                         currentIndex = index,
                         isPaused = isPaused && !engine.isEnded,
+                        isBuffering = isBuffering,
                         currentPositionMillis = positionMillis,
                         durationMillis = durationMillis,
                     )

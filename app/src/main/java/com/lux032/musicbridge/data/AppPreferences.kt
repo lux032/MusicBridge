@@ -269,6 +269,46 @@ class AppPreferences(context: Context) {
         }
     }
 
+    fun loadLocalStreamingLimit(wifi: Boolean): LocalStreamingLimit {
+        val key = if (wifi) KEY_LOCAL_STREAMING_LIMIT_WIFI else KEY_LOCAL_STREAMING_LIMIT_CELLULAR
+        sharedPreferences.getString(key, null)?.let { return LocalStreamingLimit.fromId(it) }
+        // Preserve the meaning of v1 settings on upgrade.
+        val legacyKey = if (wifi) KEY_LOCAL_QUALITY_WIFI else KEY_LOCAL_QUALITY_CELLULAR
+        return when (sharedPreferences.getString(legacyKey, null)?.let(LocalStreamQuality::fromId)) {
+            LocalStreamQuality.ORIGINAL -> LocalStreamingLimit.MAXIMUM
+            LocalStreamQuality.HIGH_320 -> LocalStreamingLimit.KBPS_320
+            LocalStreamQuality.MEDIUM_192 -> LocalStreamingLimit.KBPS_192
+            LocalStreamQuality.LOW_128 -> LocalStreamingLimit.KBPS_128
+            null -> if (wifi) LocalStreamingLimit.DEFAULT_WIFI else LocalStreamingLimit.DEFAULT_CELLULAR
+        }
+    }
+
+    fun saveLocalStreamingLimit(wifi: Boolean, limit: LocalStreamingLimit) {
+        sharedPreferences.edit {
+            putString(if (wifi) KEY_LOCAL_STREAMING_LIMIT_WIFI else KEY_LOCAL_STREAMING_LIMIT_CELLULAR, limit.id)
+        }
+    }
+
+    fun loadLocalOpusBitrate(): LocalOpusBitrate =
+        LocalOpusBitrate.fromId(sharedPreferences.getString(KEY_LOCAL_OPUS_BITRATE, null))
+
+    fun saveLocalOpusBitrate(bitrate: LocalOpusBitrate) {
+        sharedPreferences.edit { putString(KEY_LOCAL_OPUS_BITRATE, bitrate.id) }
+    }
+
+    fun loadLocalPrecacheCount(wifi: Boolean): LocalPrecacheCount {
+        val key = if (wifi) KEY_LOCAL_PRECACHE_WIFI else KEY_LOCAL_PRECACHE_CELLULAR
+        val stored = sharedPreferences.getString(key, null)
+        return stored?.let(LocalPrecacheCount::fromId)
+            ?: if (wifi) LocalPrecacheCount.DEFAULT_WIFI else LocalPrecacheCount.DEFAULT_CELLULAR
+    }
+
+    fun saveLocalPrecacheCount(wifi: Boolean, count: LocalPrecacheCount) {
+        sharedPreferences.edit {
+            putString(if (wifi) KEY_LOCAL_PRECACHE_WIFI else KEY_LOCAL_PRECACHE_CELLULAR, count.id)
+        }
+    }
+
     fun loadLocalCacheSize(): LocalCacheSize =
         LocalCacheSize.fromId(sharedPreferences.getString(KEY_LOCAL_CACHE_SIZE, null))
 
@@ -345,6 +385,11 @@ class AppPreferences(context: Context) {
         private const val KEY_LOCAL_QUALITY_WIFI = "local_stream_quality_wifi_v1"
         private const val KEY_LOCAL_QUALITY_CELLULAR = "local_stream_quality_cellular_v1"
         private const val KEY_LOCAL_CACHE_SIZE = "local_cache_size_v1"
+        private const val KEY_LOCAL_STREAMING_LIMIT_WIFI = "local_streaming_limit_wifi_v2"
+        private const val KEY_LOCAL_STREAMING_LIMIT_CELLULAR = "local_streaming_limit_cellular_v2"
+        private const val KEY_LOCAL_OPUS_BITRATE = "local_opus_bitrate_v1"
+        private const val KEY_LOCAL_PRECACHE_WIFI = "local_precache_wifi_v1"
+        private const val KEY_LOCAL_PRECACHE_CELLULAR = "local_precache_cellular_v1"
         private const val KEY_ALBUM_SORT_OPTION = "album_sort_option_v1"
         private const val KEY_ALBUM_FAVORITES_ONLY = "album_favorites_only_v1"
         private const val KEY_ALBUM_DECADE_FILTER = "album_decade_filter_v1"
