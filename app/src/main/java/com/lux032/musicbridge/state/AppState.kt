@@ -56,7 +56,8 @@ class AppState(
 
     var opusTranscodeMode by mutableStateOf(appPreferences.getOpusTranscodeMode())
 
-    var selectedPlaybackTarget by mutableStateOf(appPreferences.loadPlaybackTarget())
+    // Output selection is intentionally session-only: every new app process starts locally.
+    var selectedPlaybackTarget by mutableStateOf<PlaybackTarget>(PlaybackTarget.LocalDevice)
         private set
 
     /** The Sonos room currently targeted, if any — convenience for Sonos-only UI/logic. */
@@ -271,7 +272,6 @@ class AppState(
 
     fun selectPlaybackTarget(target: PlaybackTarget) {
         selectedPlaybackTarget = target
-        appPreferences.savePlaybackTarget(target)
     }
 
     fun updateLocalStreamingLimit(wifi: Boolean, limit: LocalStreamingLimit) {

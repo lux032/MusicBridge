@@ -2,7 +2,6 @@ package com.lux032.musicbridge
 
 import android.content.Context
 import androidx.core.content.edit
-import com.lux032.musicbridge.sonos.SonosRoom
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
@@ -207,54 +206,6 @@ class AppPreferences(context: Context) {
         }
     }
 
-    /** Last selected output. Sonos rooms are persisted by value so the choice survives
-     *  process death even before the next SSDP discovery round. */
-    fun loadPlaybackTarget(): PlaybackTarget {
-        if (sharedPreferences.getString(KEY_PLAYBACK_TARGET_TYPE, TARGET_LOCAL) != TARGET_SONOS) {
-            return PlaybackTarget.LocalDevice
-        }
-        val roomName = sharedPreferences.getString(KEY_TARGET_ROOM_NAME, "").orEmpty()
-        val roomUuid = sharedPreferences.getString(KEY_TARGET_ROOM_UUID, "").orEmpty()
-        val roomBaseUrl = sharedPreferences.getString(KEY_TARGET_ROOM_BASE_URL, "").orEmpty()
-        if (roomName.isBlank() || roomUuid.isBlank() || roomBaseUrl.isBlank()) {
-            return PlaybackTarget.LocalDevice
-        }
-        return PlaybackTarget.Sonos(
-            SonosRoom(
-                roomName = roomName,
-                coordinatorUuid = roomUuid,
-                coordinatorBaseUrl = roomBaseUrl,
-                memberCount = sharedPreferences.getInt(KEY_TARGET_ROOM_MEMBER_COUNT, 1).coerceAtLeast(1),
-                rawCoordinatorName = sharedPreferences.getString(KEY_TARGET_ROOM_RAW_NAME, "").orEmpty()
-                    .ifBlank { roomName },
-                memberBaseUrls = sharedPreferences.getString(KEY_TARGET_ROOM_MEMBER_URLS, "").orEmpty()
-                    .split(ROOM_URL_SEPARATOR)
-                    .map(String::trim)
-                    .filter(String::isNotBlank),
-            )
-        )
-    }
-
-    fun savePlaybackTarget(target: PlaybackTarget) {
-        sharedPreferences.edit {
-            when (target) {
-                PlaybackTarget.LocalDevice -> putString(KEY_PLAYBACK_TARGET_TYPE, TARGET_LOCAL)
-                is PlaybackTarget.Sonos -> {
-                    putString(KEY_PLAYBACK_TARGET_TYPE, TARGET_SONOS)
-                    putString(KEY_TARGET_ROOM_NAME, target.room.roomName)
-                    putString(KEY_TARGET_ROOM_UUID, target.room.coordinatorUuid)
-                    putString(KEY_TARGET_ROOM_BASE_URL, target.room.coordinatorBaseUrl)
-                    putInt(KEY_TARGET_ROOM_MEMBER_COUNT, target.room.memberCount)
-                    putString(KEY_TARGET_ROOM_RAW_NAME, target.room.rawCoordinatorName)
-                    putString(
-                        KEY_TARGET_ROOM_MEMBER_URLS,
-                        target.room.memberBaseUrls.joinToString(ROOM_URL_SEPARATOR),
-                    )
-                }
-            }
-        }
-    }
-
     fun loadLocalStreamQuality(wifi: Boolean): LocalStreamQuality {
         val stored = sharedPreferences.getString(
             if (wifi) KEY_LOCAL_QUALITY_WIFI else KEY_LOCAL_QUALITY_CELLULAR, null,
@@ -375,13 +326,6 @@ class AppPreferences(context: Context) {
         private const val KEY_PLEX_CLIENT_IDENTIFIER = "plex_client_identifier_v1"
         private const val KEY_RECENT_PLAYED_ALBUM_KEYS = "recent_played_album_keys"
         private const val KEY_LAST_ALBUM_SYNC_EPOCH_MILLIS = "last_album_sync_epoch_millis"
-        private const val KEY_PLAYBACK_TARGET_TYPE = "playback_target_type_v1"
-        private const val KEY_TARGET_ROOM_NAME = "playback_target_room_name"
-        private const val KEY_TARGET_ROOM_UUID = "playback_target_room_uuid"
-        private const val KEY_TARGET_ROOM_BASE_URL = "playback_target_room_base_url"
-        private const val KEY_TARGET_ROOM_MEMBER_COUNT = "playback_target_room_member_count"
-        private const val KEY_TARGET_ROOM_RAW_NAME = "playback_target_room_raw_name"
-        private const val KEY_TARGET_ROOM_MEMBER_URLS = "playback_target_room_member_urls"
         private const val KEY_LOCAL_QUALITY_WIFI = "local_stream_quality_wifi_v1"
         private const val KEY_LOCAL_QUALITY_CELLULAR = "local_stream_quality_cellular_v1"
         private const val KEY_LOCAL_CACHE_SIZE = "local_cache_size_v1"
@@ -393,9 +337,6 @@ class AppPreferences(context: Context) {
         private const val KEY_ALBUM_SORT_OPTION = "album_sort_option_v1"
         private const val KEY_ALBUM_FAVORITES_ONLY = "album_favorites_only_v1"
         private const val KEY_ALBUM_DECADE_FILTER = "album_decade_filter_v1"
-        private const val TARGET_LOCAL = "local"
-        private const val TARGET_SONOS = "sonos"
-        private const val ROOM_URL_SEPARATOR = " "
         private const val RECENT_PLAYED_SEPARATOR = "|"
         private const val MAX_RECENT_PLAYED = 100
 
