@@ -206,7 +206,6 @@ internal fun PlaybackDetailSection(
                 currentTrack.title,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { onAlbumClick(displayAlbum) }
                     .basicMarquee(),
                 style = if (compact) MaterialTheme.typography.titleMedium else MaterialTheme.typography.titleLarge,
                 color = AppColors.TextPrimary,
@@ -226,7 +225,7 @@ internal fun PlaybackDetailSection(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier
-                        .weight(1f, fill = !showAlbumTitle)
+                        .weight(1f, fill = false)
                         .clickable { onArtistClick(displayAlbum.artistName) },
                 )
                 if (showAlbumTitle) {
@@ -238,7 +237,7 @@ internal fun PlaybackDetailSection(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier
-                            .weight(1f)
+                            .weight(1f, fill = false)
                             .clickable { onAlbumClick(displayAlbum) },
                     )
                 }
