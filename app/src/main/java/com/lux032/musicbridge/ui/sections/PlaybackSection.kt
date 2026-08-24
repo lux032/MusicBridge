@@ -1340,7 +1340,6 @@ internal fun AlbumDetailSection(
                     .widthIn(max = artworkMaximumWidth)
                     .fillMaxWidth()
                     .aspectRatio(1f)
-                    .sectionSharedElement(AlbumSharedKeys.artwork(currentTrackResult.album))
                     .clip(RoundedCornerShape(16.dp))
                     .combinedClickable(
                         onClick = {},
@@ -1348,8 +1347,7 @@ internal fun AlbumDetailSection(
                     ),
                 contentScale = ContentScale.Crop,
                 thumbnailSize = artworkMaximumWidth,
-                // The grid card requested a smaller thumbnail; reuse its cache entry as the
-                // placeholder so the morph's first frame is the real cover, not grey.
+                // Reuse the grid card's smaller cached thumbnail while the detail artwork loads.
                 placeholderThumbnailSize = layoutInfo.albumGridMinimumWidth * 1.1f,
             )
             QueueActionMenu(

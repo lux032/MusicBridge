@@ -21,7 +21,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
-import com.lux032.musicbridge.plex.PlexAlbum
 import com.lux032.musicbridge.plex.PlexTrackStream
 
 /** Direction of the most recent navigation, recorded by AppState so the section
@@ -44,11 +43,6 @@ object PlayerSharedKeys {
     // render in the transition overlay while morphing, and hit-testing stays at the layout
     // position, so a flying button eats taps. Reliability beats the morph here.
     fun artwork(track: PlexTrackStream): String = "playerArtwork-${track.sourceId}-${track.ratingKey}"
-}
-
-/** Shared-element keys for the album list -> album detail cover morph (P1.5 pilot). */
-object AlbumSharedKeys {
-    fun artwork(album: PlexAlbum): String = "albumArtwork-${album.sourceId}-${album.ratingKey}"
 }
 
 object TransitionDurations {
@@ -154,13 +148,6 @@ fun Modifier.playerSharedElement(key: Any): Modifier {
 @OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
 fun Modifier.playerSharedBounds(key: Any): Modifier = playerSharedElement(key)
-
-/** Section-to-section shared element (album grid cover -> detail header, …). Same wiring
- *  as [playerSharedElement]; the neutral name keeps call sites readable. Unmatched keys
- *  degrade to plain fade — e.g. opening a detail whose cover wasn't on the previous page. */
-@OptIn(ExperimentalSharedTransitionApi::class)
-@Composable
-fun Modifier.sectionSharedElement(key: Any): Modifier = playerSharedElement(key)
 
 /** Mini-player-side shared element with caller-managed visibility: the element is hidden
  *  (and handed to the transition overlay) whenever [visible] is false, i.e. while the

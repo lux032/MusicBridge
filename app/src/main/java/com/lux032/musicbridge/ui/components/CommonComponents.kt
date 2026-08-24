@@ -429,17 +429,9 @@ internal fun AlbumCoverCard(
     onQueueAction: ((QueuePlacement) -> Unit)? = null,
     compact: Boolean = false,
     subtitleOverride: String? = null,
-    sharedArtworkKey: Any? = null,
 ) {
     val layoutInfo = LocalAppLayoutInfo.current
     var showQueueMenu by remember { mutableStateOf(false) }
-    // When a key is supplied the cover joins the section transition as a shared element
-    // (list -> detail morph); null keeps the card a plain static cover.
-    val sharedArtworkModifier = if (sharedArtworkKey != null) {
-        Modifier.sectionSharedElement(sharedArtworkKey)
-    } else {
-        Modifier
-    }
 
     Box {
     Surface(
@@ -463,7 +455,6 @@ internal fun AlbumCoverCard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .aspectRatio(1f)
-                    .then(sharedArtworkModifier)
                     .clip(RoundedCornerShape(18.dp)),
                 contentScale = ContentScale.Crop,
                 thumbnailSize = layoutInfo.albumGridMinimumWidth * 1.1f,
@@ -478,7 +469,6 @@ internal fun AlbumCoverCard(
                     modifier = Modifier
                         .fillMaxWidth()
                         .aspectRatio(1f)
-                        .then(sharedArtworkModifier)
                         .clip(RoundedCornerShape(16.dp)),
                     contentScale = ContentScale.Crop,
                     thumbnailSize = layoutInfo.albumGridMinimumWidth * 1.1f,

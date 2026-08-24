@@ -39,14 +39,14 @@
 | Pop 转场（返回） | ✅ | 与 Push 完全镜像（旧页滑出右侧，新页从 -it/4 + scaleIn(0.95f) 回归） |
 | Tab 切换转场 | ✅ | `fadeIn(280) + slideInVertically { it/28 }` 淡入轻上移，无横向滑动 |
 | 定向转场接线 | ✅ | `sectionTransitionSpec(action)` 按 `NavAction` 分派；**播放页参与时仍只交叉淡入**（共享元素主导，页面级滑动会与 morph 打架） |
-| 专辑封面 morph（P1.5 试点） | ✅ | 全部专辑页网格封面 → 专辑详情页封面共享元素；`AlbumSharedKeys.artwork(album)` + `sectionSharedElement`；详情页大图以网格缩略图缓存作 placeholder 防灰闪；从其他入口（首页/艺人页）打开时无匹配端，自动降级为普通淡入 |
+| 专辑详情转场统一 | ✅ | 移除“全部专辑”入口的封面共享元素试点；所有入口统一使用与艺人详情页一致的 Push 页面转场 |
 
 设计约束：统一 `SizeTransform(clip = false)`；时长 300–360ms `FastOutSlowInEasing`（以现有 600ms 全局背景色渐变为基准，交互反馈更快）。
 
 **涉及文件**
-- `ui/transition/AppTransitions.kt`（`sectionTransitionSpec` 定向分派、`AlbumSharedKeys`、`sectionSharedElement`、`PageSlideMillis`/`TabFadeInMillis`）
-- `ui/components/CommonComponents.kt`（`AlbumCoverCard` 增加 `sharedArtworkKey` 可选参数）
-- `ui/sections/HomeSection.kt`（全部专辑网格传入共享 key）、`ui/sections/PlaybackSection.kt`（`AlbumDetailSection` 封面共享元素 + 网格缩略图 placeholder）
+- `ui/transition/AppTransitions.kt`（`sectionTransitionSpec` 定向分派、`PageSlideMillis`/`TabFadeInMillis`）
+- `ui/components/CommonComponents.kt`（`AlbumCoverCard` 保持普通静态封面）
+- `ui/sections/HomeSection.kt`（全部专辑网格）、`ui/sections/PlaybackSection.kt`（`AlbumDetailSection` 封面 + 网格缩略图 placeholder）
 
 ---
 
