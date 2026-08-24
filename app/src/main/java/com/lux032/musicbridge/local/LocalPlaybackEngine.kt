@@ -4,6 +4,8 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
+import android.os.SystemClock
+import android.util.Log
 import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -226,6 +228,9 @@ class LocalPlaybackEngine(
     var listener: Listener? = null
 
     companion object {
+        private const val LOG_TAG = "LocalPlaybackEngine"
+        private const val CACHED_SEEK_FALLBACK_WINDOW_MILLIS = 10_000L
+
         /**
          * The engine instance owned by AppState. Registered here so [LocalPlaybackService]
          * (created on demand by the system) can find the shared player without owning it.
@@ -260,6 +265,13 @@ class LocalPlaybackEngine(
     private val positionBaseMillis = mutableListOf<Long>()
     private var lastCurrentIndex = C.INDEX_UNSET
     private var queuePrecacheCount = 0
+    private var pendingCachedTranscodeSeek: CachedTranscodeSeek? = null
+
+    private data class CachedTranscodeSeek(
+        val index: Int,
+        val targetMillis: Long,
+        val startedAtMillis: Long,
+    )
 
     /**
      * MediaSession-facing wrapper. Plex restarts a live transcode at the requested source
@@ -290,6 +302,7 @@ class LocalPlaybackEngine(
             val previousIndex = lastCurrentIndex
             lastCurrentIndex = newIndex
             if (previousIndex != C.INDEX_UNSET && previousIndex != newIndex) {
+                pendingCachedTranscodeSeek = null
                 restoreOriginalQueueItem(previousIndex)
             }
             if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO ||
@@ -317,6 +330,21 @@ class LocalPlaybackEngine(
         }
 
         override fun onPlayerError(error: PlaybackException) {
+            val failedSeek = pendingCachedTranscodeSeek
+            pendingCachedTranscodeSeek = null
+            if (failedSeek != null &&
+                failedSeek.index == currentIndex &&
+                error.errorCode == PlaybackException.ERROR_CODE_DECODING_FAILED &&
+                SystemClock.elapsedRealtime() - failedSeek.startedAtMillis <= CACHED_SEEK_FALLBACK_WINDOW_MILLIS
+            ) {
+                Log.w(
+                    LOG_TAG,
+                    "Cached Opus seek failed at ${failedSeek.targetMillis}ms; retrying with Plex offset",
+                    error,
+                )
+                restartLiveTranscode(failedSeek.index, failedSeek.targetMillis)
+                return
+            }
             listener?.onPlayerError(error.message ?: "播放失败")
         }
     }
@@ -370,6 +398,7 @@ class LocalPlaybackEngine(
         startPositionMillis: Long,
         precacheCount: Int = 0,
     ) {
+        pendingCachedTranscodeSeek = null
         queueItems.clear()
         queueItems.addAll(items)
         positionBaseMillis.clear()
@@ -493,10 +522,26 @@ class LocalPlaybackEngine(
             } else {
                 plan.playerPositionMillis
             }
+            pendingCachedTranscodeSeek = if (fullLocalCopy && plan.restartsLiveTranscode) {
+                CachedTranscodeSeek(
+                    index = index,
+                    targetMillis = nativeTargetMillis,
+                    startedAtMillis = SystemClock.elapsedRealtime(),
+                )
+            } else {
+                null
+            }
             player.seekTo(index, nativeTargetMillis)
             return nativeTargetMillis
         }
 
+        pendingCachedTranscodeSeek = null
+        return restartLiveTranscode(index, positionMillis)
+    }
+
+    private fun restartLiveTranscode(index: Int, positionMillis: Long): Long {
+        val item = queueItems.getOrNull(index) ?: return 0L
+        val plan = buildLocalSeekPlan(item.url, positionMillis)
         val shouldPlay = player.playWhenReady
         positionBaseMillis[index] = plan.logicalBaseMillis
         player.replaceMediaItem(index, buildMediaItem(item, plan.url))
@@ -541,12 +586,17 @@ class LocalPlaybackEngine(
         )
     }
 
-    fun stopPlayback() = player.stop()
+    fun stopPlayback() {
+        pendingCachedTranscodeSeek = null
+        player.stop()
+    }
 
     fun release() {
+        pendingCachedTranscodeSeek = null
         listener = null
         player.removeListener(playerListener)
         player.release()
         if (activeEngine === this) activeEngine = null
     }
+
 }
