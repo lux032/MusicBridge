@@ -62,6 +62,40 @@ class AiPlaylistAlgorithmsTest {
         assertEquals(listOf("1", "2", "3"), result.map { it.ratingKey })
     }
 
+    @Test fun cjkBigramsMatchTrackAlbumAndArtistContext() {
+        val library = listOf(
+            track("1", "安静钢琴曲", "演奏者"),
+            track("2", "别的歌", "钢琴少年"),
+            track("3", "无关", "其他", album = "静钢之夜"),
+            track("4", "Unrelated", "Nobody"),
+        )
+        val result = HybridRecommender.matchSeeds(intent(), library, prompt = "安静钢琴")
+        assertEquals(listOf("1", "2", "3"), result.map { it.ratingKey })
+    }
+
+    @Test fun directHitsArePrioritizedBeforeContextHitsForSonicSeeds() = runBlocking {
+        val context = track("context", "Midnight Jazz", "Context Artist")
+        val direct = track("direct", "Exact Seed", "Direct Artist")
+        val calls = mutableListOf<String>()
+        val sonic = object : SonicCapableSource {
+            override suspend fun fetchNearestTracks(ratingKey: String, limit: Int): List<SonicTrackMatch> {
+                calls += ratingKey
+                return emptyList()
+            }
+            override suspend fun computeSonicPath(sectionKey: String, startRatingKey: String, endRatingKey: String) = emptyList<PlexTrackStream>()
+            override suspend fun createPlaylist(title: String, trackRatingKeys: List<String>) = PlexPlaylist("x", title, null, trackRatingKeys.size)
+        }
+        HybridRecommender.recommend(
+            intent = intent(tracks = listOf("exact seed"), genres = listOf("jazz")),
+            library = listOf(context, direct),
+            sonic = sonic,
+            favorites = emptyList(),
+            limit = 1,
+        )
+        assertEquals("direct", calls.first())
+        assertEquals(listOf("direct", "context"), calls)
+    }
+
     @Test fun libraryArtistContextIsInjectedIntoLlmRequest() {
         val client = AiLlmClient(AiSettings(enabled = true, apiKey = "secret"))
         val userContent = client.buildUserMessage("late night", listOf("周杰伦", "宇多田光", "周杰伦", " "))
@@ -126,6 +160,31 @@ class AiPlaylistAlgorithmsTest {
     @Test fun fallbackRankingPreservesShuffledInputOrderInsteadOfAlphabetizing() {
         val z = track("z", "Zulu", "A"); val a = track("a", "Alpha", "B")
         assertEquals(listOf("z", "a"), HybridRecommender.arrange(HybridRecommender.rankFallback(listOf(z, a))).map { it.ratingKey })
+    }
+
+    @Test fun duplicateTrackKeepsMinimumDistance() {
+        val duplicate = track("1", "Duplicate", "A")
+        val deduplicated = HybridRecommender.deduplicateByBestDistance(
+            listOf(RankedTrack(duplicate, .8), RankedTrack(duplicate, .1), RankedTrack(duplicate, null))
+        )
+        assertEquals(1, deduplicated.size)
+        assertEquals(.1, deduplicated.single().distance!!, 0.0)
+    }
+
+    @Test fun nullSonicDistanceRanksBeforeFallback() = runBlocking {
+        val seed = track("seed", "Seed", "A")
+        val neighbor = track("neighbor", "Neighbor", "B")
+        val fallback = track("fallback", "Fallback", "C")
+        val sonic = object : SonicCapableSource {
+            override suspend fun fetchNearestTracks(ratingKey: String, limit: Int) =
+                listOf(SonicTrackMatch(neighbor.ratingKey, null, neighbor))
+            override suspend fun computeSonicPath(sectionKey: String, startRatingKey: String, endRatingKey: String) = emptyList<PlexTrackStream>()
+            override suspend fun createPlaylist(title: String, trackRatingKeys: List<String>) = PlexPlaylist("x", title, null, trackRatingKeys.size)
+        }
+        val result = HybridRecommender.recommend(
+            intent(tracks = listOf("seed")), listOf(seed, neighbor, fallback), sonic, listOf(fallback), limit = 3, random = Random(1)
+        )
+        assertTrue(result.indexOfFirst { it.ratingKey == "neighbor" } < result.indexOfFirst { it.ratingKey == "fallback" })
     }
 
     @Test fun sortsByDistanceDeduplicatesAndAvoidsConsecutiveArtist() {

@@ -16,10 +16,10 @@ internal fun AiPlaylistDialog(
 ) {
     var prompt by remember { mutableStateOf("") }
     val presets = listOf(
-        Strings.aiPresetCommute,
-        Strings.aiPresetNoon,
-        Strings.aiPresetLateNight,
-        Strings.aiPresetAcg,
+        Strings.aiPresetCommuteLabel to Strings.aiPresetCommutePrompt,
+        Strings.aiPresetNoonLabel to Strings.aiPresetNoonPrompt,
+        Strings.aiPresetLateNightLabel to Strings.aiPresetLateNightPrompt,
+        Strings.aiPresetAcgLabel to Strings.aiPresetAcgPrompt,
     )
     AlertDialog(
         onDismissRequest = { if (!generating) onDismiss() },
@@ -27,7 +27,12 @@ internal fun AiPlaylistDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    presets.forEach { suggestion -> SuggestionChip(onClick = { prompt = suggestion }, label = { Text(suggestion) }) }
+                    presets.forEach { (label, presetPrompt) ->
+                        SuggestionChip(
+                            onClick = { prompt = presetPrompt },
+                            label = { Text(label) },
+                        )
+                    }
                 }
                 OutlinedTextField(prompt, { prompt = it }, Modifier.fillMaxWidth(), label = { Text(Strings.aiPromptHint) }, minLines = 3)
                 if (generating) { LinearProgressIndicator(Modifier.fillMaxWidth()); Text(Strings.aiGenerating) }
