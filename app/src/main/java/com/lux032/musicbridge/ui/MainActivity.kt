@@ -412,6 +412,9 @@ fun PlexAlbumScreen(
                             onGoHome = { state.switchPrimarySection(AppSection.Home) },
                             onPlaylistClick = state::openPlaylistDetail,
                             onOpenFavorites = state::openFavoriteTracks,
+                            isAiGenerating = state.isAiGenerating,
+                            onGenerateAiPlaylist = state::generateAiPlaylist,
+                            onCancelAiGeneration = state::cancelAiGeneration,
                         )
                     }
                 } else if (currentSection == AppSection.PlaylistDetail) {
@@ -433,6 +436,9 @@ fun PlexAlbumScreen(
                             onShufflePlaylist = { playlistResult ->
                                 state.startPlaylistPlayback(playlistResult, shuffle = true)
                             },
+                            aiDescription = state.aiPlaylistDescription,
+                            onSaveToPlex = state::saveCurrentAiPlaylistToPlex,
+                            onSonicRadio = state::startSonicRadio,
                             onPlayTrack = { playlist, track, index ->
                                 val currentResult = state.playlistTrackResult
                                 if (currentResult != null) {
@@ -747,6 +753,8 @@ fun PlexAlbumScreen(
                                 onSwitchServer = state::switchServer,
                                 onDeleteServer = state::deleteServer,
                                 onRefreshHome = { scope.launch { state.refreshAlbums() } },
+                                aiSettings = state.aiSettings,
+                                onSaveAiSettings = state::updateAiSettings,
                             )
                         AppSection.Artists -> Unit
                         AppSection.Playlists -> Unit

@@ -46,6 +46,7 @@ data class PlexAlbum(
     val section: PlexSection,
     val sourceId: String = "",
     val leafCount: Int? = null,
+    val musicAnalysisVersion: String? = null,
 ) {
     val isFavorite: Boolean
         get() = (userRating ?: 0f) > 0f
@@ -66,6 +67,7 @@ data class PlexTrackStream(
     val sourceAudioBitrateKbps: Int? = null,
     val playbackMimeType: String? = null,
     val sourceId: String = "",
+    val musicAnalysisVersion: String? = null,
 )
 
 val PlexTrackStream.isFavorite: Boolean
@@ -129,7 +131,7 @@ private const val FAVORITE_TRACK_RATING = 10
 private const val PAGED_CONTAINER_SIZE = 200
 private const val FAVORITE_TRACKS_CONTAINER_SIZE = 1000
 
-class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient {
+class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient, SonicCapableSource {
     override val sourceId: String = config.sourceId
     private val appName = "MusicBridge"
     private val appVersion = "0.1.0"
@@ -137,6 +139,7 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient {
     private val platform = "Android ${Build.VERSION.RELEASE ?: "Unknown"}"
     private var cachedToken: String? = null
     private var cachedServer: PlexServer? = null
+    private var cachedMachineIdentifier: String? = null
 
     suspend fun fetchAlbumNames(): PlexAlbumResult = withContext(Dispatchers.IO) {
         val albumsResult = fetchAlbums()
@@ -551,6 +554,7 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient {
                         section = section,
                         sourceId = config.sourceId,
                         leafCount = directory.getAttribute("leafCount").trim().toIntOrNull(),
+                        musicAnalysisVersion = directory.getAttribute("musicAnalysisVersion").trim().ifBlank { null },
                     )
                 )
             }
@@ -702,6 +706,7 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient {
                         sourceAudioBitrateKbps = track.firstAudioBitrateKbps(),
                         playbackMimeType = sourceAudioCodec.transcodedPlaybackMimeType(config.opusTranscodeMode),
                         sourceId = config.sourceId,
+                        musicAnalysisVersion = track.getAttribute("musicAnalysisVersion").trim().ifBlank { null },
                     )
                 )
             }
@@ -789,6 +794,64 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient {
         }
 
         return tracks
+    }
+
+    override suspend fun fetchNearestTracks(ratingKey: String, limit: Int): List<SonicTrackMatch> = withContext(Dispatchers.IO) {
+        val token = resolveToken()
+        val server = resolveServer(token)
+        val accessToken = server.accessToken.orEmpty().ifBlank { token }
+        val nearest = parseXml(request(
+            "GET",
+            buildPlexUrl(server.uri, "/library/metadata/$ratingKey/nearest", listOf("limit" to limit.toString())),
+            mapOf("X-Plex-Token" to accessToken),
+        ).body).getElementsByTagName("Track")
+        val distances = buildList {
+            for (index in 0 until nearest.length) {
+                val node = nearest.item(index) as? Element ?: continue
+                val key = node.getAttribute("ratingKey").trim()
+                if (key.isNotBlank()) add(key to node.getAttribute("distance").toDoubleOrNull())
+            }
+        }
+        if (distances.isEmpty()) return@withContext emptyList()
+        val hydratedRoot = parseXml(request(
+            "GET", "${server.uri}/library/metadata/${distances.joinToString(",") { it.first }}",
+            mapOf("X-Plex-Token" to accessToken),
+        ).body)
+        val hydrated = hydratedRoot.getElementsByTagName("Track").toTrackStreams(
+            server.uri, accessToken, config.sourceId, config.clientIdentifier, config.opusTranscodeMode,
+        ).associateBy { it.ratingKey }
+        distances.mapNotNull { (key, distance) -> hydrated[key]?.let { SonicTrackMatch(key, distance, it) } }
+    }
+
+    override suspend fun computeSonicPath(sectionKey: String, startRatingKey: String, endRatingKey: String): List<PlexTrackStream> = withContext(Dispatchers.IO) {
+        val token = resolveToken(); val server = resolveServer(token)
+        val accessToken = server.accessToken.orEmpty().ifBlank { token }
+        val pathRoot = parseXml(request("GET", buildPlexUrl(server.uri, "/library/sections/$sectionKey/computePath", listOf(
+            "startID" to startRatingKey, "endID" to endRatingKey,
+        )), mapOf("X-Plex-Token" to accessToken)).body)
+        val keys = buildList {
+            val nodes = pathRoot.getElementsByTagName("Track")
+            for (i in 0 until nodes.length) (nodes.item(i) as? Element)?.getAttribute("ratingKey")?.trim()?.takeIf { it.isNotBlank() }?.let(::add)
+        }
+        if (keys.isEmpty()) return@withContext emptyList()
+        parseXml(request("GET", "${server.uri}/library/metadata/${keys.joinToString(",")}", mapOf("X-Plex-Token" to accessToken)).body)
+            .getElementsByTagName("Track").toTrackStreams(server.uri, accessToken, config.sourceId, config.clientIdentifier, config.opusTranscodeMode)
+            .associateBy { it.ratingKey }.let { map -> keys.mapNotNull(map::get) }
+    }
+
+    override suspend fun createPlaylist(title: String, trackRatingKeys: List<String>): PlexPlaylist = withContext(Dispatchers.IO) {
+        require(trackRatingKeys.isNotEmpty()) { "Playlist cannot be empty." }
+        val token = resolveToken(); val server = resolveServer(token)
+        val accessToken = server.accessToken.orEmpty().ifBlank { token }
+        val machineId = cachedMachineIdentifier ?: parseXml(request("GET", "${server.uri}/identity", mapOf("X-Plex-Token" to accessToken)).body)
+            .getAttribute("machineIdentifier").trim().ifBlank { error("Plex identity omitted machineIdentifier.") }
+            .also { cachedMachineIdentifier = it }
+        val uri = "server://$machineId/com.plexapp.plugins.library/library/metadata/${trackRatingKeys.joinToString(",")}"
+        val root = parseXml(request("POST", buildPlexUrl(server.uri, "/playlists", listOf(
+            "uri" to uri, "type" to "audio", "title" to title, "smart" to "0",
+        )), mapOf("X-Plex-Token" to accessToken)).body)
+        val node = root.getElementsByTagName("Playlist").item(0) as? Element
+        PlexPlaylist(node?.getAttribute("ratingKey").orEmpty(), title, null, trackRatingKeys.size, config.sourceId)
     }
 
     private fun request(
@@ -1317,6 +1380,7 @@ private fun org.w3c.dom.NodeList.toTrackStreams(
                     sourceAudioBitrateKbps = track.firstAudioBitrateKbps(),
                     playbackMimeType = sourceAudioCodec.transcodedPlaybackMimeType(opusMode),
                     sourceId = sourceId,
+                    musicAnalysisVersion = track.getAttribute("musicAnalysisVersion").trim().ifBlank { null },
                 )
             )
         }

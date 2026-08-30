@@ -32,7 +32,12 @@ internal fun PlaylistsSection(
     onGoHome: () -> Unit,
     onPlaylistClick: (PlexPlaylist) -> Unit,
     onOpenFavorites: () -> Unit,
+    isAiGenerating: Boolean,
+    onGenerateAiPlaylist: (String) -> Unit,
+    onCancelAiGeneration: () -> Unit,
 ) {
+    var showAiDialog by remember { mutableStateOf(false) }
+    if (showAiDialog) AiPlaylistDialog(isAiGenerating, onCancelAiGeneration, { prompt -> onGenerateAiPlaylist(prompt) }) { showAiDialog = false }
     LazyColumn(
         modifier = Modifier.fillMaxWidth(),
         contentPadding = PaddingValues(bottom = 8.dp),
@@ -45,6 +50,14 @@ internal fun PlaylistsSection(
                 color = AppColors.TextPrimary,
                 fontWeight = FontWeight.Bold,
             )
+        }
+        item {
+            Surface(modifier = Modifier.fillMaxWidth().clickable { showAiDialog = true }, shape = RoundedCornerShape(20.dp), color = LocalArtworkPalette.current.accent.copy(alpha = .15f), border = BorderStroke(1.dp, LocalArtworkPalette.current.accent)) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(Strings.aiPlaylist, color = AppColors.TextPrimary, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                    Text(Strings.aiPlaylistDesc, color = AppColors.TextSecondary)
+                }
+            }
         }
         item {
             FavoriteTracksCard(onClick = onOpenFavorites)
@@ -171,6 +184,9 @@ internal fun PlaylistDetailSection(
     onPlayPlaylist: (PlexPlaylistTracksResult) -> Unit,
     onShufflePlaylist: (PlexPlaylistTracksResult) -> Unit,
     onPlayTrack: (PlexPlaylist, PlexTrackStream, Int) -> Unit,
+    aiDescription: String? = null,
+    onSaveToPlex: () -> Unit = {},
+    onSonicRadio: (PlexTrackStream) -> Unit = {},
 ) {
     val currentResult = playlistResult
     if (currentResult == null) {
@@ -230,6 +246,10 @@ internal fun PlaylistDetailSection(
                     color = AppColors.TextPrimary,
                     fontWeight = FontWeight.Bold,
                 )
+                if (currentResult.playlist.ratingKey.startsWith("ai:")) {
+                    aiDescription?.takeIf { it.isNotBlank() }?.let { Text(it, color = AppColors.TextSecondary) }
+                    OutlinedButton(onClick = onSaveToPlex) { Text(Strings.saveToPlex) }
+                }
                 Text(
                     text = Strings.tracks(currentResult.tracks.size),
                     color = AppColors.TextSecondary,
@@ -315,6 +335,9 @@ internal fun PlaylistDetailSection(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
+                            if (track.sourceId.isNotBlank()) {
+                                TextButton(onClick = { onSonicRadio(track) }) { Text(Strings.sonicRadio) }
+                            }
                             FavoriteIconButton(
                                 isFavorite = track.isFavorite,
                                 isLoading = isFavoriteLoading,

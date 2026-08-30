@@ -263,6 +263,7 @@ internal class AppStateLibraryCoordinator(
     }
 
     fun openPlaylistDetail(playlist: PlexPlaylist) {
+        state.aiPlaylistDescription = null
         state.selectedPlaylist = playlist
         state.scope.launch {
             runCatching {

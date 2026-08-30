@@ -19,6 +19,10 @@ import com.lux032.musicbridge.plex.PlexPlaylistTracksResult
 import com.lux032.musicbridge.plex.PlexTrackStream
 import com.lux032.musicbridge.plex.PlexTranscodeProxy
 import com.lux032.musicbridge.plex.isFavorite
+import com.lux032.musicbridge.plex.SonicCapableSource
+import com.lux032.musicbridge.ai.AiLlmClient
+import com.lux032.musicbridge.ai.AiSettings
+import com.lux032.musicbridge.ai.HybridRecommender
 import com.lux032.musicbridge.local.LocalAudioCache
 import com.lux032.musicbridge.local.LocalPlaybackEngine
 import com.lux032.musicbridge.local.LocalPlaybackService
@@ -35,6 +39,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.util.UUID
 
 @Stable
@@ -135,6 +140,14 @@ class AppState(
     var selectedPlaylist by mutableStateOf<PlexPlaylist?>(null)
     var playlistTrackResult by mutableStateOf<PlexPlaylistTracksResult?>(null)
     var favoriteTracks by mutableStateOf<List<PlexTrackStream>>(emptyList())
+    var aiSettings by mutableStateOf(appPreferences.loadAiSettings())
+        private set
+    var isAiGenerating by mutableStateOf(false)
+        private set
+    private var aiGenerationJob: Job? = null
+    private var aiGenerationToken: Long = 0L
+    var aiPlaylistDescription by mutableStateOf<String?>(null)
+        internal set
 
     val activeSection: AppSection
         get() = navigationStack.lastOrNull() ?: AppSection.Home
@@ -479,6 +492,107 @@ class AppState(
         playlistResult: PlexPlaylistTracksResult,
         shuffle: Boolean = false,
     ) = playbackCoordinator.startPlaylistPlayback(playlistResult, shuffle)
+
+    fun updateAiSettings(settings: AiSettings) {
+        aiSettings = settings.copy(
+            baseUrl = settings.baseUrl.trim().trimEnd('/'),
+            apiKey = settings.apiKey.trim(),
+            model = settings.model.trim(),
+        )
+        appPreferences.saveAiSettings(aiSettings)
+        actionMessage = Strings.saveAiSettings
+    }
+
+    fun cancelAiGeneration() {
+        aiGenerationToken++
+        aiGenerationJob?.cancel()
+        aiGenerationJob = null
+        isAiGenerating = false
+    }
+
+    fun generateAiPlaylist(prompt: String) {
+        if (connectionPreferences.type != MusicServerType.Plex) {
+            errorMessage = Strings.aiPlexOnly
+            return
+        }
+        val requestPrompt = prompt.trim()
+        if (requestPrompt.isBlank()) return
+        cancelAiGeneration()
+        val token = ++aiGenerationToken
+        isAiGenerating = true
+        aiGenerationJob = scope.launch {
+            runCatching {
+                val source = clientFor(connectionPreferences.id)
+                val library = withContext(Dispatchers.IO) {
+                    allAlbums.flatMap { album ->
+                        albumLocalStore.getAlbumTracks(album.sourceId, album.ratingKey).ifEmpty {
+                            source.fetchAlbumTrackStreams(album).tracks
+                        }
+                    }.distinctBy { it.ratingKey }
+                }
+                val libraryArtists = library.mapNotNull { it.artistName?.trim() }
+                    .filter { it.isNotBlank() }
+                    .distinct()
+                    .shuffled()
+                    .take(80)
+                val intent = withContext(Dispatchers.IO) {
+                    AiLlmClient(aiSettings).generateIntent(requestPrompt, libraryArtists)
+                }
+                val recommended = HybridRecommender.recommend(
+                    intent, library, source as? SonicCapableSource, favoriteTracks, 30,
+                    prompt = requestPrompt,
+                )
+                check(recommended.isNotEmpty()) { Strings.aiNoMatches }
+                if (token != aiGenerationToken) return@launch
+                val playlist = PlexPlaylist("ai:${UUID.randomUUID()}", intent.title, recommended.firstOrNull()?.thumbUrl, recommended.size, connectionPreferences.id)
+                val result = PlexPlaylistTracksResult("", playlist, recommended)
+                selectedPlaylist = playlist
+                playlistTrackResult = result
+                aiPlaylistDescription = intent.description
+                navigateTo(AppSection.PlaylistDetail)
+                startPlaylistPlayback(result)
+            }.onFailure {
+                if (token == aiGenerationToken && it !is kotlinx.coroutines.CancellationException) {
+                    errorMessage = when (it.message) {
+                        "AI_NOT_CONFIGURED" -> Strings.aiNotConfigured
+                        "AI_RESPONSE_NOT_JSON" -> Strings.aiResponseInvalid
+                        else -> it.message
+                    }
+                }
+            }
+            if (token == aiGenerationToken) isAiGenerating = false
+        }
+    }
+
+    fun saveCurrentAiPlaylistToPlex() {
+        val current = playlistTrackResult ?: return
+        if (!current.playlist.ratingKey.startsWith("ai:")) return
+        scope.launch {
+            runCatching {
+                (clientFor(current.playlist.sourceId) as? SonicCapableSource)
+                    ?.createPlaylist(current.playlist.title, current.tracks.map { it.ratingKey })
+                    ?: error(Strings.plexSaveUnsupported)
+            }.onSuccess { saved ->
+                actionMessage = Strings.savedToPlex
+                loadPlaylists()
+                selectedPlaylist = saved
+                playlistTrackResult = current.copy(playlist = saved.copy(leafCount = current.tracks.size))
+            }.onFailure { errorMessage = it.message }
+        }
+    }
+
+    fun startSonicRadio(track: PlexTrackStream) {
+        scope.launch {
+            runCatching {
+                val sonic = clientFor(track.sourceId) as? SonicCapableSource ?: error(Strings.sonicUnavailable)
+                val matches = sonic.fetchNearestTracks(track.ratingKey, 30).map { it.track }
+                check(matches.isNotEmpty()) { Strings.sonicNoNeighbors }
+                val playlist = PlexPlaylist("ai:${UUID.randomUUID()}", Strings.sonicRadio, track.thumbUrl, matches.size + 1, track.sourceId)
+                PlexPlaylistTracksResult("", playlist, listOf(track) + matches)
+            }.onSuccess { result -> aiPlaylistDescription = null; playlistTrackResult = result; selectedPlaylist = result.playlist; navigateTo(AppSection.PlaylistDetail); startPlaylistPlayback(result) }
+                .onFailure { errorMessage = it.message }
+        }
+    }
 
     fun togglePause(state: MiniPlayerState) = playbackCoordinator.togglePause(state)
 

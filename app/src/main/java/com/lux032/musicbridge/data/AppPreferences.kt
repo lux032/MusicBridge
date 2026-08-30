@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.core.content.edit
 import org.json.JSONArray
 import org.json.JSONObject
+import com.lux032.musicbridge.ai.AiSettings
 import java.util.UUID
 
 enum class MusicServerType {
@@ -60,6 +61,22 @@ data class MusicServerProfile(
 class AppPreferences(context: Context) {
     private val sharedPreferences =
         context.applicationContext.getSharedPreferences("plex_to_sonos_prefs", Context.MODE_PRIVATE)
+
+    fun loadAiSettings(): AiSettings = AiSettings(
+        enabled = sharedPreferences.getBoolean(KEY_AI_ENABLED, false),
+        baseUrl = sharedPreferences.getString(KEY_AI_BASE_URL, "https://api.deepseek.com/v1").orEmpty(),
+        apiKey = sharedPreferences.getString(KEY_AI_API_KEY, "").orEmpty(),
+        model = sharedPreferences.getString(KEY_AI_MODEL, "deepseek-chat").orEmpty(),
+    )
+
+    fun saveAiSettings(settings: AiSettings) {
+        sharedPreferences.edit {
+            putBoolean(KEY_AI_ENABLED, settings.enabled)
+            putString(KEY_AI_BASE_URL, settings.baseUrl.trim().trimEnd('/'))
+            putString(KEY_AI_API_KEY, settings.apiKey.trim())
+            putString(KEY_AI_MODEL, settings.model.trim())
+        }
+    }
 
     fun loadServerProfiles(): List<MusicServerProfile> {
         val stored = runCatching {
@@ -315,6 +332,10 @@ class AppPreferences(context: Context) {
     }
 
     companion object {
+        private const val KEY_AI_ENABLED = "ai_enabled"
+        private const val KEY_AI_BASE_URL = "ai_base_url"
+        private const val KEY_AI_API_KEY = "ai_api_key"
+        private const val KEY_AI_MODEL = "ai_model"
         const val KEY_OPUS_TRANSCODE_MODE = "opus_transcode_mode_v1"
         private const val KEY_USERNAME = "username"
         private const val KEY_PASSWORD = "password"

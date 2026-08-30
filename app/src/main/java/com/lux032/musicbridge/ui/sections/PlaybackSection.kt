@@ -1916,6 +1916,8 @@ internal fun SettingsSection(
     onSwitchServer: (String) -> Unit,
     onDeleteServer: (String) -> Unit,
     onRefreshHome: () -> Unit,
+    aiSettings: com.lux032.musicbridge.ai.AiSettings,
+    onSaveAiSettings: (com.lux032.musicbridge.ai.AiSettings) -> Unit,
 ) {
     val activeProfile = serverProfiles.firstOrNull { it.id == activeServerId }
     var draft by remember { mutableStateOf(activeProfile ?: MusicServerProfile(type = MusicServerType.Music032)) }
@@ -2121,6 +2123,8 @@ internal fun SettingsSection(
         ) {
             Text(Strings.refreshHome)
         }
+        HorizontalDivider(color = AppColors.Border)
+        AiSettingsCard(aiSettings, onSaveAiSettings)
         HorizontalDivider(color = AppColors.Border)
         LocalPlaybackSettingsCard(
             wifiQuality = wifiQuality,
