@@ -60,6 +60,7 @@ class AppState(
     ).also { LocalPlaybackEngine.activeEngine = it }
 
     var opusTranscodeMode by mutableStateOf(appPreferences.getOpusTranscodeMode())
+    var sonosHiResTranscodeMode by mutableStateOf(appPreferences.getSonosHiResTranscodeMode())
 
     // Output selection is intentionally session-only: every new app process starts locally.
     var selectedPlaybackTarget by mutableStateOf<PlaybackTarget>(PlaybackTarget.LocalDevice)
@@ -269,6 +270,7 @@ class AppState(
                     sourceId = preferences.id,
                     clientIdentifier = plexClientIdentifier,
                     opusTranscodeMode = opusTranscodeMode,
+                    sonosHiResTranscodeMode = sonosHiResTranscodeMode,
                 )
             )
             MusicServerType.Music032 -> Music032Client(preferences)
@@ -280,6 +282,15 @@ class AppState(
         actionMessage = when (mode) {
             OpusTranscodeMode.DIRECT_MP3 -> "已切换为 Opus 直连秒播 (MP3 320k)"
             OpusTranscodeMode.PROXY_FLAC -> "已切换为 Opus 无损中继 (FLAC 本地缓存)"
+        }
+    }
+
+    fun updateSonosHiResTranscodeMode(mode: SonosHiResTranscodeMode) {
+        sonosHiResTranscodeMode = mode
+        appPreferences.setSonosHiResTranscodeMode(mode)
+        actionMessage = when (mode) {
+            SonosHiResTranscodeMode.TRANSCODE_MP3 -> "已开启 Sonos Hi-Res MP3 320k 转码"
+            SonosHiResTranscodeMode.DIRECT_ORIGINAL -> "已切换为 Sonos Hi-Res 原盘直投"
         }
     }
 

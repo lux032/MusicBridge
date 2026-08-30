@@ -307,6 +307,8 @@ class AlbumLocalStore(context: Context) {
             if (isNull(getColumnIndexOrThrow(name))) null else getLong(getColumnIndexOrThrow(name))
         fun nullableFloat(name: String): Float? =
             if (isNull(getColumnIndexOrThrow(name))) null else getFloat(getColumnIndexOrThrow(name))
+        fun nullableInt(name: String): Int? =
+            if (isNull(getColumnIndexOrThrow(name))) null else getInt(getColumnIndexOrThrow(name))
 
         return PlexTrackStream(
             ratingKey = string(AlbumDatabaseHelper.COLUMN_TRACK_RATING_KEY),
@@ -320,6 +322,8 @@ class AlbumLocalStore(context: Context) {
             artistName = nullableString(AlbumDatabaseHelper.COLUMN_TRACK_ARTIST_NAME),
             thumbUrl = nullableString(AlbumDatabaseHelper.COLUMN_TRACK_THUMB_URL),
             sourceAudioCodec = nullableString(AlbumDatabaseHelper.COLUMN_TRACK_SOURCE_AUDIO_CODEC),
+            sourceAudioBitrateKbps = nullableInt(AlbumDatabaseHelper.COLUMN_TRACK_BITRATE_KBPS),
+            sourceAudioSampleRate = nullableInt(AlbumDatabaseHelper.COLUMN_TRACK_SAMPLE_RATE),
             playbackMimeType = nullableString(AlbumDatabaseHelper.COLUMN_TRACK_PLAYBACK_MIME_TYPE),
             sourceId = string(AlbumDatabaseHelper.COLUMN_SOURCE_ID),
         )
@@ -356,11 +360,36 @@ class AlbumLocalStore(context: Context) {
             put(AlbumDatabaseHelper.COLUMN_TRACK_ARTIST_NAME, artistName)
             put(AlbumDatabaseHelper.COLUMN_TRACK_THUMB_URL, thumbUrl)
             put(AlbumDatabaseHelper.COLUMN_TRACK_SOURCE_AUDIO_CODEC, sourceAudioCodec)
+            put(AlbumDatabaseHelper.COLUMN_TRACK_BITRATE_KBPS, sourceAudioBitrateKbps)
+            put(AlbumDatabaseHelper.COLUMN_TRACK_SAMPLE_RATE, sourceAudioSampleRate)
             put(AlbumDatabaseHelper.COLUMN_TRACK_PLAYBACK_MIME_TYPE, playbackMimeType)
         }
 
     private companion object {
         const val DEFAULT_SEARCH_LIMIT = 200
+    }
+}
+
+internal fun addColumnIfNotExists(
+    db: SQLiteDatabase,
+    tableName: String,
+    columnName: String,
+    columnType: String,
+) {
+    val exists = db.rawQuery("PRAGMA table_info($tableName)", null).use { cursor ->
+        val nameIndex = cursor.getColumnIndex("name")
+        if (nameIndex < 0) return@use false
+        generateSequence { if (cursor.moveToNext()) cursor.getString(nameIndex) else null }
+            .any { it.equals(columnName, ignoreCase = true) }
+    }
+    if (!exists) db.execSQL("ALTER TABLE $tableName ADD COLUMN $columnName $columnType")
+}
+
+internal fun ensureVersion8Columns(db: SQLiteDatabase) {
+    addColumnIfNotExists(db, "albums", "leaf_count", "INTEGER")
+    for (table in listOf("tracks", "album_tracks")) {
+        addColumnIfNotExists(db, table, "sample_rate", "INTEGER")
+        addColumnIfNotExists(db, table, "bitrate_kbps", "INTEGER")
     }
 }
 
@@ -399,16 +428,16 @@ private class AlbumDatabaseHelper(context: Context) :
             createTracksTable(db)
             createAlbumTracksTable(db)
         }
-        if (oldVersion < 7) {
-            // leafCount is cosmetic (artist page "year · N tracks" subtitle); old rows keep
-            // NULL and pick the value up on the next library sync.
-            db.execSQL("ALTER TABLE $TABLE_ALBUMS ADD COLUMN $COLUMN_LEAF_COUNT INTEGER")
+        if (oldVersion < 8) {
+            // Tables may have been preserved or recreated by an earlier migration branch.
+            // Inspecting the actual schema makes this safe for every upgrade path, including v5.
+            ensureVersion8Columns(db)
         }
     }
 
     companion object {
         private const val DATABASE_NAME = "plex_album_cache.db"
-        private const val DATABASE_VERSION = 7
+        private const val DATABASE_VERSION = 8
 
         const val TABLE_ALBUMS = "albums"
         const val TABLE_TRACKS = "tracks"
@@ -436,6 +465,8 @@ private class AlbumDatabaseHelper(context: Context) :
         const val COLUMN_TRACK_ARTIST_NAME = "artist_name"
         const val COLUMN_TRACK_THUMB_URL = "thumb_url"
         const val COLUMN_TRACK_SOURCE_AUDIO_CODEC = "source_audio_codec"
+        const val COLUMN_TRACK_SAMPLE_RATE = "sample_rate"
+        const val COLUMN_TRACK_BITRATE_KBPS = "bitrate_kbps"
         const val COLUMN_TRACK_PLAYBACK_MIME_TYPE = "playback_mime_type"
         const val COLUMN_LEAF_COUNT = "leaf_count"
     }
@@ -485,6 +516,8 @@ private class AlbumDatabaseHelper(context: Context) :
                 $COLUMN_TRACK_ARTIST_NAME TEXT,
                 $COLUMN_TRACK_THUMB_URL TEXT,
                 $COLUMN_TRACK_SOURCE_AUDIO_CODEC TEXT,
+                $COLUMN_TRACK_SAMPLE_RATE INTEGER,
+                $COLUMN_TRACK_BITRATE_KBPS INTEGER,
                 $COLUMN_TRACK_PLAYBACK_MIME_TYPE TEXT,
                 PRIMARY KEY ($COLUMN_SOURCE_ID, $COLUMN_TRACK_RATING_KEY)
             )
@@ -514,6 +547,8 @@ private class AlbumDatabaseHelper(context: Context) :
                 $COLUMN_TRACK_ARTIST_NAME TEXT,
                 $COLUMN_TRACK_THUMB_URL TEXT,
                 $COLUMN_TRACK_SOURCE_AUDIO_CODEC TEXT,
+                $COLUMN_TRACK_SAMPLE_RATE INTEGER,
+                $COLUMN_TRACK_BITRATE_KBPS INTEGER,
                 $COLUMN_TRACK_PLAYBACK_MIME_TYPE TEXT,
                 PRIMARY KEY ($COLUMN_SOURCE_ID, $COLUMN_TRACK_RATING_KEY)
             )

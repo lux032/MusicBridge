@@ -215,6 +215,13 @@ class AppPreferences(context: Context) {
 
     fun setOpusTranscodeMode(mode: OpusTranscodeMode) = saveOpusTranscodeMode(mode)
 
+    fun getSonosHiResTranscodeMode(): SonosHiResTranscodeMode =
+        SonosHiResTranscodeMode.fromId(sharedPreferences.getString(KEY_SONOS_HIRES_TRANSCODE_MODE, null))
+
+    fun setSonosHiResTranscodeMode(mode: SonosHiResTranscodeMode) {
+        sharedPreferences.edit { putString(KEY_SONOS_HIRES_TRANSCODE_MODE, mode.id) }
+    }
+
     fun clearSourceData(sourceId: String) {
         if (sourceId.isBlank()) return
         sharedPreferences.edit {
@@ -337,6 +344,7 @@ class AppPreferences(context: Context) {
         private const val KEY_AI_API_KEY = "ai_api_key"
         private const val KEY_AI_MODEL = "ai_model"
         const val KEY_OPUS_TRANSCODE_MODE = "opus_transcode_mode_v1"
+        const val KEY_SONOS_HIRES_TRANSCODE_MODE = "sonos_hires_transcode_mode_v1"
         private const val KEY_USERNAME = "username"
         private const val KEY_PASSWORD = "password"
         private const val KEY_TOKEN = "token"

@@ -246,6 +246,21 @@ enum class ArtistPresentation {
     List,
 }
 
+internal const val SONOS_MAX_SAMPLE_RATE_HZ = 48000
+
+internal val LOSSLESS_AUDIO_CODECS = setOf("flac", "alac", "wav", "wave", "aiff", "dsd", "dff", "dsf", "pcm")
+
+enum class SonosHiResTranscodeMode(val id: String) {
+    TRANSCODE_MP3("transcode_mp3"),
+    DIRECT_ORIGINAL("direct_original");
+
+    companion object {
+        val DEFAULT = TRANSCODE_MP3
+        fun fromId(id: String?): SonosHiResTranscodeMode =
+            entries.firstOrNull { it.id == id } ?: DEFAULT
+    }
+}
+
 enum class OpusTranscodeMode(val id: String, val mimeType: String) {
     /** 直连秒播：Plex 实时转码 MP3 320k 直投 Sonos，绕过手机代理 */
     DIRECT_MP3("direct_mp3", "audio/mpeg"),

@@ -1897,6 +1897,7 @@ internal fun SettingsSection(
     serverProfiles: List<MusicServerProfile>,
     activeServerId: String,
     opusTranscodeMode: OpusTranscodeMode = OpusTranscodeMode.DEFAULT,
+    sonosHiResTranscodeMode: SonosHiResTranscodeMode = SonosHiResTranscodeMode.DEFAULT,
     wifiQuality: LocalStreamingLimit,
     cellularQuality: LocalStreamingLimit,
     localOpusBitrate: LocalOpusBitrate,
@@ -1905,6 +1906,7 @@ internal fun SettingsSection(
     localCacheSize: LocalCacheSize,
     localCacheUsedBytes: Long,
     onOpusTranscodeModeChange: (OpusTranscodeMode) -> Unit = {},
+    onSonosHiResTranscodeModeChange: (SonosHiResTranscodeMode) -> Unit = {},
     onWifiQualityChange: (LocalStreamingLimit) -> Unit,
     onCellularQualityChange: (LocalStreamingLimit) -> Unit,
     onLocalOpusBitrateChange: (LocalOpusBitrate) -> Unit,
@@ -2146,6 +2148,11 @@ internal fun SettingsSection(
         OpusTranscodeStrategyCard(
             currentMode = opusTranscodeMode,
             onModeChange = onOpusTranscodeModeChange,
+        )
+        HorizontalDivider(color = AppColors.Border)
+        SonosHiResTranscodeStrategyCard(
+            currentMode = sonosHiResTranscodeMode,
+            onModeChange = onSonosHiResTranscodeModeChange,
         )
     }
 }
@@ -2465,6 +2472,56 @@ private fun formatCacheSizeLabel(bytes: Long): String {
         String.format(Locale.US, "%.1f GB", megabytes / 1024.0)
     } else {
         String.format(Locale.US, "%.0f MB", megabytes)
+    }
+}
+
+
+@Composable
+internal fun SonosHiResTranscodeStrategyCard(
+    currentMode: SonosHiResTranscodeMode,
+    onModeChange: (SonosHiResTranscodeMode) -> Unit,
+) {
+    val palette = LocalArtworkPalette.current
+    Surface(
+        shape = RoundedCornerShape(26.dp),
+        color = AppColors.CardSurface,
+        border = BorderStroke(1.dp, AppColors.Border),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Text("🎧 " + Strings.sonosHiResTranscodeTitle, style = MaterialTheme.typography.titleLarge, color = AppColors.TextPrimary)
+            Text(Strings.sonosHiResTranscodeDesc, color = AppColors.TextSecondary, style = MaterialTheme.typography.bodyMedium)
+            listOf(
+                Triple(SonosHiResTranscodeMode.TRANSCODE_MP3, Strings.sonosHiResModeTranscodeMp3, Strings.sonosHiResModeTranscodeMp3Desc),
+                Triple(SonosHiResTranscodeMode.DIRECT_ORIGINAL, Strings.sonosHiResModeDirectOriginal, Strings.sonosHiResModeDirectOriginalDesc),
+            ).forEach { (mode, label, description) ->
+                val selected = currentMode == mode
+                Surface(
+                    modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).clickable { onModeChange(mode) },
+                    shape = RoundedCornerShape(18.dp),
+                    color = if (selected) AppColors.CardSurfaceStrong else AppColors.CardSurface,
+                    border = BorderStroke(1.dp, if (selected) AppColors.BorderStrong else AppColors.Border),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(14.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.Top,
+                    ) {
+                        RadioButton(
+                            selected = selected,
+                            onClick = { onModeChange(mode) },
+                            colors = RadioButtonDefaults.colors(selectedColor = palette.accent, unselectedColor = AppColors.TextSecondary),
+                        )
+                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(label, fontWeight = FontWeight.SemiBold, color = AppColors.TextPrimary)
+                            Text(description, color = AppColors.TextSecondary, style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
