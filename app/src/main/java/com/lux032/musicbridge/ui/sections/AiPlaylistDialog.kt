@@ -15,7 +15,12 @@ internal fun AiPlaylistDialog(
     onDismiss: () -> Unit,
 ) {
     var prompt by remember { mutableStateOf("") }
-    val presets = listOf(Strings.aiPresetLateNight, Strings.aiPresetRoadTrip, Strings.aiPresetMorning, Strings.aiPresetNineties, Strings.aiPresetCyberpunk)
+    val presets = listOf(
+        Strings.aiPresetCommute,
+        Strings.aiPresetNoon,
+        Strings.aiPresetLateNight,
+        Strings.aiPresetAcg,
+    )
     AlertDialog(
         onDismissRequest = { if (!generating) onDismiss() },
         title = { Text(Strings.aiPlaylist) },
