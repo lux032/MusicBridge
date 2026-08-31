@@ -40,6 +40,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.UUID
 
 @Stable
@@ -535,11 +536,21 @@ class AppState(
             runCatching {
                 val source = clientFor(connectionPreferences.id)
                 val library = withContext(Dispatchers.IO) {
-                    allAlbums.flatMap { album ->
+                    val cached = allAlbums.flatMap { album ->
                         albumLocalStore.getAlbumTracks(album.sourceId, album.ratingKey).ifEmpty {
                             source.fetchAlbumTrackStreams(album).tracks
                         }
-                    }.distinctBy { it.ratingKey }
+                    }
+                    val recent = (source as? PlexClient)?.let { plex ->
+                        withTimeoutOrNull(5_000L) {
+                            runCatching { plex.fetchRecentlyPlayedTracks() }.getOrDefault(emptyList())
+                        }.orEmpty()
+                    }.orEmpty()
+                    (cached + recent).groupBy { it.ratingKey }.values.map { matches ->
+                        matches.drop(1).fold(matches.first()) { merged, track ->
+                            HybridRecommender.mergeBehavior(merged, track)
+                        }
+                    }
                 }
                 val libraryArtists = library.mapNotNull { it.artistName?.trim() }
                     .filter { it.isNotBlank() }

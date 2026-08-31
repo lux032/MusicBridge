@@ -73,7 +73,46 @@ data class PlexTrackStream(
     val playbackMimeType: String? = null,
     val sourceId: String = "",
     val musicAnalysisVersion: String? = null,
+    val viewCount: Long? = null,
+    val lastViewedAtEpochSeconds: Long? = null,
+    val skipCount: Long? = null,
 )
+
+internal data class PlexTrackBehavior(
+    val viewCount: Long?,
+    val lastViewedAtEpochSeconds: Long?,
+    val skipCount: Long?,
+    val musicAnalysisVersion: String?,
+)
+
+internal fun parsePlexTrackBehavior(
+    viewCount: String?,
+    lastViewedAt: String?,
+    skipCount: String?,
+    musicAnalysisVersion: String?,
+): PlexTrackBehavior = PlexTrackBehavior(
+    viewCount = viewCount?.trim()?.toLongOrNull(),
+    lastViewedAtEpochSeconds = lastViewedAt?.trim()?.toLongOrNull(),
+    skipCount = skipCount?.trim()?.toLongOrNull(),
+    musicAnalysisVersion = musicAnalysisVersion?.trim()?.ifBlank { null },
+)
+
+private fun Element.trackBehavior(): PlexTrackBehavior = parsePlexTrackBehavior(
+    getAttribute("viewCount"),
+    getAttribute("lastViewedAt"),
+    getAttribute("skipCount"),
+    getAttribute("musicAnalysisVersion"),
+)
+
+private fun JSONObject.trackBehavior(): PlexTrackBehavior {
+    fun value(name: String): String? = if (isNull(name)) null else opt(name)?.toString()
+    return parsePlexTrackBehavior(
+        value("viewCount"),
+        value("lastViewedAt"),
+        value("skipCount"),
+        value("musicAnalysisVersion"),
+    )
+}
 
 val PlexTrackStream.isFavorite: Boolean
     get() = (userRating ?: 0f) > 0f
@@ -243,6 +282,41 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient, SonicC
         )
     }
 
+    suspend fun fetchRecentlyPlayedTracks(limit: Int = 100): List<PlexTrackStream> = withContext(Dispatchers.IO) {
+        if (limit <= 0) return@withContext emptyList()
+        val token = resolveToken()
+        val server = resolveServer(token)
+        val accessToken = server.accessToken.orEmpty().ifBlank { token }
+        listMusicSections(server, token).flatMap { section ->
+            val response = request(
+                method = "GET",
+                url = buildPlexUrl(
+                    serverUri = server.uri,
+                    path = "/library/sections/${section.key}/all",
+                    queryParameters = listOf(
+                        "type" to "10",
+                        "sort" to "lastViewedAt:desc",
+                        "includeStreams" to "1",
+                        "X-Plex-Container-Start" to "0",
+                        "X-Plex-Container-Size" to limit.toString(),
+                    ),
+                ),
+                headers = mapOf("X-Plex-Token" to accessToken),
+            )
+            parseXml(response.body).getElementsByTagName("Track").toTrackStreams(
+                server.uri,
+                accessToken,
+                config.sourceId,
+                config.clientIdentifier,
+                config.opusTranscodeMode,
+                config.sonosHiResTranscodeMode,
+            )
+        }.filter { it.lastViewedAtEpochSeconds != null }
+            .sortedByDescending { it.lastViewedAtEpochSeconds }
+            .distinctBy { it.ratingKey }
+            .take(limit)
+    }
+
     override suspend fun fetchAllAlbumTracks(
         albums: List<PlexAlbum>,
         onProgress: (current: Int, total: Int) -> Unit,
@@ -307,6 +381,7 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient, SonicC
                 if (ratingKey.isBlank() || partKey.isBlank()) continue
                 val sourceAudioCodec = track.firstAudioCodec()
                 val sourceAudioSampleRate = track.firstAudioSampleRate()
+                val behavior = track.trackBehavior()
                 add(PlexTrackStream(
                     ratingKey = ratingKey,
                     title = track.getAttribute("title"),
@@ -333,6 +408,10 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient, SonicC
                     sourceAudioSampleRate = sourceAudioSampleRate,
                     playbackMimeType = sourceAudioCodec.transcodedPlaybackMimeType(config.opusTranscodeMode, sourceAudioSampleRate, config.sonosHiResTranscodeMode),
                     sourceId = config.sourceId,
+                    musicAnalysisVersion = behavior.musicAnalysisVersion,
+                    viewCount = behavior.viewCount,
+                    lastViewedAtEpochSeconds = behavior.lastViewedAtEpochSeconds,
+                    skipCount = behavior.skipCount,
                 ))
             }
         }
@@ -660,9 +739,9 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient, SonicC
                 val partKey = track.firstPartKey() ?: continue
                 val sourceAudioCodec = track.firstAudioCodec()
                 val sourceAudioSampleRate = track.firstAudioSampleRate()
-                val viewCount = track.getAttribute("viewCount").trim().toLongOrNull() ?: 0L
+                val behavior = track.trackBehavior()
                 add(
-                    viewCount to PlexTrackStream(
+                    (behavior.viewCount ?: 0L) to PlexTrackStream(
                         ratingKey = ratingKey,
                         title = title,
                         partKey = partKey,
@@ -688,6 +767,10 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient, SonicC
                         sourceAudioSampleRate = sourceAudioSampleRate,
                         playbackMimeType = sourceAudioCodec.transcodedPlaybackMimeType(config.opusTranscodeMode, sourceAudioSampleRate, config.sonosHiResTranscodeMode),
                         sourceId = config.sourceId,
+                        musicAnalysisVersion = behavior.musicAnalysisVersion,
+                        viewCount = behavior.viewCount,
+                        lastViewedAtEpochSeconds = behavior.lastViewedAtEpochSeconds,
+                        skipCount = behavior.skipCount,
                     )
                 )
             }
@@ -720,6 +803,7 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient, SonicC
                 val partKey = track.firstPartKey() ?: continue
                 val sourceAudioCodec = track.firstAudioCodec()
                 val sourceAudioSampleRate = track.firstAudioSampleRate()
+                val behavior = track.trackBehavior()
                 add(
                     PlexTrackStream(
                         ratingKey = ratingKey,
@@ -747,7 +831,10 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient, SonicC
                         sourceAudioSampleRate = sourceAudioSampleRate,
                         playbackMimeType = sourceAudioCodec.transcodedPlaybackMimeType(config.opusTranscodeMode, sourceAudioSampleRate, config.sonosHiResTranscodeMode),
                         sourceId = config.sourceId,
-                        musicAnalysisVersion = track.getAttribute("musicAnalysisVersion").trim().ifBlank { null },
+                        musicAnalysisVersion = behavior.musicAnalysisVersion,
+                        viewCount = behavior.viewCount,
+                        lastViewedAtEpochSeconds = behavior.lastViewedAtEpochSeconds,
+                        skipCount = behavior.skipCount,
                     )
                 )
             }
@@ -1512,7 +1599,8 @@ private fun org.w3c.dom.NodeList.toTrackStreams(
 
             val partKey = track.firstPartKey() ?: continue
             val sourceAudioCodec = track.firstAudioCodec()
-                val sourceAudioSampleRate = track.firstAudioSampleRate()
+            val sourceAudioSampleRate = track.firstAudioSampleRate()
+            val behavior = track.trackBehavior()
             add(
                 PlexTrackStream(
                     ratingKey = ratingKey,
@@ -1540,7 +1628,10 @@ private fun org.w3c.dom.NodeList.toTrackStreams(
                     sourceAudioSampleRate = sourceAudioSampleRate,
                     playbackMimeType = sourceAudioCodec.transcodedPlaybackMimeType(opusMode, sourceAudioSampleRate, hiResMode),
                     sourceId = sourceId,
-                    musicAnalysisVersion = track.getAttribute("musicAnalysisVersion").trim().ifBlank { null },
+                    musicAnalysisVersion = behavior.musicAnalysisVersion,
+                    viewCount = behavior.viewCount,
+                    lastViewedAtEpochSeconds = behavior.lastViewedAtEpochSeconds,
+                    skipCount = behavior.skipCount,
                 )
             )
         }
@@ -1577,6 +1668,7 @@ private fun parseFavoriteTracksJson(
             }
             val sourceAudioCodec = media.firstAudioCodec()
             val sourceAudioSampleRate = media.firstAudioSampleRate()
+            val behavior = track.trackBehavior()
 
             add(
                 PlexTrackStream(
@@ -1610,6 +1702,10 @@ private fun parseFavoriteTracksJson(
                     sourceAudioSampleRate = sourceAudioSampleRate,
                     playbackMimeType = sourceAudioCodec.transcodedPlaybackMimeType(opusMode, sourceAudioSampleRate, hiResMode),
                     sourceId = sourceId,
+                    musicAnalysisVersion = behavior.musicAnalysisVersion,
+                    viewCount = behavior.viewCount,
+                    lastViewedAtEpochSeconds = behavior.lastViewedAtEpochSeconds,
+                    skipCount = behavior.skipCount,
                 )
             )
         }

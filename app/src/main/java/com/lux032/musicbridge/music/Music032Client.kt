@@ -183,6 +183,11 @@ class Music032Client(
             artistName = value.optString("artist").trim().ifBlank { null },
             thumbUrl = mediaUrl(value.optString("artworkUrl")),
             sourceId = sourceId,
+            musicAnalysisVersion = value.optString("musicAnalysisVersion").trim().ifBlank { null },
+            viewCount = value.opt("viewCount")?.toString()?.toLongOrNull(),
+            lastViewedAtEpochSeconds = value.opt("lastViewedAt")?.toString()?.toLongOrNull()
+                ?: parseEpochSeconds(value.optString("lastPlayedAt")),
+            skipCount = value.opt("skipCount")?.toString()?.toLongOrNull(),
         )
     }
 

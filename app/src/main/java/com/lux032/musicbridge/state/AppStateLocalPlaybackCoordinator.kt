@@ -6,9 +6,11 @@ import com.lux032.musicbridge.local.LocalQueueItem
 import com.lux032.musicbridge.plex.PlexAlbum
 import com.lux032.musicbridge.plex.PlexTrackStream
 import com.lux032.musicbridge.plex.withLocalPlaybackPolicy
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.security.MessageDigest
 
 /**
@@ -342,6 +344,15 @@ internal class AppStateLocalPlaybackCoordinator(
             state.clientFor(track.sourceId).scrobble(track.ratingKey, positionMillis, durationMillis)
         }.onSuccess {
             scrobbledTrackKeys += playbackKey
+            recordTrackPlaybackSafely(track)
+        }
+    }
+
+    private suspend fun recordTrackPlaybackSafely(track: PlexTrackStream) {
+        withContext(Dispatchers.IO) {
+            runCatching {
+                state.albumLocalStore.recordTrackPlayback(track.sourceId, track.ratingKey)
+            }
         }
     }
 }

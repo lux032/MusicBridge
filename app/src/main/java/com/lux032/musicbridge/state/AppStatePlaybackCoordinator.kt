@@ -16,8 +16,10 @@ import com.lux032.musicbridge.sonos.SonosDiscovery
 import com.lux032.musicbridge.sonos.SonosPlaybackStatus
 import com.lux032.musicbridge.sonos.SonosRoom
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.util.concurrent.atomic.AtomicLong
@@ -1241,6 +1243,15 @@ internal class AppStatePlaybackCoordinator(
             state.clientFor(track.sourceId).scrobble(track.ratingKey, timeMillis, durationMillis)
         }.onSuccess {
             scrobbledTrackKeys += playbackKey
+            recordTrackPlaybackSafely(track)
+        }
+    }
+
+    private suspend fun recordTrackPlaybackSafely(track: PlexTrackStream) {
+        withContext(Dispatchers.IO) {
+            runCatching {
+                state.albumLocalStore.recordTrackPlayback(track.sourceId, track.ratingKey)
+            }
         }
     }
 

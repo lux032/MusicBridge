@@ -258,6 +258,32 @@ class AlbumLocalStore(context: Context) {
         }
     }
 
+    fun recordTrackPlayback(
+        sourceId: String,
+        ratingKey: String,
+        playedAtEpochSeconds: Long = System.currentTimeMillis() / 1000L,
+    ) {
+        val database = helper.writableDatabase
+        database.beginTransaction()
+        try {
+            for (table in listOf(AlbumDatabaseHelper.TABLE_TRACKS, AlbumDatabaseHelper.TABLE_ALBUM_TRACKS)) {
+                database.execSQL(
+                    """
+                    UPDATE $table
+                    SET ${AlbumDatabaseHelper.COLUMN_TRACK_VIEW_COUNT} = COALESCE(${AlbumDatabaseHelper.COLUMN_TRACK_VIEW_COUNT}, 0) + 1,
+                        ${AlbumDatabaseHelper.COLUMN_TRACK_LAST_VIEWED_AT_EPOCH_SECONDS} = ?
+                    WHERE ${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ?
+                      AND ${AlbumDatabaseHelper.COLUMN_TRACK_RATING_KEY} = ?
+                    """.trimIndent(),
+                    arrayOf<Any>(playedAtEpochSeconds, sourceId, ratingKey),
+                )
+            }
+            database.setTransactionSuccessful()
+        } finally {
+            database.endTransaction()
+        }
+    }
+
     fun updateAlbumTrackFavoriteStatus(sourceId: String, ratingKey: String, userRating: Float?) {
         val values = ContentValues().apply {
             if (userRating != null) put(AlbumDatabaseHelper.COLUMN_TRACK_USER_RATING, userRating)
@@ -326,6 +352,10 @@ class AlbumLocalStore(context: Context) {
             sourceAudioSampleRate = nullableInt(AlbumDatabaseHelper.COLUMN_TRACK_SAMPLE_RATE),
             playbackMimeType = nullableString(AlbumDatabaseHelper.COLUMN_TRACK_PLAYBACK_MIME_TYPE),
             sourceId = string(AlbumDatabaseHelper.COLUMN_SOURCE_ID),
+            musicAnalysisVersion = nullableString(AlbumDatabaseHelper.COLUMN_TRACK_MUSIC_ANALYSIS_VERSION),
+            viewCount = nullableLong(AlbumDatabaseHelper.COLUMN_TRACK_VIEW_COUNT),
+            lastViewedAtEpochSeconds = nullableLong(AlbumDatabaseHelper.COLUMN_TRACK_LAST_VIEWED_AT_EPOCH_SECONDS),
+            skipCount = nullableLong(AlbumDatabaseHelper.COLUMN_TRACK_SKIP_COUNT),
         )
     }
 
@@ -363,6 +393,10 @@ class AlbumLocalStore(context: Context) {
             put(AlbumDatabaseHelper.COLUMN_TRACK_BITRATE_KBPS, sourceAudioBitrateKbps)
             put(AlbumDatabaseHelper.COLUMN_TRACK_SAMPLE_RATE, sourceAudioSampleRate)
             put(AlbumDatabaseHelper.COLUMN_TRACK_PLAYBACK_MIME_TYPE, playbackMimeType)
+            put(AlbumDatabaseHelper.COLUMN_TRACK_MUSIC_ANALYSIS_VERSION, musicAnalysisVersion)
+            put(AlbumDatabaseHelper.COLUMN_TRACK_VIEW_COUNT, viewCount)
+            put(AlbumDatabaseHelper.COLUMN_TRACK_LAST_VIEWED_AT_EPOCH_SECONDS, lastViewedAtEpochSeconds)
+            put(AlbumDatabaseHelper.COLUMN_TRACK_SKIP_COUNT, skipCount)
         }
 
     private companion object {
@@ -390,6 +424,15 @@ internal fun ensureVersion8Columns(db: SQLiteDatabase) {
     for (table in listOf("tracks", "album_tracks")) {
         addColumnIfNotExists(db, table, "sample_rate", "INTEGER")
         addColumnIfNotExists(db, table, "bitrate_kbps", "INTEGER")
+    }
+}
+
+internal fun ensureVersion9Columns(db: SQLiteDatabase) {
+    for (table in listOf("tracks", "album_tracks")) {
+        addColumnIfNotExists(db, table, "view_count", "INTEGER")
+        addColumnIfNotExists(db, table, "last_viewed_at_epoch_seconds", "INTEGER")
+        addColumnIfNotExists(db, table, "skip_count", "INTEGER")
+        addColumnIfNotExists(db, table, "music_analysis_version", "TEXT")
     }
 }
 
@@ -433,11 +476,12 @@ private class AlbumDatabaseHelper(context: Context) :
             // Inspecting the actual schema makes this safe for every upgrade path, including v5.
             ensureVersion8Columns(db)
         }
+        if (oldVersion < 9) ensureVersion9Columns(db)
     }
 
     companion object {
         private const val DATABASE_NAME = "plex_album_cache.db"
-        private const val DATABASE_VERSION = 8
+        private const val DATABASE_VERSION = 9
 
         const val TABLE_ALBUMS = "albums"
         const val TABLE_TRACKS = "tracks"
@@ -468,6 +512,10 @@ private class AlbumDatabaseHelper(context: Context) :
         const val COLUMN_TRACK_SAMPLE_RATE = "sample_rate"
         const val COLUMN_TRACK_BITRATE_KBPS = "bitrate_kbps"
         const val COLUMN_TRACK_PLAYBACK_MIME_TYPE = "playback_mime_type"
+        const val COLUMN_TRACK_VIEW_COUNT = "view_count"
+        const val COLUMN_TRACK_LAST_VIEWED_AT_EPOCH_SECONDS = "last_viewed_at_epoch_seconds"
+        const val COLUMN_TRACK_SKIP_COUNT = "skip_count"
+        const val COLUMN_TRACK_MUSIC_ANALYSIS_VERSION = "music_analysis_version"
         const val COLUMN_LEAF_COUNT = "leaf_count"
     }
 
@@ -519,6 +567,10 @@ private class AlbumDatabaseHelper(context: Context) :
                 $COLUMN_TRACK_SAMPLE_RATE INTEGER,
                 $COLUMN_TRACK_BITRATE_KBPS INTEGER,
                 $COLUMN_TRACK_PLAYBACK_MIME_TYPE TEXT,
+                $COLUMN_TRACK_VIEW_COUNT INTEGER,
+                $COLUMN_TRACK_LAST_VIEWED_AT_EPOCH_SECONDS INTEGER,
+                $COLUMN_TRACK_SKIP_COUNT INTEGER,
+                $COLUMN_TRACK_MUSIC_ANALYSIS_VERSION TEXT,
                 PRIMARY KEY ($COLUMN_SOURCE_ID, $COLUMN_TRACK_RATING_KEY)
             )
             """.trimIndent()
@@ -550,6 +602,10 @@ private class AlbumDatabaseHelper(context: Context) :
                 $COLUMN_TRACK_SAMPLE_RATE INTEGER,
                 $COLUMN_TRACK_BITRATE_KBPS INTEGER,
                 $COLUMN_TRACK_PLAYBACK_MIME_TYPE TEXT,
+                $COLUMN_TRACK_VIEW_COUNT INTEGER,
+                $COLUMN_TRACK_LAST_VIEWED_AT_EPOCH_SECONDS INTEGER,
+                $COLUMN_TRACK_SKIP_COUNT INTEGER,
+                $COLUMN_TRACK_MUSIC_ANALYSIS_VERSION TEXT,
                 PRIMARY KEY ($COLUMN_SOURCE_ID, $COLUMN_TRACK_RATING_KEY)
             )
             """.trimIndent()

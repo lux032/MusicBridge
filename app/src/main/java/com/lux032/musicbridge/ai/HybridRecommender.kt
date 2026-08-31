@@ -2,8 +2,10 @@ package com.lux032.musicbridge.ai
 
 import com.lux032.musicbridge.plex.PlexTrackStream
 import com.lux032.musicbridge.plex.SonicCapableSource
+import com.lux032.musicbridge.plex.isFavorite
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlin.math.ln
 import kotlin.random.Random
 
 private val NORM_REGEX = Regex("[^\\p{L}\\p{N}]+")
@@ -11,8 +13,11 @@ private val CJK_RUN_REGEX = Regex("[\\u3400-\\u4DBF\\u4E00-\\u9FFF\\uF900-\\uFAF
 private val LATIN_WORD_REGEX = Regex("[a-z0-9]+")
 private const val MAX_SONIC_SEEDS = 5
 private const val UNKNOWN_SONIC_DISTANCE = 5.0
-private const val FALLBACK_DISTANCE_BASE = 10.0
+private const val MAX_SONIC_DISTANCE = 7.4
+private const val FALLBACK_DISTANCE_BASE = 20.0
 private const val FALLBACK_DISTANCE_STEP = 0.001
+private const val SECONDS_PER_DAY = 86_400L
+internal const val SKIP_PENALTY_ENABLED = true
 
 internal data class SeedMatches(
     val directHits: List<PlexTrackStream>,
@@ -86,14 +91,67 @@ object HybridRecommender {
         prompt: String = "",
     ): List<PlexTrackStream> = matchSeedGroups(intent, library, prompt).all
 
+    internal fun mergeBehavior(preferred: PlexTrackStream, other: PlexTrackStream): PlexTrackStream {
+        val otherIsFresher = when {
+            other.lastViewedAtEpochSeconds != preferred.lastViewedAtEpochSeconds ->
+                (other.lastViewedAtEpochSeconds ?: Long.MIN_VALUE) >
+                    (preferred.lastViewedAtEpochSeconds ?: Long.MIN_VALUE)
+            other.viewCount != preferred.viewCount ->
+                (other.viewCount ?: Long.MIN_VALUE) > (preferred.viewCount ?: Long.MIN_VALUE)
+            else -> false
+        }
+        return preferred.copy(
+            userRating = if (otherIsFresher) other.userRating else preferred.userRating,
+            musicAnalysisVersion = preferred.musicAnalysisVersion ?: other.musicAnalysisVersion,
+            viewCount = listOfNotNull(preferred.viewCount, other.viewCount).maxOrNull(),
+            lastViewedAtEpochSeconds = listOfNotNull(preferred.lastViewedAtEpochSeconds, other.lastViewedAtEpochSeconds).maxOrNull(),
+            skipCount = listOfNotNull(preferred.skipCount, other.skipCount).maxOrNull(),
+        )
+    }
+
     internal fun deduplicateByBestDistance(candidates: List<RankedTrack>): List<RankedTrack> =
         candidates.groupBy { it.track.ratingKey }.values.map { matches ->
-            matches.minWithOrNull(compareBy<RankedTrack> { it.distance ?: Double.MAX_VALUE })!!
+            val best = matches.minWithOrNull(compareBy<RankedTrack> { it.distance ?: Double.MAX_VALUE })!!
+            RankedTrack(matches.fold(best.track) { merged, match -> mergeBehavior(merged, match.track) }, best.distance)
         }
 
-    fun arrange(candidates: List<RankedTrack>, limit: Int = 30): List<PlexTrackStream> {
+    internal fun calculateBehaviorMultiplier(
+        track: PlexTrackStream,
+        nowEpochSeconds: Long,
+        skipPenaltyEnabled: Boolean = SKIP_PENALTY_ENABLED,
+    ): Double {
+        val views = (track.viewCount ?: 0L).coerceAtLeast(0L)
+        val viewBonus = (ln(1.0 + views) * 0.08).coerceAtMost(0.35)
+        val favoriteBonus = if (track.isFavorite) 0.15 else 0.0
+        val elapsed = track.lastViewedAtEpochSeconds?.let { (nowEpochSeconds - it).coerceAtLeast(0L) }
+        val rediscoveryBonus = if (views >= 10L && elapsed != null && elapsed > 30L * SECONDS_PER_DAY) 0.18 else 0.0
+        val recencyPenalty = when {
+            elapsed == null -> 0.0
+            elapsed < SECONDS_PER_DAY -> 0.45
+            elapsed < 7L * SECONDS_PER_DAY -> 0.20
+            elapsed < 30L * SECONDS_PER_DAY -> 0.08
+            else -> 0.0
+        }
+        val skipPenalty = if (skipPenaltyEnabled) {
+            ((track.skipCount ?: 0L).coerceAtLeast(0L) * 0.05).coerceAtMost(0.20)
+        } else 0.0
+        return (1.0 - viewBonus - favoriteBonus - rediscoveryBonus + recencyPenalty + skipPenalty)
+            .coerceIn(0.6, 1.6)
+    }
+
+    private fun rankedDistance(ranked: RankedTrack, nowEpochSeconds: Long): Double {
+        val base = ranked.distance ?: Double.MAX_VALUE
+        return if (base == 0.0 || base == Double.MAX_VALUE) base
+        else base * calculateBehaviorMultiplier(ranked.track, nowEpochSeconds)
+    }
+
+    fun arrange(
+        candidates: List<RankedTrack>,
+        limit: Int = 30,
+        nowEpochSeconds: Long = System.currentTimeMillis() / 1000L,
+    ): List<PlexTrackStream> {
         val remaining = deduplicateByBestDistance(candidates)
-            .sortedWith(compareBy<RankedTrack> { it.distance ?: Double.MAX_VALUE }.thenBy { it.track.title.lowercase() })
+            .sortedWith(compareBy<RankedTrack> { rankedDistance(it, nowEpochSeconds) }.thenBy { it.track.title.lowercase() })
             .toMutableList()
         val result = mutableListOf<PlexTrackStream>()
         val artistCounts = mutableMapOf<String, Int>()
@@ -134,7 +192,10 @@ object HybridRecommender {
             if (sonic != null) {
                 runCatching { sonic.fetchNearestTracks(seed.ratingKey, limit) }
                     .getOrDefault(emptyList())
-                    .forEach { ranked += RankedTrack(it.track, it.distance ?: UNKNOWN_SONIC_DISTANCE) }
+                    .forEach {
+                        val distance = (it.distance ?: UNKNOWN_SONIC_DISTANCE).coerceIn(0.0, MAX_SONIC_DISTANCE)
+                        ranked += RankedTrack(it.track, distance)
+                    }
             }
         }
         if (deduplicateByBestDistance(ranked).size < limit) {
