@@ -9,11 +9,16 @@ import com.lux032.musicbridge.SONOS_MAX_SAMPLE_RATE_HZ
 import com.lux032.musicbridge.SonosHiResTranscodeMode
 import com.lux032.musicbridge.music.MusicSourceClient
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import org.w3c.dom.Element
 import org.json.JSONObject
 import java.io.ByteArrayInputStream
 import java.io.InputStream
+import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLDecoder
@@ -76,6 +81,8 @@ data class PlexTrackStream(
     val viewCount: Long? = null,
     val lastViewedAtEpochSeconds: Long? = null,
     val skipCount: Long? = null,
+    val discNumber: Int? = null,
+    val trackNumber: Int? = null,
 )
 
 internal data class PlexTrackBehavior(
@@ -173,6 +180,7 @@ data class PlexPlaylistTracksResult(
 
 private const val FAVORITE_TRACK_RATING = 10
 private const val PAGED_CONTAINER_SIZE = 200
+private const val ALBUM_TRACK_SYNC_PAGE_SIZE = 600
 private const val FAVORITE_TRACKS_CONTAINER_SIZE = 1000
 
 class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient, SonicCapableSource {
@@ -181,9 +189,9 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient, SonicC
     private val appVersion = "0.1.0"
     private val product = "Android App"
     private val platform = "Android ${Build.VERSION.RELEASE ?: "Unknown"}"
-    private var cachedToken: String? = null
-    private var cachedServer: PlexServer? = null
-    private var cachedMachineIdentifier: String? = null
+    @Volatile private var cachedToken: String? = null
+    @Volatile private var cachedServer: PlexServer? = null
+    @Volatile private var cachedMachineIdentifier: String? = null
 
     suspend fun fetchAlbumNames(): PlexAlbumResult = withContext(Dispatchers.IO) {
         val albumsResult = fetchAlbums()
@@ -321,18 +329,90 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient, SonicC
         albums: List<PlexAlbum>,
         onProgress: (current: Int, total: Int) -> Unit,
     ): Map<String, List<PlexTrackStream>> = withContext(Dispatchers.IO) {
-        val token = resolveToken()
-        val server = resolveServer(token)
-        val total = albums.size
-        val result = mutableMapOf<String, List<PlexTrackStream>>()
-        albums.forEachIndexed { index, album ->
-            runCatching {
-                result[album.ratingKey] = listAlbumTracks(server, album, token)
+        val token = resolvedToken()
+        val server = resolvedServer(token)
+        val accessToken = server.accessToken.orEmpty().ifBlank { token }
+
+        val batched = runCatching {
+            val sections = listMusicSections(server, token)
+            val tracks = mutableListOf<PlexTrackStream>()
+            var completedSectionTracks = 0
+            sections.forEach { section ->
+                var containerStart = 0
+                var sectionTotal: Int? = null
+                while (true) {
+                    val response = request(
+                        method = "GET",
+                        url = buildPlexUrl(
+                            serverUri = server.uri,
+                            path = "/library/sections/${section.key}/all",
+                            queryParameters = listOf(
+                                "type" to "10",
+                                "includeStreams" to "1",
+                                "sort" to "addedAt:asc",
+                                "X-Plex-Container-Start" to containerStart.toString(),
+                                "X-Plex-Container-Size" to ALBUM_TRACK_SYNC_PAGE_SIZE.toString(),
+                            ),
+                        ),
+                        headers = mapOf("X-Plex-Token" to accessToken),
+                    )
+                    val root = parseXml(response.body)
+                    val nodes = root.getElementsByTagName("Track")
+                    val returned = nodes.length
+                    if (returned == 0) break
+                    val pageTracks = nodes.toTrackStreams(
+                        server.uri,
+                        accessToken,
+                        config.sourceId,
+                        config.clientIdentifier,
+                        config.opusTranscodeMode,
+                        config.sonosHiResTranscodeMode,
+                    )
+                    sectionTotal = root.getAttribute("totalSize").toIntOrNull() ?: sectionTotal
+                    tracks += pageTracks
+                    containerStart += returned
+                    onProgress(
+                        completedSectionTracks + containerStart,
+                        completedSectionTracks + maxOf(sectionTotal ?: containerStart, containerStart),
+                    )
+                    if (returned < ALBUM_TRACK_SYNC_PAGE_SIZE ||
+                        sectionTotal?.let { containerStart >= it } == true
+                    ) break
+                }
+                completedSectionTracks += containerStart
             }
-            onProgress(index + 1, total)
+            tracks.toAlbumTrackMap()
+        }.getOrNull()
+
+        if (batched != null && (batched.isNotEmpty() || albums.isEmpty())) {
+            return@withContext batched
         }
-        result
+
+        val semaphore = Semaphore(4)
+        val completed = java.util.concurrent.atomic.AtomicInteger(0)
+        albums.map { album ->
+            async {
+                semaphore.withPermit {
+                    val tracks = runCatching { listAlbumTracks(server, album, accessToken) }
+                        .getOrDefault(emptyList())
+                    onProgress(completed.incrementAndGet(), albums.size)
+                    album.ratingKey to tracks
+                }
+            }
+        }.awaitAll().filter { it.second.isNotEmpty() }.toMap()
     }
+
+    private fun List<PlexTrackStream>.toAlbumTrackMap(): Map<String, List<PlexTrackStream>> =
+        distinctBy(PlexTrackStream::ratingKey)
+            .filter { !it.albumRatingKey.isNullOrBlank() }
+            .groupBy { requireNotNull(it.albumRatingKey) }
+            .mapValues { (_, tracks) ->
+                tracks.sortedWith(
+                    compareBy<PlexTrackStream> { it.discNumber ?: 1 }
+                        .thenBy { it.trackNumber ?: Int.MAX_VALUE }
+                        .thenBy { it.title.lowercase() },
+                )
+            }
 
     override suspend fun fetchPlaylists(): PlexPlaylistsResult = withContext(Dispatchers.IO) {
         val token = resolveToken()
@@ -537,7 +617,11 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient, SonicC
         cachedServer ?: resolveServer(token).also { cachedServer = it }
 
     private fun resolveToken(): String {
-        config.token?.takeIf { it.isNotBlank() }?.let { return it }
+        cachedToken?.let { return it }
+        config.token?.takeIf { it.isNotBlank() }?.let { token ->
+            cachedToken = token
+            return token
+        }
         val username = config.username?.takeIf { it.isNotBlank() }
             ?: error("缺少 Plex 用户名。")
         val password = config.password?.takeIf { it.isNotBlank() }
@@ -553,17 +637,19 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient, SonicC
             headers = mapOf("Authorization" to "Basic $authValue"),
         )
         val root = parseXml(response.body)
-        return root.childText("authenticationToken")
-            ?: error("Plex 登录成功，但没有返回 token。")
+        return (root.childText("authenticationToken")
+            ?: error("Plex 登录成功，但没有返回 token。"))
+            .also { cachedToken = it }
     }
 
     private fun resolveServer(token: String): PlexServer {
+        cachedServer?.let { return it }
         config.baseUrl?.takeIf { it.isNotBlank() }?.let {
             return PlexServer(
                 name = config.preferredServer?.ifBlank { null } ?: "DirectServer",
                 uri = it.trimEnd('/'),
                 accessToken = token,
-            )
+            ).also { cachedServer = it }
         }
 
         val response = request(
@@ -584,10 +670,14 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient, SonicC
                 for (connectionIndex in 0 until connections.length) {
                     val connection = connections.item(connectionIndex) as? Element ?: continue
                     val uri = connection.getAttribute("uri")
-                    if (uri.isBlank()) {
-                        continue
-                    }
-                    add(PlexServer(device.getAttribute("name"), uri.trimEnd('/'), accessToken))
+                    if (uri.isBlank()) continue
+                    add(
+                        PlexServerCandidate(
+                            server = PlexServer(device.getAttribute("name"), uri.trimEnd('/'), accessToken),
+                            isPublicDirect = connection.getAttribute("local") == "0" &&
+                                connection.getAttribute("relay") != "1",
+                        ),
+                    )
                 }
             }
         }
@@ -597,15 +687,24 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient, SonicC
         }
 
         config.preferredServer?.takeIf { it.isNotBlank() }?.let { preferred ->
-            candidates.firstOrNull { it.name.equals(preferred, ignoreCase = true) }?.let { return it }
+            val preferredCandidates = candidates.filter { it.server.name.equals(preferred, ignoreCase = true) }
+            preferredCandidates.firstOrNull(PlexServerCandidate::isPublicDirect)?.let {
+                cachedServer = it.server
+                return it.server
+            }
+            preferredCandidates.firstOrNull()?.let {
+                cachedServer = it.server
+                return it.server
+            }
             error(
                 "未找到服务器 '$preferred'。可用服务器: ${
-                    candidates.map { it.name }.distinct().sorted().joinToString()
+                    candidates.map { it.server.name }.distinct().sorted().joinToString()
                 }"
             )
         }
 
-        return candidates.first()
+        return (candidates.firstOrNull(PlexServerCandidate::isPublicDirect)?.server
+            ?: candidates.first().server).also { cachedServer = it }
     }
 
     private fun listMusicSections(server: PlexServer, token: String): List<PlexSection> {
@@ -835,6 +934,8 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient, SonicC
                         viewCount = behavior.viewCount,
                         lastViewedAtEpochSeconds = behavior.lastViewedAtEpochSeconds,
                         skipCount = behavior.skipCount,
+                        discNumber = track.getAttribute("parentIndex").trim().toIntOrNull(),
+                        trackNumber = track.getAttribute("index").trim().toIntOrNull(),
                     )
                 )
             }
@@ -855,6 +956,7 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient, SonicC
                         "type" to "10",
                         "userRating" to FAVORITE_TRACK_RATING.toString(),
                         "includeStreams" to "1",
+                        "sort" to "addedAt:asc",
                         "X-Plex-Container-Start" to containerStart.toString(),
                         "X-Plex-Container-Size" to FAVORITE_TRACKS_CONTAINER_SIZE.toString(),
                     ),
@@ -862,6 +964,8 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient, SonicC
                 headers = mapOf("X-Plex-Token" to token),
                 accept = "application/json",
             )
+            val returned = favoriteTrackMetadataCount(response.body)
+            if (returned == 0) break
             val pageTracks = parseFavoriteTracksJson(
                 body = response.body,
                 serverUri = server.uri,
@@ -871,15 +975,9 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient, SonicC
                 opusMode = config.opusTranscodeMode,
                 hiResMode = config.sonosHiResTranscodeMode,
             )
-            if (pageTracks.isEmpty()) {
-                break
-            }
-
             tracks += pageTracks
-            if (pageTracks.size < FAVORITE_TRACKS_CONTAINER_SIZE) {
-                break
-            }
-            containerStart += pageTracks.size
+            containerStart += returned
+            if (returned < FAVORITE_TRACKS_CONTAINER_SIZE) break
         }
 
         return tracks
@@ -899,6 +997,7 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient, SonicC
                         "type" to "10",
                         "userRating>=" to FAVORITE_TRACK_RATING.toString(),
                         "includeStreams" to "1",
+                        "sort" to "addedAt:asc",
                         "X-Plex-Container-Start" to containerStart.toString(),
                         "X-Plex-Container-Size" to PAGED_CONTAINER_SIZE.toString(),
                     ),
@@ -906,7 +1005,10 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient, SonicC
                 headers = mapOf("X-Plex-Token" to token),
             )
             val root = parseXml(response.body)
-            val pageTracks = root.getElementsByTagName("Track").toTrackStreams(
+            val nodes = root.getElementsByTagName("Track")
+            val returned = nodes.length
+            if (returned == 0) break
+            val pageTracks = nodes.toTrackStreams(
                 serverUri = server.uri,
                 token = token,
                 sourceId = config.sourceId,
@@ -914,15 +1016,9 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient, SonicC
                 opusMode = config.opusTranscodeMode,
                 hiResMode = config.sonosHiResTranscodeMode,
             )
-            if (pageTracks.isEmpty()) {
-                break
-            }
-
             tracks += pageTracks
-            if (pageTracks.size < PAGED_CONTAINER_SIZE) {
-                break
-            }
-            containerStart += pageTracks.size
+            containerStart += returned
+            if (returned < PAGED_CONTAINER_SIZE) break
         }
 
         return tracks
@@ -992,31 +1088,36 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient, SonicC
         headers: Map<String, String>,
         accept: String = "application/xml",
     ): HttpResponse {
-        val connection = (URL(url).openConnection() as HttpURLConnection).apply {
-            requestMethod = method
-            instanceFollowRedirects = true
-            connectTimeout = 15000
-            readTimeout = 30000
-            doInput = true
-            setRequestProperty("Accept", accept)
-            defaultHeaders().plus(headers).forEach { (name, value) ->
-                setRequestProperty(name, value)
+        try {
+            val connection = (URL(url).openConnection() as HttpURLConnection).apply {
+                requestMethod = method
+                instanceFollowRedirects = true
+                connectTimeout = 15000
+                readTimeout = 30000
+                doInput = true
+                setRequestProperty("Accept", accept)
+                defaultHeaders().plus(headers).forEach { (name, value) ->
+                    setRequestProperty(name, value)
+                }
             }
-        }
 
-        return try {
             val status = connection.responseCode
             val stream = if (status in 200..299) connection.inputStream else connection.errorStream
-            HttpResponse(
+            return HttpResponse(
                 status = status,
                 body = stream?.readFully().orEmpty(),
             ).also {
+                if (status == HttpURLConnection.HTTP_UNAUTHORIZED) {
+                    cachedToken = null
+                    cachedServer = null
+                }
                 if (status !in 200..299) {
                     error("HTTP $status from $url: ${it.body.take(400)}")
                 }
             }
-        } finally {
-            connection.disconnect()
+        } catch (error: IOException) {
+            if (config.baseUrl.isNullOrBlank()) cachedServer = null
+            throw error
         }
     }
 
@@ -1033,6 +1134,11 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient, SonicC
 private data class HttpResponse(
     val status: Int,
     val body: String,
+)
+
+private data class PlexServerCandidate(
+    val server: PlexServer,
+    val isPublicDirect: Boolean,
 )
 
 private const val ACCESS_EXTERNAL_DTD = "http://javax.xml.XMLConstants/property/accessExternalDTD"
@@ -1695,10 +1801,19 @@ private fun org.w3c.dom.NodeList.toTrackStreams(
                     viewCount = behavior.viewCount,
                     lastViewedAtEpochSeconds = behavior.lastViewedAtEpochSeconds,
                     skipCount = behavior.skipCount,
+                    discNumber = track.getAttribute("parentIndex").trim().toIntOrNull(),
+                    trackNumber = track.getAttribute("index").trim().toIntOrNull(),
                 )
             )
         }
     }
+
+private fun favoriteTrackMetadataCount(body: String): Int =
+    JSONObject(body)
+        .optJSONObject("MediaContainer")
+        ?.optJSONArray("Metadata")
+        ?.length()
+        ?: 0
 
 private fun parseFavoriteTracksJson(
     body: String,

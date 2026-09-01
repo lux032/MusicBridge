@@ -43,6 +43,17 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.UUID
 
+private data class ClientFingerprint(
+    val profile: MusicServerProfile,
+    val opusTranscodeMode: OpusTranscodeMode,
+    val sonosHiResTranscodeMode: SonosHiResTranscodeMode,
+)
+
+private data class CachedMusicSourceClient(
+    val fingerprint: ClientFingerprint,
+    val client: MusicSourceClient,
+)
+
 @Stable
 class AppState(
     application: Application,
@@ -98,6 +109,7 @@ class AppState(
     private val initialPreferences = initialProfiles.firstOrNull { it.id == initialActiveServerId } ?: MusicServerProfile()
     private val libraryCoordinator = AppStateLibraryCoordinator(this)
     private val playbackCoordinator = AppStatePlaybackCoordinator(this)
+    private val musicSourceClients = java.util.concurrent.ConcurrentHashMap<String, CachedMusicSourceClient>()
     internal val localPlaybackCoordinator = AppStateLocalPlaybackCoordinator(this)
 
     val navigationStack = mutableStateListOf(AppSection.Home)
@@ -259,8 +271,11 @@ class AppState(
         }
     }
 
-    internal fun client(preferences: MusicServerProfile = connectionPreferences): MusicSourceClient =
-        when (preferences.type) {
+    internal fun client(preferences: MusicServerProfile = connectionPreferences): MusicSourceClient {
+        val cacheKey = preferences.id.ifBlank { "active:${preferences.type}" }
+        val fingerprint = ClientFingerprint(preferences, opusTranscodeMode, sonosHiResTranscodeMode)
+        musicSourceClients[cacheKey]?.takeIf { it.fingerprint == fingerprint }?.let { return it.client }
+        return when (preferences.type) {
             MusicServerType.Plex -> PlexClient(
                 PlexAuthConfig(
                     username = preferences.username,
@@ -275,10 +290,12 @@ class AppState(
                 )
             )
             MusicServerType.Music032 -> Music032Client(preferences)
-        }
+        }.also { musicSourceClients[cacheKey] = CachedMusicSourceClient(fingerprint, it) }
+    }
 
     fun updateOpusTranscodeMode(mode: OpusTranscodeMode) {
         opusTranscodeMode = mode
+        musicSourceClients.clear()
         appPreferences.setOpusTranscodeMode(mode)
         actionMessage = when (mode) {
             OpusTranscodeMode.DIRECT_MP3 -> "已切换为 Opus 直连秒播 (MP3 320k)"
@@ -288,6 +305,7 @@ class AppState(
 
     fun updateSonosHiResTranscodeMode(mode: SonosHiResTranscodeMode) {
         sonosHiResTranscodeMode = mode
+        musicSourceClients.clear()
         appPreferences.setSonosHiResTranscodeMode(mode)
         actionMessage = when (mode) {
             SonosHiResTranscodeMode.TRANSCODE_MP3 -> "已开启 Sonos Hi-Res MP3 320k 转码"
@@ -381,6 +399,7 @@ class AppState(
             }
             return
         }
+        musicSourceClients.remove(normalized.id)
         if (index >= 0) serverProfiles[index] = normalized else serverProfiles.add(normalized)
         activateServer(normalized, refreshAfterSave)
         actionMessage = "已保存服务器：${normalized.displayName}"
@@ -405,6 +424,7 @@ class AppState(
             LocalPlaybackService.stop(context)
         }
         serverProfiles.removeAt(index)
+        musicSourceClients.remove(serverId)
         albumLocalStore.deleteServerData(serverId)
         appPreferences.clearSourceData(serverId)
         if (wasActive) {

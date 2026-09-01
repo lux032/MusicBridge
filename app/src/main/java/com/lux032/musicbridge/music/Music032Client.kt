@@ -249,25 +249,21 @@ class Music032Client(
                 setRequestProperty("Content-Type", "application/json; charset=utf-8")
             }
         }
-        return try {
-            if (body != null) {
-                connection.outputStream.bufferedWriter(StandardCharsets.UTF_8).use { it.write(body.toString()) }
-            }
-            val status = connection.responseCode
-            val response = (if (status in 200..299) connection.inputStream else connection.errorStream)
-                ?.bufferedReader(StandardCharsets.UTF_8)
-                ?.use { it.readText() }
-                .orEmpty()
-            if (status !in 200..299) {
-                val message = runCatching {
-                    JSONObject(response).optJSONObject("error")?.optString("message")
-                }.getOrNull().orEmpty().ifBlank { response.take(300) }
-                error("032 Music Server HTTP $status：$message")
-            }
-            response
-        } finally {
-            connection.disconnect()
+        if (body != null) {
+            connection.outputStream.bufferedWriter(StandardCharsets.UTF_8).use { it.write(body.toString()) }
         }
+        val status = connection.responseCode
+        val response = (if (status in 200..299) connection.inputStream else connection.errorStream)
+            ?.bufferedReader(StandardCharsets.UTF_8)
+            ?.use { it.readText() }
+            .orEmpty()
+        if (status !in 200..299) {
+            val message = runCatching {
+                JSONObject(response).optJSONObject("error")?.optString("message")
+            }.getOrNull().orEmpty().ifBlank { response.take(300) }
+            error("032 Music Server HTTP $status：$message")
+        }
+        return response
     }
 
     private fun mediaUrl(path: String): String? {

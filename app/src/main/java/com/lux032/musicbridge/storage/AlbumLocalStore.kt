@@ -229,7 +229,7 @@ class AlbumLocalStore(context: Context) {
             arrayOf(sourceId, albumRatingKey),
             null,
             null,
-            null,
+            "COALESCE(${AlbumDatabaseHelper.COLUMN_TRACK_DISC_NUMBER}, 1) ASC, COALESCE(${AlbumDatabaseHelper.COLUMN_TRACK_NUMBER}, 2147483647) ASC, ${AlbumDatabaseHelper.COLUMN_TRACK_TITLE} COLLATE NOCASE ASC",
         ).use { cursor ->
             buildList {
                 while (cursor.moveToNext()) {
@@ -245,10 +245,11 @@ class AlbumLocalStore(context: Context) {
             database.delete(AlbumDatabaseHelper.TABLE_ALBUM_TRACKS, "${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ?", arrayOf(sourceId))
             albumTracks.values.forEach { tracks ->
                 tracks.forEach { track ->
-                    database.insertOrThrow(
+                    database.insertWithOnConflict(
                         AlbumDatabaseHelper.TABLE_ALBUM_TRACKS,
                         null,
                         track.toContentValues(),
+                        SQLiteDatabase.CONFLICT_REPLACE,
                     )
                 }
             }
@@ -356,6 +357,8 @@ class AlbumLocalStore(context: Context) {
             viewCount = nullableLong(AlbumDatabaseHelper.COLUMN_TRACK_VIEW_COUNT),
             lastViewedAtEpochSeconds = nullableLong(AlbumDatabaseHelper.COLUMN_TRACK_LAST_VIEWED_AT_EPOCH_SECONDS),
             skipCount = nullableLong(AlbumDatabaseHelper.COLUMN_TRACK_SKIP_COUNT),
+            discNumber = nullableInt(AlbumDatabaseHelper.COLUMN_TRACK_DISC_NUMBER),
+            trackNumber = nullableInt(AlbumDatabaseHelper.COLUMN_TRACK_NUMBER),
         )
     }
 
@@ -397,6 +400,8 @@ class AlbumLocalStore(context: Context) {
             put(AlbumDatabaseHelper.COLUMN_TRACK_VIEW_COUNT, viewCount)
             put(AlbumDatabaseHelper.COLUMN_TRACK_LAST_VIEWED_AT_EPOCH_SECONDS, lastViewedAtEpochSeconds)
             put(AlbumDatabaseHelper.COLUMN_TRACK_SKIP_COUNT, skipCount)
+            put(AlbumDatabaseHelper.COLUMN_TRACK_DISC_NUMBER, discNumber)
+            put(AlbumDatabaseHelper.COLUMN_TRACK_NUMBER, trackNumber)
         }
 
     private companion object {
@@ -436,8 +441,20 @@ internal fun ensureVersion9Columns(db: SQLiteDatabase) {
     }
 }
 
+internal fun ensureVersion10Columns(db: SQLiteDatabase) {
+    for (table in listOf("tracks", "album_tracks")) {
+        addColumnIfNotExists(db, table, "disc_number", "INTEGER")
+        addColumnIfNotExists(db, table, "track_number", "INTEGER")
+    }
+}
+
 private class AlbumDatabaseHelper(context: Context) :
     SQLiteOpenHelper(context, DATABASE_NAME, null, DATABASE_VERSION) {
+
+    override fun onConfigure(db: SQLiteDatabase) {
+        super.onConfigure(db)
+        db.enableWriteAheadLogging()
+    }
 
     override fun onCreate(db: SQLiteDatabase) {
         createAlbumsTable(db)
@@ -477,11 +494,12 @@ private class AlbumDatabaseHelper(context: Context) :
             ensureVersion8Columns(db)
         }
         if (oldVersion < 9) ensureVersion9Columns(db)
+        if (oldVersion < 10) ensureVersion10Columns(db)
     }
 
     companion object {
         private const val DATABASE_NAME = "plex_album_cache.db"
-        private const val DATABASE_VERSION = 9
+        private const val DATABASE_VERSION = 10
 
         const val TABLE_ALBUMS = "albums"
         const val TABLE_TRACKS = "tracks"
@@ -515,6 +533,8 @@ private class AlbumDatabaseHelper(context: Context) :
         const val COLUMN_TRACK_VIEW_COUNT = "view_count"
         const val COLUMN_TRACK_LAST_VIEWED_AT_EPOCH_SECONDS = "last_viewed_at_epoch_seconds"
         const val COLUMN_TRACK_SKIP_COUNT = "skip_count"
+        const val COLUMN_TRACK_DISC_NUMBER = "disc_number"
+        const val COLUMN_TRACK_NUMBER = "track_number"
         const val COLUMN_TRACK_MUSIC_ANALYSIS_VERSION = "music_analysis_version"
         const val COLUMN_LEAF_COUNT = "leaf_count"
     }
@@ -571,6 +591,8 @@ private class AlbumDatabaseHelper(context: Context) :
                 $COLUMN_TRACK_LAST_VIEWED_AT_EPOCH_SECONDS INTEGER,
                 $COLUMN_TRACK_SKIP_COUNT INTEGER,
                 $COLUMN_TRACK_MUSIC_ANALYSIS_VERSION TEXT,
+                $COLUMN_TRACK_DISC_NUMBER INTEGER,
+                $COLUMN_TRACK_NUMBER INTEGER,
                 PRIMARY KEY ($COLUMN_SOURCE_ID, $COLUMN_TRACK_RATING_KEY)
             )
             """.trimIndent()
@@ -606,6 +628,8 @@ private class AlbumDatabaseHelper(context: Context) :
                 $COLUMN_TRACK_LAST_VIEWED_AT_EPOCH_SECONDS INTEGER,
                 $COLUMN_TRACK_SKIP_COUNT INTEGER,
                 $COLUMN_TRACK_MUSIC_ANALYSIS_VERSION TEXT,
+                $COLUMN_TRACK_DISC_NUMBER INTEGER,
+                $COLUMN_TRACK_NUMBER INTEGER,
                 PRIMARY KEY ($COLUMN_SOURCE_ID, $COLUMN_TRACK_RATING_KEY)
             )
             """.trimIndent()

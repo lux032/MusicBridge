@@ -80,34 +80,35 @@ internal class AppStateLibraryCoordinator(
                 state.selectedAlbum = null
                 state.trackResult = null
             }
-            if (profile.type == MusicServerType.Music032 && showLoading) {
-                state.isLoading = false
-            }
-            state.actionMessage = if (profile.type == MusicServerType.Music032) {
-                "已同步 ${fetched.albums.size} 张专辑，正在批量同步曲目..."
-            } else {
-                "已同步 ${fetched.albums.size} 张专辑，正在同步曲目..."
-            }
-            val allTracks = client.fetchAllAlbumTracks(fetched.albums) { current, total ->
-                if (state.connectionPreferences.id == sourceId) {
-                    state.actionMessage = if (profile.type == MusicServerType.Music032) {
-                        "正在批量同步曲目 $current/$total"
-                    } else {
-                        "正在同步曲目 $current/$total"
+            if (showLoading) state.isLoading = false
+            state.actionMessage = "已同步 ${fetched.albums.size} 张专辑，正在批量同步曲目..."
+            runCatching {
+                val allTracks = client.fetchAllAlbumTracks(fetched.albums) { current, total ->
+                    if (state.connectionPreferences.id == sourceId) {
+                        state.actionMessage = "正在批量同步曲目 $current/$total"
                     }
                 }
+                if (allTracks.isEmpty() && fetched.albums.isNotEmpty()) {
+                    error("曲目同步未返回数据，已保留本地曲目缓存。")
+                }
+                withContext(Dispatchers.IO) {
+                    state.albumLocalStore.replaceAllAlbumTracks(sourceId, allTracks)
+                }
+                allTracks
+            }.onSuccess { allTracks ->
+                if (state.connectionPreferences.id != sourceId) return
+                val totalTrackCount = allTracks.values.sumOf { tracks -> tracks.size }
+                state.actionMessage = "已同步 ${fetched.albums.size} 张专辑、${totalTrackCount} 首曲目"
+            }.onFailure { error ->
+                if (error is CancellationException) throw error
+                if (state.connectionPreferences.id == sourceId) {
+                    state.actionMessage = "已同步 ${fetched.albums.size} 张专辑；曲目同步失败，已保留本地缓存"
+                    state.errorMessage = error.message ?: "曲目同步失败"
+                }
             }
-            withContext(Dispatchers.IO) {
-                state.albumLocalStore.replaceAllAlbumTracks(sourceId, allTracks)
-            }
-            if (state.connectionPreferences.id != sourceId) return
-            val totalTrackCount = allTracks.values.sumOf { tracks -> tracks.size }
-            state.actionMessage = "已同步 ${fetched.albums.size} 张专辑、${totalTrackCount} 首曲目"
         } catch (cancellation: CancellationException) {
             throw cancellation
         } catch (error: Throwable) {
-            state.selectedAlbum = null
-            state.trackResult = null
             state.actionMessage = null
             state.errorMessage = error.message ?: "未知错误"
         } finally {
