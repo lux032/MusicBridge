@@ -43,7 +43,12 @@ internal data class AppLayoutInfo(
         }
     val artistGridMinimumWidth: Dp get() = if (isWide) 168.dp else 160.dp
     val detailArtworkMaximumWidth: Dp get() = if (isWide) 440.dp else 560.dp
-    val collectionHeroMaximumWidth: Dp get() = if (isWide) 280.dp else 560.dp
+    val albumDetailCompactArtworkSize: Dp
+        get() = when {
+            isTablet -> 160.dp
+            isLandscape -> 128.dp
+            else -> 112.dp
+        }
     val homePreviewColumns: Int
         get() = when {
             isWide -> 6

@@ -1,7 +1,6 @@
 package com.lux032.musicbridge
 
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
@@ -37,7 +36,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -415,14 +413,20 @@ internal fun AlbumCollectionSection(
     onAlbumQueueAction: (PlexAlbum, QueuePlacement) -> Unit,
 ) {
     val layoutInfo = LocalAppLayoutInfo.current
-    val heroAlbum = albums.firstOrNull()
-    if (heroAlbum == null) {
-        EmptyStateCard(
-            title = title,
-            body = Strings.noAlbumsToShow,
-            actionLabel = Strings.backToHome,
-            onAction = onBack,
-        )
+    if (albums.isEmpty()) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = layoutInfo.horizontalPadding, vertical = 16.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            EmptyStateCard(
+                title = title,
+                body = Strings.noAlbumsToShow,
+                actionLabel = Strings.backToHome,
+                onAction = onBack,
+            )
+        }
         return
     }
 
@@ -442,23 +446,6 @@ internal fun AlbumCollectionSection(
         item(span = { GridItemSpan(maxLineSpan) }, contentType = "back") {
             BackCircleButton(onClick = onBack, contentDescription = Strings.backToHome)
         }
-        item(span = { GridItemSpan(maxLineSpan) }, contentType = "hero") {
-            Box(
-                modifier = Modifier.fillMaxWidth(),
-                contentAlignment = Alignment.Center,
-            ) {
-                AsyncAlbumArtwork(
-                    imageUrl = heroAlbum.thumbUrl,
-                    title = heroAlbum.title,
-                    modifier = Modifier
-                        .widthIn(max = layoutInfo.collectionHeroMaximumWidth)
-                        .fillMaxWidth()
-                        .aspectRatio(1f)
-                        .clip(RoundedCornerShape(16.dp)),
-                    thumbnailSize = layoutInfo.collectionHeroMaximumWidth,
-                )
-            }
-        }
         item(span = { GridItemSpan(maxLineSpan) }, contentType = "header") {
             Column(
                 modifier = Modifier.fillMaxWidth(),
@@ -474,12 +461,6 @@ internal fun AlbumCollectionSection(
                     text = "$subtitle ${Strings.totalAlbums(albums.size)}",
                     color = AppColors.TextSecondary,
                 )
-                selectedAlbum?.let {
-                    Text(
-                        text = Strings.currentHighlight(it.title),
-                        color = AppColors.TextTertiary,
-                    )
-                }
             }
         }
         items(

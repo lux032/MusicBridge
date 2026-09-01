@@ -49,6 +49,8 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -1323,107 +1325,7 @@ internal fun AlbumDetailSection(
     }
 
     val layoutInfo = LocalAppLayoutInfo.current
-    // Shares the root now-playing tint so this page stays consistent with the mini player
-    // and bottom bar.
-    val palette = LocalArtworkPalette.current
-    val artworkMaximumWidth = if (layoutInfo.isWide) 300.dp else layoutInfo.detailArtworkMaximumWidth
     var showAlbumQueueMenu by remember { mutableStateOf(false) }
-    val albumSummary: @Composable ColumnScope.() -> Unit = {
-        Box(
-            modifier = Modifier.fillMaxWidth(),
-            contentAlignment = Alignment.Center,
-        ) {
-            AsyncAlbumArtwork(
-                imageUrl = currentTrackResult.album.thumbUrl,
-                title = currentTrackResult.album.title,
-                modifier = Modifier
-                    .widthIn(max = artworkMaximumWidth)
-                    .fillMaxWidth()
-                    .aspectRatio(1f)
-                    .clip(RoundedCornerShape(16.dp))
-                    .combinedClickable(
-                        onClick = {},
-                        onLongClick = { showAlbumQueueMenu = true },
-                    ),
-                contentScale = ContentScale.Crop,
-                thumbnailSize = artworkMaximumWidth,
-                // Reuse the grid card's smaller cached thumbnail while the detail artwork loads.
-                placeholderThumbnailSize = layoutInfo.albumGridMinimumWidth * 1.1f,
-            )
-            QueueActionMenu(
-                expanded = showAlbumQueueMenu,
-                onDismiss = { showAlbumQueueMenu = false },
-                onAction = { placement ->
-                    showAlbumQueueMenu = false
-                    onQueueAlbum(currentTrackResult.album, placement)
-                },
-            )
-        }
-
-        Column(
-            modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            val artistName = currentTrackResult.album.artistName ?: Strings.unknownArtist
-            Text(
-                currentTrackResult.album.title,
-                style = MaterialTheme.typography.headlineMedium,
-                color = AppColors.TextPrimary,
-                fontWeight = FontWeight.Bold,
-            )
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = artistName,
-                    color = palette.accent,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.clickable { onArtistClick(currentTrackResult.album.artistName) },
-                )
-            }
-            Text(
-                text = buildString {
-                    currentTrackResult.album.year?.let {
-                        append(it)
-                        append(" · ")
-                    }
-                    append(Strings.tracks(currentTrackResult.tracks.size))
-                },
-                color = AppColors.TextSecondary,
-                style = MaterialTheme.typography.bodyMedium,
-            )
-            Text(
-                text = Strings.outputTargetDesc(outputTargetName),
-                color = AppColors.TextTertiary,
-            )
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                FavoriteIconButton(
-                    isFavorite = currentTrackResult.album.isFavorite,
-                    isLoading = isFavoriteLoading,
-                    onClick = { onToggleAlbumFavorite(currentTrackResult.album) },
-                )
-                IconCircleButton(
-                    onClick = { onPlayAlbum(currentTrackResult) },
-                    enabled = !isPlaybackLoading,
-                    containerColor = palette.accent,
-                ) {
-                    PlayerIconGraphic(
-                        icon = PlayerIcon.Play,
-                        tint = palette.onAccent,
-                        modifier = Modifier.size(22.dp),
-                    )
-                }
-            }
-        }
-    }
 
     Column(modifier = modifier.fillMaxSize()) {
         Box(
@@ -1453,8 +1355,20 @@ internal fun AlbumDetailSection(
                     .verticalScroll(rememberScrollState())
                     .padding(bottom = bottomContentPadding),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
-                content = albumSummary,
-            )
+            ) {
+                AlbumDetailHeroWide(
+                    trackResult = currentTrackResult,
+                    outputTargetName = outputTargetName,
+                    isPlaybackLoading = isPlaybackLoading,
+                    isFavoriteLoading = isFavoriteLoading,
+                    showAlbumQueueMenu = showAlbumQueueMenu,
+                    onShowAlbumQueueMenuChange = { showAlbumQueueMenu = it },
+                    onArtistClick = onArtistClick,
+                    onToggleAlbumFavorite = onToggleAlbumFavorite,
+                    onQueueAlbum = onQueueAlbum,
+                    onPlayAlbum = onPlayAlbum,
+                )
+            }
             LazyColumn(
                 state = trackListState,
                 modifier = Modifier
@@ -1495,10 +1409,16 @@ internal fun AlbumDetailSection(
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             item(key = "album-summary", contentType = "album-summary") {
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(16.dp),
-                    content = albumSummary,
+                AlbumDetailHeroCompact(
+                    trackResult = currentTrackResult,
+                    isPlaybackLoading = isPlaybackLoading,
+                    isFavoriteLoading = isFavoriteLoading,
+                    showAlbumQueueMenu = showAlbumQueueMenu,
+                    onShowAlbumQueueMenuChange = { showAlbumQueueMenu = it },
+                    onArtistClick = onArtistClick,
+                    onToggleAlbumFavorite = onToggleAlbumFavorite,
+                    onQueueAlbum = onQueueAlbum,
+                    onPlayAlbum = onPlayAlbum,
                 )
             }
             itemsIndexed(
@@ -1521,6 +1441,256 @@ internal fun AlbumDetailSection(
             }
         }
     }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun AlbumDetailHeroWide(
+    trackResult: PlexAlbumTracksResult,
+    outputTargetName: String,
+    isPlaybackLoading: Boolean,
+    isFavoriteLoading: Boolean,
+    showAlbumQueueMenu: Boolean,
+    onShowAlbumQueueMenuChange: (Boolean) -> Unit,
+    onArtistClick: (String?) -> Unit,
+    onToggleAlbumFavorite: (PlexAlbum) -> Unit,
+    onQueueAlbum: (PlexAlbum, QueuePlacement) -> Unit,
+    onPlayAlbum: (PlexAlbumTracksResult) -> Unit,
+) {
+    val layoutInfo = LocalAppLayoutInfo.current
+    val palette = LocalArtworkPalette.current
+    val album = trackResult.album
+
+    Box(
+        modifier = Modifier.fillMaxWidth(),
+        contentAlignment = Alignment.Center,
+    ) {
+        AsyncAlbumArtwork(
+            imageUrl = album.thumbUrl,
+            title = album.title,
+            modifier = Modifier
+                .widthIn(max = 300.dp)
+                .fillMaxWidth()
+                .aspectRatio(1f)
+                .clip(RoundedCornerShape(16.dp))
+                .semantics { contentDescription = "${album.title}. ${Strings.longPressQueueHint}" }
+                .combinedClickable(
+                    onClick = {},
+                    onLongClick = { onShowAlbumQueueMenuChange(true) },
+                ),
+            contentScale = ContentScale.Crop,
+            thumbnailSize = 300.dp,
+            placeholderThumbnailSize = layoutInfo.albumGridMinimumWidth * 1.1f,
+        )
+        QueueActionMenu(
+            expanded = showAlbumQueueMenu,
+            onDismiss = { onShowAlbumQueueMenuChange(false) },
+            onAction = { placement ->
+                onShowAlbumQueueMenuChange(false)
+                onQueueAlbum(album, placement)
+            },
+        )
+    }
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        val artistName = album.artistName ?: Strings.unknownArtist
+        Text(
+            text = album.title,
+            style = MaterialTheme.typography.headlineMedium,
+            color = AppColors.TextPrimary,
+            fontWeight = FontWeight.Bold,
+        )
+        Text(
+            text = artistName,
+            color = palette.accent,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.clickable { onArtistClick(album.artistName) },
+        )
+        Text(
+            text = buildString {
+                album.year?.let {
+                    append(it)
+                    append(" · ")
+                }
+                append(Strings.tracks(trackResult.tracks.size))
+            },
+            color = AppColors.TextSecondary,
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        Text(
+            text = Strings.outputTargetDesc(outputTargetName),
+            color = AppColors.TextTertiary,
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            FavoriteIconButton(
+                isFavorite = album.isFavorite,
+                isLoading = isFavoriteLoading,
+                onClick = { onToggleAlbumFavorite(album) },
+            )
+            val playEnabled = !isPlaybackLoading && trackResult.tracks.isNotEmpty()
+            IconCircleButton(
+                onClick = { onPlayAlbum(trackResult) },
+                enabled = playEnabled,
+                containerColor = if (playEnabled) palette.accent else palette.accent.copy(alpha = 0.35f),
+                modifier = Modifier.semantics { contentDescription = Strings.playAll },
+            ) {
+                PlayerIconGraphic(
+                    icon = PlayerIcon.Play,
+                    tint = palette.onAccent.copy(alpha = if (playEnabled) 1f else 0.6f),
+                    modifier = Modifier.size(22.dp),
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun AlbumDetailHeroCompact(
+    trackResult: PlexAlbumTracksResult,
+    isPlaybackLoading: Boolean,
+    isFavoriteLoading: Boolean,
+    showAlbumQueueMenu: Boolean,
+    onShowAlbumQueueMenuChange: (Boolean) -> Unit,
+    onArtistClick: (String?) -> Unit,
+    onToggleAlbumFavorite: (PlexAlbum) -> Unit,
+    onQueueAlbum: (PlexAlbum, QueuePlacement) -> Unit,
+    onPlayAlbum: (PlexAlbumTracksResult) -> Unit,
+) {
+    val layoutInfo = LocalAppLayoutInfo.current
+    val palette = LocalArtworkPalette.current
+    val album = trackResult.album
+    val codec = trackResult.tracks.firstOrNull()
+        ?.sourceAudioCodec
+        ?.takeIf { it.isNotBlank() }
+        ?.uppercase(Locale.ROOT)
+    val playEnabled = !isPlaybackLoading && trackResult.tracks.isNotEmpty()
+    var showActionQueueMenu by remember(album.ratingKey) { mutableStateOf(false) }
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box {
+            AsyncAlbumArtwork(
+                imageUrl = album.thumbUrl,
+                title = album.title,
+                modifier = Modifier
+                    .size(layoutInfo.albumDetailCompactArtworkSize)
+                    .clip(RoundedCornerShape(14.dp))
+                    .semantics { contentDescription = "${album.title}. ${Strings.longPressQueueHint}" }
+                    .combinedClickable(
+                        onClick = {},
+                        onLongClick = {
+                            showActionQueueMenu = false
+                            onShowAlbumQueueMenuChange(true)
+                        },
+                    ),
+                contentScale = ContentScale.Crop,
+                thumbnailSize = layoutInfo.albumGridMinimumWidth * 1.1f,
+                placeholderThumbnailSize = null,
+            )
+            QueueActionMenu(
+                expanded = showAlbumQueueMenu,
+                onDismiss = { onShowAlbumQueueMenuChange(false) },
+                onAction = { placement ->
+                    onShowAlbumQueueMenuChange(false)
+                    onQueueAlbum(album, placement)
+                },
+            )
+        }
+
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+            Text(
+                text = album.title,
+                style = MaterialTheme.typography.titleMedium,
+                color = AppColors.TextPrimary,
+                fontWeight = FontWeight.Bold,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = album.artistName ?: Strings.unknownArtist,
+                style = MaterialTheme.typography.bodyMedium,
+                color = palette.accent,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.clickable { onArtistClick(album.artistName) },
+            )
+            Text(
+                text = buildString {
+                    album.year?.let { append("$it · ") }
+                    append(Strings.tracks(trackResult.tracks.size))
+                    codec?.let { append(" · $it") }
+                },
+                color = AppColors.TextSecondary,
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                IconCircleButton(
+                    onClick = { onPlayAlbum(trackResult) },
+                    enabled = playEnabled,
+                    containerColor = if (playEnabled) palette.accent else palette.accent.copy(alpha = 0.35f),
+                    modifier = Modifier.semantics { contentDescription = Strings.playAll },
+                ) {
+                    PlayerIconGraphic(
+                        icon = PlayerIcon.Play,
+                        tint = palette.onAccent.copy(alpha = if (playEnabled) 1f else 0.6f),
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+                FavoriteIconButton(
+                    isFavorite = album.isFavorite,
+                    isLoading = isFavoriteLoading,
+                    onClick = { onToggleAlbumFavorite(album) },
+                )
+                Box {
+                    IconCircleButton(
+                        onClick = {
+                            onShowAlbumQueueMenuChange(false)
+                            showActionQueueMenu = true
+                        },
+                        containerColor = AppColors.CardSurfaceStrong,
+                        modifier = Modifier.semantics { contentDescription = Strings.addToPlaybackQueue },
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.PlaylistAdd,
+                            contentDescription = null,
+                            tint = AppColors.TextPrimary,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                    QueueActionMenu(
+                        expanded = showActionQueueMenu,
+                        onDismiss = { showActionQueueMenu = false },
+                        onAction = { placement ->
+                            showActionQueueMenu = false
+                            onQueueAlbum(album, placement)
+                        },
+                    )
+                }
+            }
+        }
     }
 }
 
