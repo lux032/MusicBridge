@@ -16,7 +16,12 @@ import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DataSource
+import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.FileDataSource
+import androidx.media3.datasource.TransferListener
+import androidx.media3.datasource.cache.CacheDataSink
 import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.datasource.cache.CacheWriter
 import androidx.media3.datasource.cache.ContentMetadata
@@ -27,12 +32,20 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.DecoderReuseEvaluation
 import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import com.lux032.musicbridge.plex.stopPlexTranscodeSession
+import com.lux032.musicbridge.plex.withPlexTranscodeSession
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.io.File
+import java.io.IOException
+import java.net.URI
+import java.net.URLDecoder
+import java.nio.charset.StandardCharsets
+import java.util.UUID
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
+import java.util.concurrent.atomic.AtomicInteger
 
 /** One playable queue entry for the on-device player. */
 data class LocalQueueItem(
@@ -46,9 +59,9 @@ data class LocalQueueItem(
 )
 
 /**
- * Shared on-device audio cache (LRU). Direct files and the single foreground request for
- * a live transcode may populate the cache. Live transcodes are never prefetched for the
- * currently playing item because independent Plex sessions cannot safely share byte spans.
+ * Shared on-device audio cache (LRU). Direct files may populate it during playback. Live
+ * transcodes enter it only after a session-isolated full download passes Ogg EOS validation;
+ * foreground live streams bypass cache writes and never share byte spans with precaching.
  * The size cap can be raised/lowered at runtime via
  * [setMaxBytes] without releasing the underlying cache (ordering state resets, data
  * stays — touched entries simply re-establish their LRU position on next access).
@@ -61,49 +74,76 @@ object LocalAudioCache {
     private class ResizableCacheEvictor(
         initialMaxBytes: Long,
     ) : androidx.media3.datasource.cache.CacheEvictor {
-        private val lock = Any()
         private var maxBytes = initialMaxBytes
         private var delegate = LeastRecentlyUsedCacheEvictor(initialMaxBytes)
 
-        fun setMaxBytes(newMaxBytes: Long) {
-            synchronized(lock) {
+        /**
+         * SimpleCache invokes every evictor callback while holding its own monitor. Resizing
+         * uses that same monitor, avoiding a second lock and the SimpleCache↔evictor ABBA cycle.
+         * Oldest-first replay also ensures any eviction callback only removes spans already
+         * known to the replacement delegate, so its byte count cannot drift.
+         */
+        fun setMaxBytes(newMaxBytes: Long, cache: SimpleCache? = null) {
+            if (cache == null) {
                 if (newMaxBytes == maxBytes) return
                 maxBytes = newMaxBytes
                 delegate = LeastRecentlyUsedCacheEvictor(newMaxBytes)
+                return
+            }
+            synchronized(cache) {
+                if (newMaxBytes == maxBytes) return
+                val spans = cache.keys
+                    .flatMap { key -> cache.getCachedSpans(key) }
+                    .sortedBy { it.lastTouchTimestamp }
+                maxBytes = newMaxBytes
+                delegate = LeastRecentlyUsedCacheEvictor(newMaxBytes)
+                spans.forEach { span ->
+                    // Earlier replay entries may already have triggered eviction. Do not
+                    // re-add a snapshot entry that no longer exists in SimpleCache.
+                    if (cache.getCachedSpans(span.key).contains(span)) {
+                        delegate.onSpanAdded(cache, span)
+                    }
+                }
             }
         }
 
         override fun requiresCacheSpanTouches(): Boolean = true
 
-        override fun onCacheInitialized() = synchronized(lock) { delegate.onCacheInitialized() }
+        override fun onCacheInitialized() = delegate.onCacheInitialized()
 
         override fun onStartFile(
             cache: androidx.media3.datasource.cache.Cache,
             key: String,
             position: Long,
             length: Long,
-        ) = synchronized(lock) { delegate.onStartFile(cache, key, position, length) }
+        ) = delegate.onStartFile(cache, key, position, length)
 
         override fun onSpanAdded(cache: androidx.media3.datasource.cache.Cache, span: androidx.media3.datasource.cache.CacheSpan) =
-            synchronized(lock) { delegate.onSpanAdded(cache, span) }
+            delegate.onSpanAdded(cache, span)
 
         override fun onSpanRemoved(cache: androidx.media3.datasource.cache.Cache, span: androidx.media3.datasource.cache.CacheSpan) =
-            synchronized(lock) { delegate.onSpanRemoved(cache, span) }
+            delegate.onSpanRemoved(cache, span)
 
         override fun onSpanTouched(
             cache: androidx.media3.datasource.cache.Cache,
             oldSpan: androidx.media3.datasource.cache.CacheSpan,
             newSpan: androidx.media3.datasource.cache.CacheSpan,
-        ) = synchronized(lock) { delegate.onSpanTouched(cache, oldSpan, newSpan) }
+        ) = delegate.onSpanTouched(cache, oldSpan, newSpan)
     }
 
     private var cache: SimpleCache? = null
     private var evictor: ResizableCacheEvictor? = null
+    private var tempDirectory: File? = null
+    private val currentGeneration = AtomicInteger(0)
+    @Volatile private var activePrecacheDataSource: DataSource? = null
     private val precacheExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "local-audio-precache").apply {
             isDaemon = true
             priority = Thread.MIN_PRIORITY
         }
+    }
+    private val maintenanceExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "local-audio-cache-maintenance").apply { isDaemon = true }
     }
     private var precacheTask: Future<*>? = null
     private var precacheKeys: List<String> = emptyList()
@@ -111,11 +151,15 @@ object LocalAudioCache {
     @Synchronized
     fun configure(context: Context, maxBytes: Long): SimpleCache {
         cache?.let { existing ->
-            evictor?.setMaxBytes(maxBytes)
+            evictor?.setMaxBytes(maxBytes, existing)
             return existing
         }
         val newEvictor = ResizableCacheEvictor(maxBytes)
         val directory = File(context.cacheDir, "local_audio")
+        tempDirectory = File(context.cacheDir, "transcode_precache").apply {
+            mkdirs()
+            listFiles { file -> file.extension == "tmp" }?.forEach(File::delete)
+        }
         val created = SimpleCache(directory, newEvictor)
         cache = created
         evictor = newEvictor
@@ -124,7 +168,7 @@ object LocalAudioCache {
 
     @Synchronized
     fun setMaxBytes(maxBytes: Long) {
-        evictor?.setMaxBytes(maxBytes)
+        evictor?.setMaxBytes(maxBytes, cache)
     }
 
     @Synchronized
@@ -132,18 +176,17 @@ object LocalAudioCache {
 
     @Synchronized
     fun clear() {
-        precacheTask?.cancel(true)
-        precacheTask = null
+        cancelPrecacheLocked()
         precacheKeys = emptyList()
-        runCatching {
-            val simpleCache = cache ?: return
-            simpleCache.keys.forEach { key -> simpleCache.removeResource(key) }
+        val simpleCache = cache ?: return
+        maintenanceExecutor.execute {
+            runCatching { simpleCache.keys.forEach { key -> simpleCache.removeResource(key) } }
         }
     }
 
     fun evict(key: String) {
         val simpleCache = synchronized(this) { cache } ?: return
-        precacheExecutor.execute {
+        maintenanceExecutor.execute {
             runCatching { simpleCache.removeResource(key) }
                 .onFailure { Log.w("LocalAudioCache", "Failed to evict cache key=$key", it) }
         }
@@ -156,31 +199,219 @@ object LocalAudioCache {
         return length > 0L && simpleCache.isCached(key, 0L, length)
     }
 
-    /** Downloads queue resources sequentially into the same persistent cache used by ExoPlayer. */
+    /** Downloads queue resources sequentially. Transcodes are staged and committed only after EOS validation. */
     @Synchronized
-    fun precache(items: List<LocalQueueItem>, upstreamFactory: androidx.media3.datasource.DataSource.Factory) {
+    fun precache(items: List<LocalQueueItem>, upstreamFactory: DataSource.Factory) {
         val requestedKeys = items.map(LocalQueueItem::cacheKey)
         if (requestedKeys == precacheKeys && precacheTask?.isDone == false) return
-        precacheTask?.cancel(true)
+        cancelPrecacheLocked()
+        val generation = currentGeneration.incrementAndGet()
         precacheKeys = requestedKeys
         if (items.isEmpty()) return
         val simpleCache = cache ?: return
         precacheTask = precacheExecutor.submit {
             items.forEach { item ->
-                if (Thread.currentThread().isInterrupted || isFullyCached(item.cacheKey)) return@forEach
-                val cacheDataSource = CacheDataSource.Factory()
-                    .setCache(simpleCache)
-                    .setUpstreamDataSourceFactory(upstreamFactory)
-                    .setFlags(CacheDataSource.FLAG_BLOCK_ON_CACHE or CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
-                    .createDataSource()
-                val dataSpec = androidx.media3.datasource.DataSpec.Builder()
-                    .setUri(item.url)
-                    .setKey(item.cacheKey)
-                    .setFlags(androidx.media3.datasource.DataSpec.FLAG_MIGHT_NOT_USE_FULL_NETWORK_SPEED)
-                    .build()
-                runCatching { CacheWriter(cacheDataSource, dataSpec, null, null).cache() }
+                if (!generationIsCurrent(generation) || isFullyCached(item.cacheKey)) return@forEach
+                if (item.isTranscoded) {
+                    precacheTranscode(simpleCache, item, generation)
+                } else {
+                    val cacheDataSource = CacheDataSource.Factory()
+                        .setCache(simpleCache)
+                        .setUpstreamDataSourceFactory(upstreamFactory)
+                        .setFlags(CacheDataSource.FLAG_BLOCK_ON_CACHE or CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+                        .createDataSource()
+                    val dataSpec = DataSpec.Builder()
+                        .setUri(item.url)
+                        .setKey(item.cacheKey)
+                        .setFlags(DataSpec.FLAG_MIGHT_NOT_USE_FULL_NETWORK_SPEED)
+                        .build()
+                    runCatching { CacheWriter(cacheDataSource, dataSpec, null, null).cache() }
+                }
             }
         }
+    }
+
+    @Synchronized
+    private fun cancelPrecacheLocked() {
+        currentGeneration.incrementAndGet()
+        runCatching { activePrecacheDataSource?.close() }
+        activePrecacheDataSource = null
+        precacheTask?.cancel(true)
+        precacheTask = null
+    }
+
+    private fun generationIsCurrent(generation: Int): Boolean =
+        generation == currentGeneration.get() && !Thread.currentThread().isInterrupted
+
+    private fun precacheTranscode(simpleCache: SimpleCache, item: LocalQueueItem, generation: Int) {
+        val tempDir = tempDirectory ?: return
+        if (tempDir.usableSpace < 30L * 1024L * 1024L) return
+        val sessionId = UUID.randomUUID().toString()
+        val precacheUrl = item.url.withPlexTranscodeSession(sessionId)
+        val sessionEndpoint = parsePlexTranscodeEndpoint(item.url)
+        val serverUri = sessionEndpoint?.serverUri.orEmpty()
+        val token = sessionEndpoint?.token.orEmpty()
+        val tempFile = File(tempDir, "${item.cacheKey.replace(':', '_')}.$sessionId.tmp")
+        val dataSource = DefaultHttpDataSource.Factory()
+            .setConnectTimeoutMs(15_000)
+            .setReadTimeoutMs(30_000)
+            .createDataSource()
+        var commitStarted = false
+        try {
+            synchronized(this) { activePrecacheDataSource = dataSource }
+            dataSource.open(DataSpec.Builder().setUri(precacheUrl).build())
+            tempFile.outputStream().buffered().use { output ->
+                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                while (generationIsCurrent(generation)) {
+                    val count = dataSource.read(buffer, 0, buffer.size)
+                    if (count == C.RESULT_END_OF_INPUT) break
+                    if (count > 0) output.write(buffer, 0, count)
+                }
+            }
+            if (!generationIsCurrent(generation) || !verifyOggStreamComplete(tempFile)) return
+
+            val sinkFactory = CacheDataSink.Factory()
+                .setCache(simpleCache)
+                .setFragmentSize(C.LENGTH_UNSET.toLong())
+            val writeCacheDataSource = CacheDataSource(
+                simpleCache,
+                FileDataSource(),
+                FileDataSource(),
+                sinkFactory.createDataSink(),
+                CacheDataSource.FLAG_BLOCK_ON_CACHE,
+                null,
+            )
+            // Remove any legacy/incomplete spans before the one-span commit so staged bytes
+            // can never be combined with a prior Plex session.
+            simpleCache.removeResource(item.cacheKey)
+            commitStarted = true
+            if (!generationIsCurrent(generation)) return
+            val dataSpec = DataSpec.Builder()
+                .setUri(android.net.Uri.fromFile(tempFile))
+                .setPosition(0L)
+                .setLength(tempFile.length())
+                .setKey(item.cacheKey)
+                .setFlags(0)
+                .build()
+            if (generationIsCurrent(generation)) {
+                CacheWriter(writeCacheDataSource, dataSpec, null, null).cache()
+                val fullyCached = isFullyCached(item.cacheKey)
+                val spans = simpleCache.getCachedSpans(item.cacheKey)
+                if (!transcodeCacheInvariantHolds(
+                        fullyCached = fullyCached,
+                        spans = spans.map { it.position to it.length },
+                        expectedLength = tempFile.length(),
+                    )
+                ) {
+                    simpleCache.removeResource(item.cacheKey)
+                    throw IOException("Transcode cache invariant failed for ${item.cacheKey}")
+                }
+                commitStarted = false
+            }
+        } catch (error: Exception) {
+            if (commitStarted) {
+                runCatching { simpleCache.removeResource(item.cacheKey) }
+                    .onFailure { error.addSuppressed(it) }
+            }
+            if (generationIsCurrent(generation)) Log.w("LocalAudioCache", "Transcode precache failed", error)
+        } finally {
+            runCatching { dataSource.close() }
+            synchronized(this) {
+                if (activePrecacheDataSource === dataSource) activePrecacheDataSource = null
+            }
+            tempFile.delete()
+            if (serverUri.isNotBlank() && token.isNotBlank()) {
+                stopPlexTranscodeSession(serverUri, token, sessionId)
+            }
+        }
+    }
+}
+
+internal data class PlexTranscodeEndpoint(val serverUri: String, val token: String)
+
+internal fun parsePlexTranscodeEndpoint(url: String): PlexTranscodeEndpoint? = runCatching {
+    val uri = URI(url)
+    val marker = "/music/:/transcode/universal/start"
+    if (!uri.path.contains(marker, ignoreCase = true)) return null
+    val serverUri = URI(uri.scheme, uri.rawAuthority, null, null, null).toString().trimEnd('/')
+    val token = uri.rawQuery.orEmpty().split('&')
+        .mapNotNull { parameter ->
+            val name = URLDecoder.decode(parameter.substringBefore('='), StandardCharsets.UTF_8.name())
+            if (!name.equals("X-Plex-Token", ignoreCase = true)) return@mapNotNull null
+            URLDecoder.decode(parameter.substringAfter('=', ""), StandardCharsets.UTF_8.name())
+        }
+        .firstOrNull()
+        .orEmpty()
+    if (serverUri.isBlank() || token.isBlank()) null else PlexTranscodeEndpoint(serverUri, token)
+}.getOrNull()
+
+internal enum class PlaybackDataSourceRoute { DIRECT_CACHE, TRANSCODE_CACHE, TRANSCODE_UPSTREAM }
+
+internal fun playbackDataSourceRoute(isTranscoded: Boolean, isFullyCached: Boolean): PlaybackDataSourceRoute = when {
+    !isTranscoded -> PlaybackDataSourceRoute.DIRECT_CACHE
+    isFullyCached -> PlaybackDataSourceRoute.TRANSCODE_CACHE
+    else -> PlaybackDataSourceRoute.TRANSCODE_UPSTREAM
+}
+
+internal fun transcodeCacheInvariantHolds(
+    fullyCached: Boolean,
+    spans: List<Pair<Long, Long>>,
+    expectedLength: Long,
+): Boolean = fullyCached && expectedLength > 0L && spans == listOf(0L to expectedLength)
+
+internal fun missingTranscodeCacheSpanException(): IOException =
+    IOException("Cache span evicted or missing for transcode stream")
+
+internal class FailingDataSource : DataSource {
+    override fun addTransferListener(transferListener: TransferListener) = Unit
+    override fun open(dataSpec: DataSpec): Long = throw missingTranscodeCacheSpanException()
+    override fun read(buffer: ByteArray, offset: Int, length: Int): Int = C.RESULT_END_OF_INPUT
+    override fun getUri(): android.net.Uri? = null
+    override fun close() = Unit
+}
+
+private class RoutingDataSource(
+    private val directCacheFactory: DataSource.Factory,
+    private val httpFactory: DataSource.Factory,
+    private val cache: SimpleCache,
+) : DataSource {
+    private var delegate: DataSource? = null
+    private val transferListeners = mutableListOf<TransferListener>()
+
+    override fun addTransferListener(transferListener: TransferListener) {
+        transferListeners += transferListener
+        delegate?.addTransferListener(transferListener)
+    }
+
+    override fun open(dataSpec: DataSpec): Long {
+        val cacheKey = dataSpec.key
+        delegate = when (playbackDataSourceRoute(
+            isTranscoded = dataSpec.uri.toString().isPlexLiveTranscodeUrl(),
+            isFullyCached = cacheKey != null && LocalAudioCache.isFullyCached(cacheKey),
+        )) {
+            PlaybackDataSourceRoute.DIRECT_CACHE -> directCacheFactory.createDataSource()
+            PlaybackDataSourceRoute.TRANSCODE_UPSTREAM -> httpFactory.createDataSource()
+            PlaybackDataSourceRoute.TRANSCODE_CACHE -> CacheDataSource(
+                cache,
+                FailingDataSource(),
+                FileDataSource(),
+                null,
+                CacheDataSource.FLAG_BLOCK_ON_CACHE,
+                null,
+            )
+        }
+        transferListeners.forEach { delegate!!.addTransferListener(it) }
+        return delegate!!.open(dataSpec)
+    }
+
+    override fun read(buffer: ByteArray, offset: Int, length: Int): Int =
+        delegate?.read(buffer, offset, length) ?: C.RESULT_END_OF_INPUT
+
+    override fun getUri(): android.net.Uri? = delegate?.uri
+
+    override fun close() {
+        delegate?.close()
+        delegate = null
     }
 }
 
@@ -314,14 +545,17 @@ class LocalPlaybackEngine(
     }
 
     private val httpDataSourceFactory = DefaultHttpDataSource.Factory()
+    private val simpleCache = LocalAudioCache.configure(context.applicationContext, cacheMaxBytes)
     private val cacheDataSourceFactory = CacheDataSource.Factory()
-        .setCache(LocalAudioCache.configure(context.applicationContext, cacheMaxBytes))
+        .setCache(simpleCache)
         .setUpstreamDataSourceFactory(httpDataSourceFactory)
         .setFlags(CacheDataSource.FLAG_BLOCK_ON_CACHE or CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
 
     private val player: ExoPlayer = ExoPlayer.Builder(context.applicationContext)
         .setMediaSourceFactory(
-            DefaultMediaSourceFactory(cacheDataSourceFactory),
+            DefaultMediaSourceFactory(
+                DataSource.Factory { RoutingDataSource(cacheDataSourceFactory, httpDataSourceFactory, simpleCache) },
+            ),
         )
         .setAudioAttributes(
             AudioAttributes.Builder()
@@ -426,7 +660,7 @@ class LocalPlaybackEngine(
         }
 
         override fun onIsPlayingChanged(isPlaying: Boolean) {
-            if (isPlaying && queueItems.getOrNull(currentIndex)?.isTranscoded == false) {
+            if (isPlaying) {
                 schedulePrecacheFrom(currentIndex)
             }
             listener?.onIsPlayingChanged(isPlaying)
@@ -671,7 +905,7 @@ class LocalPlaybackEngine(
         }
         lastCurrentIndex = safeIndex
         queuePrecacheCount = precacheCount.coerceAtLeast(0)
-        if (selectedItem?.isTranscoded == true) schedulePrecacheFrom(safeIndex)
+        schedulePrecacheFrom(safeIndex)
         player.setMediaItems(
             mediaItems,
             safeIndex,
@@ -839,10 +1073,8 @@ class LocalPlaybackEngine(
 
     private fun schedulePrecacheFrom(index: Int) {
         if (index !in queueItems.indices) return
-        // The foreground player alone reads/caches the current item. A live Plex transcode
-        // request is session-specific, so a second request must never write the same cache key.
-        val items = queueItems.drop(index + 1)
-            .filter { !it.isTranscoded }
+        // Skip the current item and Media3's immediate next-item preload candidate.
+        val items = queueItems.drop(index + 2)
             .take(queuePrecacheCount)
         LocalAudioCache.precache(
             items,

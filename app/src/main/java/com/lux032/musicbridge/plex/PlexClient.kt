@@ -1258,6 +1258,69 @@ internal fun String.withPlexTranscodeOffsetSeconds(offsetSeconds: Int): String {
     }
 }
 
+internal fun String.withPlexTranscodeSession(sessionId: String): String {
+    if (!contains("/:/transcode/universal/start", ignoreCase = true)) return this
+
+    val fragment = substringAfter('#', "").takeIf { contains('#') }
+    val withoutFragment = substringBefore('#')
+    val baseUrl = withoutFragment.substringBefore('?')
+    val query = withoutFragment.substringAfter('?', "")
+    val replacements = linkedMapOf(
+        "session" to sessionId,
+        "X-Plex-Session-Identifier" to sessionId,
+    )
+    val seen = mutableSetOf<String>()
+    val updated = query.split('&')
+        .filter(String::isNotBlank)
+        .map { parameter ->
+            val name = parameter.substringBefore('=')
+            val replacement = replacements.entries.firstOrNull { it.key.equals(name, ignoreCase = true) }
+            if (replacement == null) {
+                parameter
+            } else {
+                seen += replacement.key
+                "${replacement.key}=${replacement.value}"
+            }
+        }
+        .toMutableList()
+        .apply {
+            replacements.forEach { (name, value) -> if (name !in seen) add("$name=$value") }
+        }
+
+    return buildString {
+        append(baseUrl)
+        if (updated.isNotEmpty()) append('?').append(updated.joinToString("&"))
+        fragment?.let { append('#').append(it) }
+    }
+}
+
+/** Best-effort release of the PMS transcoder process. Never blocks the caller. */
+internal fun stopPlexTranscodeSession(serverUri: String, token: String, sessionId: String) {
+    Thread({
+        listOf("music", "video").forEach { mediaType ->
+            var connection: HttpURLConnection? = null
+            try {
+                val url = URL(
+                    "${serverUri.trimEnd('/')}/$mediaType/:/transcode/universal/stop" +
+                        "?session=${URLEncoder.encode(sessionId, StandardCharsets.UTF_8.name())}" +
+                        "&X-Plex-Token=${URLEncoder.encode(token, StandardCharsets.UTF_8.name())}",
+                )
+                connection = (url.openConnection() as HttpURLConnection).apply {
+                    connectTimeout = 3_000
+                    readTimeout = 3_000
+                    requestMethod = "GET"
+                }
+                val responseCode = connection.responseCode
+                if (responseCode in 200..299) return@Thread
+            } catch (_: Exception) {
+                // The fallback endpoint is attempted below.
+            } finally {
+                connection?.disconnect()
+            }
+        }
+    }, "plex-transcode-stop").apply { isDaemon = true }.start()
+}
+
 internal fun PlexTrackStream.withOpusTranscodeMode(
     targetMode: OpusTranscodeMode,
     clientIdentifier: String = "",
