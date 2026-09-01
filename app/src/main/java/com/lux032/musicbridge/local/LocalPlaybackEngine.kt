@@ -1,6 +1,7 @@
 package com.lux032.musicbridge.local
 
 import android.content.Context
+import android.media.MediaCodec
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
@@ -21,7 +22,10 @@ import androidx.media3.datasource.cache.CacheWriter
 import androidx.media3.datasource.cache.ContentMetadata
 import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
+import androidx.media3.exoplayer.ExoPlaybackException
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.DecoderReuseEvaluation
+import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -42,9 +46,10 @@ data class LocalQueueItem(
 )
 
 /**
- * Shared on-device audio cache (LRU). Direct file streams are cached so replays and
- * seeks cost no traffic; live transcode responses bypass the cache (they are unique
- * per request and not reusable). The size cap can be raised/lowered at runtime via
+ * Shared on-device audio cache (LRU). Direct files and the single foreground request for
+ * a live transcode may populate the cache. Live transcodes are never prefetched for the
+ * currently playing item because independent Plex sessions cannot safely share byte spans.
+ * The size cap can be raised/lowered at runtime via
  * [setMaxBytes] without releasing the underlying cache (ordering state resets, data
  * stays — touched entries simply re-establish their LRU position on next access).
  */
@@ -136,6 +141,14 @@ object LocalAudioCache {
         }
     }
 
+    fun evict(key: String) {
+        val simpleCache = synchronized(this) { cache } ?: return
+        precacheExecutor.execute {
+            runCatching { simpleCache.removeResource(key) }
+                .onFailure { Log.w("LocalAudioCache", "Failed to evict cache key=$key", it) }
+        }
+    }
+
     @Synchronized
     fun isFullyCached(key: String): Boolean {
         val simpleCache = cache ?: return false
@@ -169,6 +182,66 @@ object LocalAudioCache {
             }
         }
     }
+}
+
+internal sealed interface PlaybackRecoveryDecision {
+    data object RetryCurrent : PlaybackRecoveryDecision
+    data object SkipCurrent : PlaybackRecoveryDecision
+    data object Stop : PlaybackRecoveryDecision
+}
+
+/** Pure recovery budget: one retry per item and at most three consecutively failed items. */
+internal class PlaybackRecoveryBudget(
+    private val maxRetriesPerItem: Int = 1,
+    private val maxConsecutiveFailures: Int = 3,
+) {
+    private var retriedIndex = C.INDEX_UNSET
+    private var retryCount = 0
+    private var consecutiveFailures = 0
+
+    fun onFailure(index: Int): PlaybackRecoveryDecision {
+        if (retriedIndex != index) {
+            retriedIndex = index
+            retryCount = 0
+        }
+        if (retryCount < maxRetriesPerItem) {
+            retryCount += 1
+            return PlaybackRecoveryDecision.RetryCurrent
+        }
+        retriedIndex = C.INDEX_UNSET
+        retryCount = 0
+        consecutiveFailures += 1
+        return if (consecutiveFailures >= maxConsecutiveFailures) {
+            PlaybackRecoveryDecision.Stop
+        } else {
+            PlaybackRecoveryDecision.SkipCurrent
+        }
+    }
+
+    fun markRetryConsumed(index: Int) {
+        retriedIndex = index
+        retryCount = maxRetriesPerItem
+    }
+
+    fun resetForUserAction() = reset()
+
+    fun resetForNormalTransition() = reset()
+
+    private fun reset() {
+        retriedIndex = C.INDEX_UNSET
+        retryCount = 0
+        consecutiveFailures = 0
+    }
+}
+
+internal fun nextSequentialRecoveryIndex(
+    currentIndex: Int,
+    mediaItemCount: Int,
+    repeatMode: Int,
+): Int = when {
+    currentIndex + 1 < mediaItemCount -> currentIndex + 1
+    repeatMode == Player.REPEAT_MODE_ALL && mediaItemCount > 0 -> 0
+    else -> C.INDEX_UNSET
 }
 
 /** Watches the active network so local playback can pick WiFi vs cellular quality. */
@@ -222,6 +295,7 @@ class LocalPlaybackEngine(
         fun onIsPlayingChanged(isPlaying: Boolean)
         fun onBufferingChanged(isBuffering: Boolean)
         fun onQueueEnded()
+        fun onTrackSkipped(index: Int)
         fun onPlayerError(message: String)
     }
 
@@ -230,6 +304,7 @@ class LocalPlaybackEngine(
     companion object {
         private const val LOG_TAG = "LocalPlaybackEngine"
         private const val CACHED_SEEK_FALLBACK_WINDOW_MILLIS = 10_000L
+        private const val MAX_CONSECUTIVE_PLAYBACK_FAILURES = 3
 
         /**
          * The engine instance owned by AppState. Registered here so [LocalPlaybackService]
@@ -266,6 +341,13 @@ class LocalPlaybackEngine(
     private var lastCurrentIndex = C.INDEX_UNSET
     private var queuePrecacheCount = 0
     private var pendingCachedTranscodeSeek: CachedTranscodeSeek? = null
+    private val recoveryBudget = PlaybackRecoveryBudget(
+        maxRetriesPerItem = 1,
+        maxConsecutiveFailures = MAX_CONSECUTIVE_PLAYBACK_FAILURES,
+    )
+    private var hasUnrecoveredPlaybackError = false
+    private var recoveryTargetIndex = C.INDEX_UNSET
+    private var released = false
 
     private data class CachedTranscodeSeek(
         val index: Int,
@@ -292,7 +374,30 @@ class LocalPlaybackEngine(
         }
 
         override fun seekTo(mediaItemIndex: Int, positionMs: Long) {
+            val shouldPlay = player.playWhenReady
             this@LocalPlaybackEngine.seekToItem(mediaItemIndex, positionMs)
+            ensurePrepared(shouldPlay)
+        }
+
+        override fun play() {
+            ensurePrepared(playWhenReady = true)
+            player.play()
+        }
+
+        override fun seekToNext() = advanceFromMediaSession()
+
+        override fun seekToNextMediaItem() = advanceFromMediaSession()
+
+        override fun seekToPrevious() {
+            val shouldPlay = player.playWhenReady
+            this@LocalPlaybackEngine.seekToPrevious()
+            ensurePrepared(shouldPlay)
+        }
+
+        override fun seekToPreviousMediaItem() {
+            val shouldPlay = player.playWhenReady
+            player.seekToPreviousMediaItem()
+            ensurePrepared(shouldPlay)
         }
     }
 
@@ -301,6 +406,13 @@ class LocalPlaybackEngine(
             val newIndex = player.currentMediaItemIndex
             val previousIndex = lastCurrentIndex
             lastCurrentIndex = newIndex
+            if (previousIndex != C.INDEX_UNSET && previousIndex != newIndex) {
+                if (newIndex == recoveryTargetIndex) {
+                    recoveryTargetIndex = C.INDEX_UNSET
+                } else {
+                    recoveryBudget.resetForNormalTransition()
+                }
+            }
             if (previousIndex != C.INDEX_UNSET && previousIndex != newIndex) {
                 pendingCachedTranscodeSeek = null
                 restoreOriginalQueueItem(previousIndex)
@@ -321,6 +433,9 @@ class LocalPlaybackEngine(
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
+            if (playbackState == Player.STATE_READY && player.playWhenReady) {
+                hasUnrecoveredPlaybackError = false
+            }
             listener?.onBufferingChanged(
                 playbackState == Player.STATE_BUFFERING && player.playWhenReady,
             )
@@ -330,27 +445,145 @@ class LocalPlaybackEngine(
         }
 
         override fun onPlayerError(error: PlaybackException) {
+            logPlaybackError(error)
+            hasUnrecoveredPlaybackError = true
+            val failedIndex = currentIndex
+            val wasPlayRequested = player.playWhenReady
+            val failedItem = queueItems.getOrNull(failedIndex)
             val failedSeek = pendingCachedTranscodeSeek
             pendingCachedTranscodeSeek = null
             if (failedSeek != null &&
-                failedSeek.index == currentIndex &&
+                failedSeek.index == failedIndex &&
                 error.errorCode == PlaybackException.ERROR_CODE_DECODING_FAILED &&
                 SystemClock.elapsedRealtime() - failedSeek.startedAtMillis <= CACHED_SEEK_FALLBACK_WINDOW_MILLIS
             ) {
-                Log.w(
-                    LOG_TAG,
-                    "Cached Opus seek failed at ${failedSeek.targetMillis}ms; retrying with Plex offset",
-                    error,
-                )
-                restartLiveTranscode(failedSeek.index, failedSeek.targetMillis)
+                Log.w(LOG_TAG, "Cached Opus seek failed at ${failedSeek.targetMillis}ms; retrying with Plex offset", error)
+                recoveryBudget.markRetryConsumed(failedIndex)
+                restartLiveTranscode(failedSeek.index, failedSeek.targetMillis, wasPlayRequested)
                 return
             }
-            listener?.onPlayerError(error.message ?: "播放失败")
+            if (failedItem?.isTranscoded == true && error.isCacheCorruptionCandidate()) {
+                LocalAudioCache.evict(failedItem.cacheKey)
+            }
+            recoverFromPlaybackError(failedIndex, error, wasPlayRequested)
+        }
+    }
+
+    private val analyticsListener = object : AnalyticsListener {
+        override fun onAudioInputFormatChanged(
+            eventTime: AnalyticsListener.EventTime,
+            format: androidx.media3.common.Format,
+            decoderReuseEvaluation: DecoderReuseEvaluation?,
+        ) {
+            Log.i(
+                LOG_TAG,
+                "audioFormat index=${player.currentMediaItemIndex} format=$format " +
+                    "decoder=${decoderReuseEvaluation?.decoderName} reuseResult=${decoderReuseEvaluation?.result} " +
+                    "discardReasons=${decoderReuseEvaluation?.discardReasons}",
+            )
+        }
+    }
+
+    private fun recoverFromPlaybackError(
+        failedIndex: Int,
+        error: PlaybackException,
+        wasPlayRequested: Boolean,
+    ) {
+        if (failedIndex !in 0 until player.mediaItemCount) {
+            stopAfterPlaybackFailures(error)
+            return
+        }
+        when (recoveryBudget.onFailure(failedIndex)) {
+            PlaybackRecoveryDecision.RetryCurrent -> {
+                Log.w(LOG_TAG, "Retrying failed media item index=$failedIndex")
+                player.seekTo(failedIndex, 0L)
+                ensurePrepared(wasPlayRequested)
+            }
+            PlaybackRecoveryDecision.Stop -> stopAfterPlaybackFailures(error)
+            PlaybackRecoveryDecision.SkipCurrent -> {
+                val targetIndex = if (player.shuffleModeEnabled && player.hasNextMediaItem()) {
+                    player.nextMediaItemIndex
+                } else {
+                    nextSequentialRecoveryIndex(failedIndex, player.mediaItemCount, player.repeatMode)
+                }
+                if (targetIndex == C.INDEX_UNSET || targetIndex == failedIndex) {
+                    hasUnrecoveredPlaybackError = false
+                    player.pause()
+                    player.seekTo(failedIndex, 0L)
+                    listener?.onQueueEnded()
+                    return
+                }
+                listener?.onTrackSkipped(failedIndex)
+                recoveryTargetIndex = targetIndex
+                player.seekTo(targetIndex, 0L)
+                ensurePrepared(wasPlayRequested)
+            }
+        }
+    }
+
+    private fun stopAfterPlaybackFailures(error: PlaybackException) {
+        player.pause()
+        player.stop()
+        hasUnrecoveredPlaybackError = false
+        recoveryTargetIndex = C.INDEX_UNSET
+        recoveryBudget.resetForUserAction()
+        listener?.onPlayerError(
+            "连续 $MAX_CONSECUTIVE_PLAYBACK_FAILURES 首歌曲播放失败，已停止播放：${error.message ?: error.errorCodeName}",
+        )
+    }
+
+    private fun PlaybackException.isCacheCorruptionCandidate(): Boolean {
+        if (errorCode == PlaybackException.ERROR_CODE_DECODING_FAILED) return true
+        var cause: Throwable? = this
+        while (cause != null) {
+            val name = cause.javaClass.name
+            if (name.contains("ParserException") || name.contains("UnrecognizedInputFormatException")) return true
+            cause = cause.cause
+        }
+        return false
+    }
+
+    private fun logPlaybackError(error: PlaybackException) {
+        val item = queueItems.getOrNull(currentIndex)
+        val renderer = error as? ExoPlaybackException
+        Log.e(
+            LOG_TAG,
+            buildString {
+                append("playbackError code=${error.errorCode} name=${error.errorCodeName}")
+                append(" type=${renderer?.type} rendererIndex=${renderer?.rendererIndex}")
+                append(" rendererName=${renderer?.rendererName} rendererFormat=${renderer?.rendererFormat}")
+                append(" rendererFormatSupport=${renderer?.rendererFormatSupport}")
+                append(" currentIndex=$currentIndex mediaItemCount=${player.mediaItemCount}")
+                append(" playbackState=${player.playbackState} playWhenReady=${player.playWhenReady}")
+                append(" url=${item?.url} cacheKey=${item?.cacheKey}")
+            },
+            error,
+        )
+        var cause: Throwable? = error
+        var depth = 0
+        while (cause != null) {
+            val category = when {
+                cause is MediaCodec.CodecException -> "MediaCodec.CodecException"
+                cause.javaClass.name.contains("DecoderInitializationException") -> "DecoderInitializationException"
+                cause.javaClass.name.contains("AudioSink") && cause.javaClass.simpleName == "WriteException" -> "AudioSink.WriteException"
+                cause.javaClass.name.contains("AudioSink") && cause.javaClass.simpleName == "InitializationException" -> "AudioSink.InitializationException"
+                cause.javaClass.name.contains("HttpDataSource") -> "HttpDataSourceException"
+                else -> "other"
+            }
+            val detail = if (cause is MediaCodec.CodecException) {
+                " diagnosticInfo=${cause.diagnosticInfo} recoverable=${cause.isRecoverable} transient=${cause.isTransient} errorCode=${cause.errorCode}"
+            } else {
+                ""
+            }
+            Log.e(LOG_TAG, "cause[$depth] category=$category type=${cause.javaClass.name}: ${cause.message}$detail", cause)
+            cause = cause.cause
+            depth += 1
         }
     }
 
     init {
         player.addListener(playerListener)
+        player.addAnalyticsListener(analyticsListener)
         player.repeatMode = Player.REPEAT_MODE_OFF
     }
 
@@ -375,7 +608,8 @@ class LocalPlaybackEngine(
     val isBuffering: Boolean
         get() = player.playbackState == Player.STATE_BUFFERING && player.playWhenReady
     val isEnded: Boolean get() = player.playbackState == Player.STATE_ENDED
-    val isActive: Boolean get() = player.playbackState != Player.STATE_IDLE && player.mediaItemCount > 0
+    val isIdleAfterError: Boolean get() = hasUnrecoveredPlaybackError && player.playbackState == Player.STATE_IDLE
+    val isActive: Boolean get() = !released && player.mediaItemCount > 0
 
     private fun buildMediaItem(item: LocalQueueItem, url: String = item.url): MediaItem {
         val metadata = MediaMetadata.Builder()
@@ -392,6 +626,21 @@ class LocalPlaybackEngine(
             .build()
     }
 
+    private fun ensurePrepared(playWhenReady: Boolean) {
+        if (player.mediaItemCount > 0 && player.playbackState == Player.STATE_IDLE) {
+            player.prepare()
+        }
+        player.playWhenReady = playWhenReady
+    }
+
+    private fun advanceFromMediaSession() {
+        if (!player.hasNextMediaItem()) return
+        val shouldPlay = player.playWhenReady
+        recoveryBudget.resetForUserAction()
+        player.seekToNextMediaItem()
+        ensurePrepared(shouldPlay)
+    }
+
     fun setQueue(
         items: List<LocalQueueItem>,
         startIndex: Int,
@@ -399,6 +648,9 @@ class LocalPlaybackEngine(
         precacheCount: Int = 0,
     ) {
         pendingCachedTranscodeSeek = null
+        hasUnrecoveredPlaybackError = false
+        recoveryTargetIndex = C.INDEX_UNSET
+        recoveryBudget.resetForUserAction()
         queueItems.clear()
         queueItems.addAll(items)
         positionBaseMillis.clear()
@@ -440,7 +692,10 @@ class LocalPlaybackEngine(
 
     fun playAt(index: Int, positionMillis: Long = 0L) {
         if (index !in 0 until player.mediaItemCount) return
+        recoveryBudget.resetForUserAction()
+        recoveryTargetIndex = C.INDEX_UNSET
         seekToItem(index, positionMillis)
+        ensurePrepared(playWhenReady = true)
         player.play()
     }
 
@@ -491,17 +746,26 @@ class LocalPlaybackEngine(
      */
     fun rewindToStartAndPause() {
         player.pause()
-        seekTo(0L)
+        hasUnrecoveredPlaybackError = false
+        seekToItem(currentIndex, 0L)
     }
 
-    fun resume() = player.play()
+    fun resume() {
+        ensurePrepared(playWhenReady = true)
+        player.play()
+    }
 
     /**
      * Seeks direct files natively. Plex live transcodes cannot satisfy byte/range seeks, so
      * they are restarted with Plex's source-time `offset` and a logical position base.
      * Returns the effective logical target (Plex offsets have whole-second precision).
      */
-    fun seekTo(positionMillis: Long): Long = seekToItem(currentIndex, positionMillis)
+    fun seekTo(positionMillis: Long): Long {
+        val shouldPlay = player.playWhenReady
+        val effectivePosition = seekToItem(currentIndex, positionMillis)
+        ensurePrepared(shouldPlay)
+        return effectivePosition
+    }
 
     private fun seekToItem(index: Int, positionMillis: Long): Long {
         if (index !in queueItems.indices || index !in 0 until player.mediaItemCount) return 0L
@@ -539,15 +803,18 @@ class LocalPlaybackEngine(
         return restartLiveTranscode(index, positionMillis)
     }
 
-    private fun restartLiveTranscode(index: Int, positionMillis: Long): Long {
+    private fun restartLiveTranscode(
+        index: Int,
+        positionMillis: Long,
+        playWhenReady: Boolean = player.playWhenReady,
+    ): Long {
         val item = queueItems.getOrNull(index) ?: return 0L
         val plan = buildLocalSeekPlan(item.url, positionMillis)
-        val shouldPlay = player.playWhenReady
         positionBaseMillis[index] = plan.logicalBaseMillis
         player.replaceMediaItem(index, buildMediaItem(item, plan.url))
         player.seekTo(index, plan.playerPositionMillis)
-        player.prepare()
-        player.playWhenReady = shouldPlay
+        if (player.mediaItemCount > 0) player.prepare()
+        player.playWhenReady = playWhenReady
         return plan.effectiveTargetMillis
     }
 
@@ -572,14 +839,11 @@ class LocalPlaybackEngine(
 
     private fun schedulePrecacheFrom(index: Int) {
         if (index !in queueItems.indices) return
-        val current = queueItems[index]
-        // A local Opus stream is deliberately pulled to completion. Direct/original playback
-        // keeps its existing instant-start path; only later queue items are prefetched for it.
-        val items = if (current.isTranscoded) {
-            queueItems.drop(index).take(queuePrecacheCount + 1)
-        } else {
-            queueItems.drop(index + 1).take(queuePrecacheCount)
-        }
+        // The foreground player alone reads/caches the current item. A live Plex transcode
+        // request is session-specific, so a second request must never write the same cache key.
+        val items = queueItems.drop(index + 1)
+            .filter { !it.isTranscoded }
+            .take(queuePrecacheCount)
         LocalAudioCache.precache(
             items,
             httpDataSourceFactory,
@@ -594,7 +858,9 @@ class LocalPlaybackEngine(
     fun release() {
         pendingCachedTranscodeSeek = null
         listener = null
+        released = true
         player.removeListener(playerListener)
+        player.removeAnalyticsListener(analyticsListener)
         player.release()
         if (activeEngine === this) activeEngine = null
     }

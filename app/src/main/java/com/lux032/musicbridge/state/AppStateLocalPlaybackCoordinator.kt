@@ -83,6 +83,15 @@ internal class AppStateLocalPlaybackCoordinator(
                 }
             }
 
+            override fun onTrackSkipped(index: Int) {
+                state.scope.launch {
+                    val current = state.miniPlayerState ?: return@launch
+                    if (current.target != PlaybackTarget.LocalDevice) return@launch
+                    val track = current.tracks.getOrNull(index) ?: return@launch
+                    state.actionMessage = "《${track.title}》播放异常，已跳至下一首"
+                }
+            }
+
             override fun onPlayerError(message: String) {
                 state.scope.launch {
                     if (state.miniPlayerState?.target != PlaybackTarget.LocalDevice) return@launch
@@ -274,7 +283,7 @@ internal class AppStateLocalPlaybackCoordinator(
                     val isPaused = !engine.isPlayRequested
                     val isBuffering = engine.isBuffering
                     val playbackState = when {
-                        engine.isEnded -> "stopped"
+                        engine.isEnded || engine.isIdleAfterError -> "stopped"
                         isPaused -> "paused"
                         else -> "playing"
                     }
