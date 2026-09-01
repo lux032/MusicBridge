@@ -1506,7 +1506,7 @@ private fun AlbumDetailHeroWide(
         )
         Text(
             text = artistName,
-            color = palette.accent,
+            color = AppColors.TextSecondary,
             fontWeight = FontWeight.SemiBold,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
@@ -1626,7 +1626,7 @@ private fun AlbumDetailHeroCompact(
             Text(
                 text = album.artistName ?: Strings.unknownArtist,
                 style = MaterialTheme.typography.bodyMedium,
-                color = palette.accent,
+                color = AppColors.TextSecondary,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,

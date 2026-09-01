@@ -9,6 +9,7 @@ import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.graphics.ColorUtils
 import androidx.palette.graphics.Palette
@@ -34,11 +35,16 @@ data class ArtworkPalette(
     val onAccent: Color,
 )
 
+private val OnAccentLight = Color(0xFFF5F5F5)
+private val OnAccentDark = Color(0xFF0D0D0D)
+
 val DefaultArtworkPalette = ArtworkPalette(
-    backgroundTop = AppColors.BackgroundTop,
-    backgroundBottom = AppColors.BackgroundBottom,
+    // Keep the neutral fallback moving in the same direction as extracted palettes:
+    // a slightly lifted top that settles into the darkest tone at the bottom.
+    backgroundTop = AppColors.BackgroundBottom,
+    backgroundBottom = AppColors.BackgroundTop,
     accent = AppColors.Accent,
-    onAccent = AppColors.SurfaceStrong,
+    onAccent = onAccentFor(AppColors.Accent),
 )
 
 /**
@@ -94,12 +100,13 @@ fun rememberAnimatedArtworkPalette(imageUrl: String?): ArtworkPalette {
     val backgroundTop by animateArtworkColor(target.backgroundTop, "palette_bg_top")
     val backgroundBottom by animateArtworkColor(target.backgroundBottom, "palette_bg_bottom")
     val accent by animateArtworkColor(target.accent, "palette_accent")
-    val onAccent by animateArtworkColor(target.onAccent, "palette_on_accent")
     return ArtworkPalette(
         backgroundTop = backgroundTop,
         backgroundBottom = backgroundBottom,
         accent = accent,
-        onAccent = onAccent,
+        // Derive this from the animated accent instead of cross-fading black and white through
+        // an unreadable middle grey during palette changes.
+        onAccent = onAccentFor(accent),
     )
 }
 
@@ -123,15 +130,13 @@ private suspend fun extractArtworkPalette(context: android.content.Context, imag
 }
 
 /**
- * Plexamp-style theming: the background keeps the cover's hue clearly visible (a coloured
- * wash, not near-black), and the accent stays a real colour. Everything is derived in HSL so
- * saturation survives — the previous version blended towards black/white in RGB, which crushed
- * the background to black and washed the accent out to white on pastel covers.
- *
- * Truly monochrome artwork (max saturation below [MonochromeSaturationFloor]) falls back to the
- * neutral dark palette instead of forcing a tint.
+ * Plexamp-style theming: the background keeps the cover's dominant colourful hue visible while
+ * the accent remains close enough to that hue to form a coherent page. Near-monochrome artwork
+ * blends gradually into the neutral palette rather than crossing a hard saturation threshold.
  */
-private const val MonochromeSaturationFloor = 0.12f
+private const val NeutralBlendStartSaturation = 0.08f
+private const val NeutralBlendEndSaturation = 0.20f
+private const val AccentHueRangeDegrees = 30f
 
 private fun paletteFromBitmap(bitmap: android.graphics.Bitmap): ArtworkPalette {
     val palette = Palette.from(bitmap)
@@ -140,8 +145,7 @@ private fun paletteFromBitmap(bitmap: android.graphics.Bitmap): ArtworkPalette {
     val swatches = palette.swatches
     if (swatches.isEmpty()) return DefaultArtworkPalette
 
-    // Background seed: the most *colourful dominant* swatch — saturation weighted by reach.
-    // (darkMuted was the old first choice, but it is usually a greyish brown and produced black.)
+    // Background seed: favour colour that also occupies meaningful artwork area.
     val hsl = FloatArray(3)
     var seedRgb = 0
     var seedScore = -1f
@@ -155,30 +159,41 @@ private fun paletteFromBitmap(bitmap: android.graphics.Bitmap): ArtworkPalette {
             seedRgb = swatch.rgb
         }
     }
-    if (maxSaturation < MonochromeSaturationFloor) return DefaultArtworkPalette
 
     ColorUtils.colorToHSL(seedRgb, hsl)
-    val hue = hsl[0]
+    val seedHue = hsl[0]
     val topSaturation = hsl[1].coerceIn(0.30f, 0.55f)
-    val backgroundTop = Color(ColorUtils.HSLToColor(floatArrayOf(hue, topSaturation, 0.32f)))
-    val backgroundBottom = Color(
-        ColorUtils.HSLToColor(floatArrayOf(hue, (topSaturation * 0.8f).coerceIn(0.25f, 0.50f), 0.14f))
+    val extractedBackgroundTop = capLuminance(
+        hue = seedHue,
+        saturation = topSaturation,
+        initialLightness = 0.32f,
+        maxLuminance = 0.06,
     )
+    val extractedBackgroundBottom = Color(
+        ColorUtils.HSLToColor(
+            floatArrayOf(seedHue, (topSaturation * 0.8f).coerceIn(0.25f, 0.50f), 0.14f)
+        )
+    )
+
+    val saturationFactor = smoothSaturationFactor(maxSaturation)
+    val backgroundTop = blendColor(DefaultArtworkPalette.backgroundTop, extractedBackgroundTop, saturationFactor)
+    val backgroundBottom = blendColor(DefaultArtworkPalette.backgroundBottom, extractedBackgroundBottom, saturationFactor)
+    val extractedAccent = pickAccent(palette, seedHue)
+    val accent = blendColor(DefaultArtworkPalette.accent, extractedAccent, saturationFactor)
+
     return ArtworkPalette(
         backgroundTop = backgroundTop,
         backgroundBottom = backgroundBottom,
-        accent = pickAccent(palette, maxSaturation),
-        onAccent = AppColors.SurfaceStrong,
+        accent = accent,
+        onAccent = onAccentFor(accent),
     )
 }
 
 /**
- * Prefers the vibrant swatch, then the most saturated one. Lightness is lifted into the
- * 0.55–0.70 band *in HSL* so the accent stays colourful on dark backgrounds (blending towards
- * white in RGB, the old approach, desaturated it). Grey covers fall back to the neutral accent.
+ * Prefers a vibrant artwork swatch but constrains it to within 30 degrees of the background hue.
+ * This retains nearby cover variation without allowing unrelated small details to recolour the UI.
  */
-private fun pickAccent(palette: Palette, maxSaturation: Float): Color {
-    if (maxSaturation < MonochromeSaturationFloor) return AppColors.Accent
+private fun pickAccent(palette: Palette, seedHue: Float): Color {
     val hsl = FloatArray(3)
     val candidate = palette.vibrantSwatch?.rgb
         ?: palette.lightVibrantSwatch?.rgb
@@ -186,13 +201,71 @@ private fun pickAccent(palette: Palette, maxSaturation: Float): Color {
             ColorUtils.colorToHSL(swatch.rgb, hsl)
             hsl[1]
         }?.rgb
-        ?: return AppColors.Accent
 
-    ColorUtils.colorToHSL(candidate, hsl)
-    if (hsl[1] < 0.15f) return AppColors.Accent
+    if (candidate != null) {
+        ColorUtils.colorToHSL(candidate, hsl)
+    } else {
+        hsl[0] = seedHue
+        hsl[1] = 0.60f
+        hsl[2] = 0.62f
+    }
+
+    val hueDelta = shortestHueDelta(seedHue, hsl[0]).coerceIn(-AccentHueRangeDegrees, AccentHueRangeDegrees)
+    val accentHue = (seedHue + hueDelta + 360f) % 360f
+    val accentSaturation = hsl[1].coerceIn(0.60f, 0.85f)
+    val accentLightness = hsl[2].coerceIn(0.55f, 0.70f)
     return Color(
-        ColorUtils.HSLToColor(
-            floatArrayOf(hsl[0], hsl[1].coerceAtLeast(0.45f), hsl[2].coerceIn(0.55f, 0.70f))
-        )
+        ColorUtils.HSLToColor(floatArrayOf(accentHue, accentSaturation, accentLightness))
     )
+}
+
+private fun shortestHueDelta(fromHue: Float, toHue: Float): Float =
+    ((toHue - fromHue + 540f) % 360f) - 180f
+
+private fun smoothSaturationFactor(saturation: Float): Float {
+    val linear = ((saturation - NeutralBlendStartSaturation) /
+        (NeutralBlendEndSaturation - NeutralBlendStartSaturation)).coerceIn(0f, 1f)
+    return linear * linear * (3f - 2f * linear)
+}
+
+private fun blendColor(from: Color, to: Color, fraction: Float): Color =
+    Color(ColorUtils.blendARGB(from.toArgb(), to.toArgb(), fraction))
+
+/**
+ * Preserves hue and saturation while lowering HSL lightness until the resulting colour stays
+ * below [maxLuminance]. Binary search keeps bright yellow/green/cyan hues from lifting the top
+ * of the page enough to weaken secondary-text contrast.
+ */
+private fun capLuminance(
+    hue: Float,
+    saturation: Float,
+    initialLightness: Float,
+    maxLuminance: Double,
+): Color {
+    fun colorAt(lightness: Float): Color =
+        Color(ColorUtils.HSLToColor(floatArrayOf(hue, saturation, lightness)))
+
+    val initial = colorAt(initialLightness)
+    if (ColorUtils.calculateLuminance(initial.toArgb()) <= maxLuminance) return initial
+
+    var low = 0f
+    var high = initialLightness
+    repeat(16) {
+        val middle = (low + high) / 2f
+        if (ColorUtils.calculateLuminance(colorAt(middle).toArgb()) <= maxLuminance) {
+            low = middle
+        } else {
+            high = middle
+        }
+    }
+    return colorAt(low)
+}
+
+internal fun onAccentFor(accent: Color): Color {
+    val backgroundLuminance = ColorUtils.calculateLuminance(accent.toArgb())
+    val lightContrast =
+        (ColorUtils.calculateLuminance(OnAccentLight.toArgb()) + 0.05) / (backgroundLuminance + 0.05)
+    val darkContrast =
+        (backgroundLuminance + 0.05) / (ColorUtils.calculateLuminance(OnAccentDark.toArgb()) + 0.05)
+    return if (lightContrast >= darkContrast) OnAccentLight else OnAccentDark
 }
