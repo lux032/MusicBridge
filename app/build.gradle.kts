@@ -1,6 +1,16 @@
+import java.io.FileInputStream
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
+}
+
+val keystorePropertiesFile = rootProject.file("keystore.properties")
+val keystoreProperties = Properties().apply {
+    if (keystorePropertiesFile.exists()) {
+        keystorePropertiesFile.inputStream().use { load(it) }
+    }
 }
 
 android {
@@ -19,10 +29,37 @@ android {
 
     signingConfigs {
         create("release") {
-            storeFile = file("../release.keystore")
-            storePassword = "musicbridge123"
-            keyAlias = "musicbridge"
-            keyPassword = "musicbridge123"
+            val keyStoreFilePath = keystoreProperties.getProperty("storeFile")
+                ?: System.getenv("KEYSTORE_FILE")
+            val storePasswordProp = keystoreProperties.getProperty("storePassword")
+                ?: System.getenv("KEYSTORE_PASSWORD")
+            val keyAliasProp = keystoreProperties.getProperty("keyAlias")
+                ?: System.getenv("KEY_ALIAS")
+            val keyPasswordProp = keystoreProperties.getProperty("keyPassword")
+                ?: System.getenv("KEY_PASSWORD")
+
+            if (!keyStoreFilePath.isNullOrBlank() &&
+                !storePasswordProp.isNullOrBlank() &&
+                !keyAliasProp.isNullOrBlank() &&
+                !keyPasswordProp.isNullOrBlank()
+            ) {
+                val resolvedFile = if (File(keyStoreFilePath).isAbsolute) {
+                    file(keyStoreFilePath)
+                } else {
+                    rootProject.file(keyStoreFilePath)
+                }
+                storeFile = resolvedFile
+                storePassword = storePasswordProp
+                keyAlias = keyAliasProp
+                keyPassword = keyPasswordProp
+            } else {
+                // 没有提供 release 密钥时，回退到 debug 签名以允许开源/CI 无密构建
+                val debugSigning = getByName("debug")
+                storeFile = debugSigning.storeFile
+                storePassword = debugSigning.storePassword
+                keyAlias = debugSigning.keyAlias
+                keyPassword = debugSigning.keyPassword
+            }
         }
     }
 
