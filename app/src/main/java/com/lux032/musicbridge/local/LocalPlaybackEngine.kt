@@ -5,6 +5,8 @@ import android.media.MediaCodec
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import androidx.annotation.OptIn
@@ -13,6 +15,7 @@ import androidx.media3.common.C
 import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.ParserException
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
@@ -20,6 +23,7 @@ import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.FileDataSource
+import androidx.media3.datasource.HttpDataSource
 import androidx.media3.datasource.TransferListener
 import androidx.media3.datasource.cache.CacheDataSink
 import androidx.media3.datasource.cache.CacheDataSource
@@ -29,6 +33,8 @@ import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
 import androidx.media3.exoplayer.ExoPlaybackException
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
+import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy
 import androidx.media3.exoplayer.DecoderReuseEvaluation
 import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
@@ -39,6 +45,7 @@ import com.lux032.musicbridge.plex.withPlexTranscodeSession
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.io.EOFException
 import java.io.File
 import java.io.IOException
 import java.net.URI
@@ -248,7 +255,7 @@ object LocalAudioCache {
     private fun precacheTranscode(simpleCache: SimpleCache, item: LocalQueueItem, generation: Int) {
         val tempDir = tempDirectory ?: return
         if (tempDir.usableSpace < 30L * 1024L * 1024L) return
-        val sessionId = UUID.randomUUID().toString()
+        val sessionId = "pc-${UUID.randomUUID()}"
         val precacheUrl = item.url.withPlexTranscodeSession(sessionId)
         val sessionEndpoint = parsePlexTranscodeEndpoint(item.url)
         val serverUri = sessionEndpoint?.serverUri.orEmpty()
@@ -372,12 +379,36 @@ internal class FailingDataSource : DataSource {
     override fun close() = Unit
 }
 
+internal data class TranscodeUpstreamRequest(val url: String, val cacheKey: String?)
+
+internal fun transcodeUpstreamRequest(
+    url: String,
+    cacheKey: String?,
+    sessionId: String,
+): TranscodeUpstreamRequest = TranscodeUpstreamRequest(
+    url = url.withPlexTranscodeSession(sessionId),
+    cacheKey = cacheKey,
+)
+
+internal fun transcodeUpstreamSpec(dataSpec: DataSpec, sessionId: String): DataSpec {
+    val request = transcodeUpstreamRequest(dataSpec.uri.toString(), dataSpec.key, sessionId)
+    return dataSpec.withUri(android.net.Uri.parse(request.url))
+}
+
+internal fun foregroundTranscodeSessionId(
+    position: Long,
+    activeSessionId: String?,
+    newSessionId: () -> String,
+): String = if (position > 0L && activeSessionId != null) activeSessionId else newSessionId()
+
 private class RoutingDataSource(
     private val directCacheFactory: DataSource.Factory,
     private val httpFactory: DataSource.Factory,
     private val cache: SimpleCache,
 ) : DataSource {
     private var delegate: DataSource? = null
+    private var activeSessionId: String? = null
+    private var activeSessionEndpoint: PlexTranscodeEndpoint? = null
     private val transferListeners = mutableListOf<TransferListener>()
 
     override fun addTransferListener(transferListener: TransferListener) {
@@ -388,12 +419,21 @@ private class RoutingDataSource(
     }
 
     override fun open(dataSpec: DataSpec): Long {
-        close()
+        val priorSessionId = activeSessionId.takeIf { dataSpec.position > 0L }
+        val priorSessionEndpoint = activeSessionEndpoint.takeIf { priorSessionId != null }
+        if (priorSessionId != null) {
+            val closing = delegate
+            delegate = null
+            closing?.close()
+        } else {
+            close()
+        }
         val cacheKey = dataSpec.key
-        val nextDelegate = when (playbackDataSourceRoute(
+        val route = playbackDataSourceRoute(
             isTranscoded = dataSpec.uri.toString().isPlexLiveTranscodeUrl(),
             isFullyCached = cacheKey != null && LocalAudioCache.isFullyCached(cacheKey),
-        )) {
+        )
+        val nextDelegate = when (route) {
             PlaybackDataSourceRoute.DIRECT_CACHE -> directCacheFactory.createDataSource()
             PlaybackDataSourceRoute.TRANSCODE_UPSTREAM -> httpFactory.createDataSource()
             PlaybackDataSourceRoute.TRANSCODE_CACHE -> CacheDataSource(
@@ -405,13 +445,28 @@ private class RoutingDataSource(
                 null,
             )
         }
+        val upstreamSpec = if (route == PlaybackDataSourceRoute.TRANSCODE_UPSTREAM) {
+            val endpoint = priorSessionEndpoint ?: parsePlexTranscodeEndpoint(dataSpec.uri.toString())
+            if (endpoint == null) {
+                Log.w("RoutingDataSource", "Plex transcode endpoint is incomplete; opening without session injection")
+                dataSpec
+            } else {
+                val sessionId = foregroundTranscodeSessionId(dataSpec.position, priorSessionId) {
+                    "fg-${UUID.randomUUID()}"
+                }
+                activeSessionId = sessionId
+                activeSessionEndpoint = endpoint
+                transcodeUpstreamSpec(dataSpec, sessionId)
+            }
+        } else {
+            dataSpec
+        }
         transferListeners.forEach(nextDelegate::addTransferListener)
         delegate = nextDelegate
         return try {
-            nextDelegate.open(dataSpec)
+            nextDelegate.open(upstreamSpec)
         } catch (error: Exception) {
-            runCatching { nextDelegate.close() }
-            delegate = null
+            runCatching { close() }
             throw error
         }
     }
@@ -424,7 +479,68 @@ private class RoutingDataSource(
     override fun close() {
         val closing = delegate
         delegate = null
-        closing?.close()
+        val sessionId = activeSessionId
+        val endpoint = activeSessionEndpoint
+        activeSessionId = null
+        activeSessionEndpoint = null
+        try {
+            closing?.close()
+        } finally {
+            if (sessionId?.startsWith("fg-") == true && endpoint != null) {
+                stopPlexTranscodeSession(endpoint.serverUri, endpoint.token, sessionId)
+            }
+        }
+    }
+}
+
+internal fun isFatalZeroByteTranscodeLoad(
+    url: String,
+    bytesLoaded: Long,
+    error: IOException,
+): Boolean {
+    if (!url.isPlexLiveTranscodeUrl() || bytesLoaded != 0L) return false
+    if (error is EOFException || error.hasCause<EOFException>()) return true
+    if (error is ParserException || error.hasCause<ParserException>()) return true
+    val responseError = error.findCause<HttpDataSource.InvalidResponseCodeException>()
+    return responseError?.responseCode?.let(::isFatalTranscodeHttpResponse) == true
+}
+
+internal fun isFatalTranscodeHttpResponse(responseCode: Int): Boolean = responseCode in 400..499
+
+internal fun shouldShortCircuitTranscodeSeek(
+    isLiveTranscode: Boolean,
+    isFullyCached: Boolean,
+    requestedPositionMillis: Long,
+    currentPositionBaseMillis: Long,
+): Boolean = isLiveTranscode &&
+    !isFullyCached &&
+    requestedPositionMillis.coerceAtLeast(0L) / 1_000L == currentPositionBaseMillis / 1_000L
+
+private inline fun <reified T : Throwable> Throwable.findCause(): T? {
+    var cause: Throwable? = this
+    while (cause != null) {
+        if (cause is T) return cause
+        cause = cause.cause
+    }
+    return null
+}
+
+private inline fun <reified T : Throwable> Throwable.hasCause(): Boolean = findCause<T>() != null
+
+private class TranscodeLoadErrorHandlingPolicy : DefaultLoadErrorHandlingPolicy() {
+    override fun getRetryDelayMsFor(loadErrorInfo: LoadErrorHandlingPolicy.LoadErrorInfo): Long {
+        val fatalZeroByteLoad = isFatalZeroByteTranscodeLoad(
+            url = loadErrorInfo.loadEventInfo.uri.toString(),
+            bytesLoaded = loadErrorInfo.loadEventInfo.bytesLoaded,
+            error = loadErrorInfo.exception,
+        )
+        return if (fatalZeroByteLoad && loadErrorInfo.errorCount > 1) {
+            C.TIME_UNSET
+        } else if (fatalZeroByteLoad) {
+            0L
+        } else {
+            super.getRetryDelayMsFor(loadErrorInfo)
+        }
     }
 }
 
@@ -548,6 +664,8 @@ class LocalPlaybackEngine(
     companion object {
         private const val LOG_TAG = "LocalPlaybackEngine"
         private const val CACHED_SEEK_FALLBACK_WINDOW_MILLIS = 10_000L
+        private const val BUFFERING_STALL_TIMEOUT_MILLIS = 8_000L
+        private const val BUFFERING_WATCHDOG_TICK_MILLIS = 1_000L
         private const val MAX_CONSECUTIVE_PLAYBACK_FAILURES = 3
 
         /**
@@ -570,7 +688,7 @@ class LocalPlaybackEngine(
         .setMediaSourceFactory(
             DefaultMediaSourceFactory(
                 DataSource.Factory { RoutingDataSource(cacheDataSourceFactory, httpDataSourceFactory, simpleCache) },
-            ),
+            ).setLoadErrorHandlingPolicy(TranscodeLoadErrorHandlingPolicy()),
         )
         .setAudioAttributes(
             AudioAttributes.Builder()
@@ -597,7 +715,21 @@ class LocalPlaybackEngine(
     private var hasUnrecoveredPlaybackError = false
     private var recoveryTargetIndex = C.INDEX_UNSET
     private var resettingRepeatedTranscode = false
+    private val watchdogHandler = Handler(Looper.getMainLooper())
+    private var bufferingStallStartedAtMillis = C.TIME_UNSET
+    private var bufferingStallPositionMillis = C.TIME_UNSET
+    private var bufferingStallBufferedPositionMillis = C.TIME_UNSET
     private var released = false
+
+    private val bufferingWatchdog = object : Runnable {
+        override fun run() {
+            if (released) return
+            checkBufferingStall()
+            if (shouldWatchBuffering()) {
+                watchdogHandler.postDelayed(this, BUFFERING_WATCHDOG_TICK_MILLIS)
+            }
+        }
+    }
 
     private data class CachedTranscodeSeek(
         val index: Int,
@@ -712,6 +844,7 @@ class LocalPlaybackEngine(
                 }
             }
             if (previousIndex != C.INDEX_UNSET && previousIndex != newIndex) {
+                resetBufferingWatchdog()
                 pendingCachedTranscodeSeek = null
                 restoreOriginalQueueItem(previousIndex)
             }
@@ -730,7 +863,20 @@ class LocalPlaybackEngine(
             listener?.onIsPlayingChanged(isPlaying)
         }
 
+        override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+            if (playWhenReady && player.playbackState == Player.STATE_BUFFERING) {
+                startBufferingWatchdog()
+            } else if (!playWhenReady) {
+                resetBufferingWatchdog()
+            }
+        }
+
         override fun onPlaybackStateChanged(playbackState: Int) {
+            if (playbackState == Player.STATE_BUFFERING && player.playWhenReady) {
+                startBufferingWatchdog()
+            } else {
+                resetBufferingWatchdog()
+            }
             if (playbackState == Player.STATE_READY && player.playWhenReady) {
                 hasUnrecoveredPlaybackError = false
             }
@@ -814,25 +960,32 @@ class LocalPlaybackEngine(
                 ensurePrepared(wasPlayRequested)
             }
             PlaybackRecoveryDecision.Stop -> stopAfterPlaybackFailures(error)
-            PlaybackRecoveryDecision.SkipCurrent -> {
-                val targetIndex = if (player.shuffleModeEnabled && player.hasNextMediaItem()) {
-                    player.nextMediaItemIndex
-                } else {
-                    nextSequentialRecoveryIndex(failedIndex, player.mediaItemCount, player.repeatMode)
-                }
-                if (targetIndex == C.INDEX_UNSET || targetIndex == failedIndex) {
-                    hasUnrecoveredPlaybackError = false
-                    player.pause()
-                    player.seekTo(failedIndex, 0L)
-                    listener?.onQueueEnded()
-                    return
-                }
-                listener?.onTrackSkipped(failedIndex)
-                recoveryTargetIndex = targetIndex
-                player.seekTo(targetIndex, 0L)
-                ensurePrepared(wasPlayRequested)
-            }
+            PlaybackRecoveryDecision.SkipCurrent -> skipFailedMediaItem(failedIndex, error, wasPlayRequested)
         }
+    }
+
+    private fun skipFailedMediaItem(
+        failedIndex: Int,
+        error: PlaybackException,
+        wasPlayRequested: Boolean,
+    ) {
+        val targetIndex = if (player.shuffleModeEnabled && player.hasNextMediaItem()) {
+            player.nextMediaItemIndex
+        } else {
+            nextSequentialRecoveryIndex(failedIndex, player.mediaItemCount, player.repeatMode)
+        }
+        if (targetIndex == C.INDEX_UNSET || targetIndex == failedIndex) {
+            hasUnrecoveredPlaybackError = false
+            player.pause()
+            player.seekTo(failedIndex, 0L)
+            listener?.onQueueEnded()
+            return
+        }
+        Log.w(LOG_TAG, "Skipping failed media item index=$failedIndex", error)
+        listener?.onTrackSkipped(failedIndex)
+        recoveryTargetIndex = targetIndex
+        player.seekTo(targetIndex, 0L)
+        ensurePrepared(wasPlayRequested)
     }
 
     private fun stopAfterPlaybackFailures(error: PlaybackException) {
@@ -933,9 +1086,7 @@ class LocalPlaybackEngine(
             .build()
         return MediaItem.Builder()
             .setUri(url)
-            .setCustomCacheKey(
-                if (url == item.url) item.cacheKey else "${item.cacheKey}:offset:${url.substringAfter("offset=", "0").substringBefore('&')}"
-            )
+            .setCustomCacheKey(item.cacheKey)
             .setMediaMetadata(metadata)
             .build()
     }
@@ -965,6 +1116,61 @@ class LocalPlaybackEngine(
             player.prepare()
         }
         player.playWhenReady = playWhenReady
+    }
+
+    private fun shouldWatchBuffering(): Boolean =
+        player.playWhenReady && player.playbackState == Player.STATE_BUFFERING && currentItemIsLiveTranscode()
+
+    private fun startBufferingWatchdog() {
+        if (!shouldWatchBuffering()) return
+        watchdogHandler.removeCallbacks(bufferingWatchdog)
+        watchdogHandler.postDelayed(bufferingWatchdog, BUFFERING_WATCHDOG_TICK_MILLIS)
+    }
+
+    private fun checkBufferingStall() {
+        if (!shouldWatchBuffering()) {
+            resetBufferingWatchdog()
+            return
+        }
+        val position = player.currentPosition
+        val bufferedPosition = player.bufferedPosition
+        if (bufferingStallStartedAtMillis == C.TIME_UNSET ||
+            position > bufferingStallPositionMillis ||
+            bufferedPosition > bufferingStallBufferedPositionMillis
+        ) {
+            bufferingStallStartedAtMillis = SystemClock.elapsedRealtime()
+            bufferingStallPositionMillis = position
+            bufferingStallBufferedPositionMillis = bufferedPosition
+            return
+        }
+        if (SystemClock.elapsedRealtime() - bufferingStallStartedAtMillis < BUFFERING_STALL_TIMEOUT_MILLIS) return
+
+        val failedIndex = currentIndex
+        val targetMillis = currentPositionMillis
+        resetBufferingWatchdog()
+        val error = bufferingStallException()
+        when (recoveryBudget.onFailure(failedIndex)) {
+            PlaybackRecoveryDecision.RetryCurrent -> {
+                Log.w(LOG_TAG, "Transcode buffering stalled; restarting index=$failedIndex at ${targetMillis}ms")
+                seekToItem(failedIndex, targetMillis)
+                ensurePrepared(playWhenReady = true)
+            }
+            PlaybackRecoveryDecision.SkipCurrent -> skipFailedMediaItem(failedIndex, error, wasPlayRequested = true)
+            PlaybackRecoveryDecision.Stop -> stopAfterPlaybackFailures(error)
+        }
+    }
+
+    private fun bufferingStallException(): PlaybackException = PlaybackException(
+        "Plex transcode buffering stalled",
+        null,
+        PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
+    )
+
+    private fun resetBufferingWatchdog() {
+        watchdogHandler.removeCallbacks(bufferingWatchdog)
+        bufferingStallStartedAtMillis = C.TIME_UNSET
+        bufferingStallPositionMillis = C.TIME_UNSET
+        bufferingStallBufferedPositionMillis = C.TIME_UNSET
     }
 
     private fun advanceFromMediaSession() {
@@ -1067,7 +1273,10 @@ class LocalPlaybackEngine(
         }
     }
 
-    fun pause() = player.pause()
+    fun pause() {
+        resetBufferingWatchdog()
+        player.pause()
+    }
 
     /**
      * Standard "previous" transport: ExoPlayer restarts the current track when it has been
@@ -1115,9 +1324,23 @@ class LocalPlaybackEngine(
 
     private fun seekToItem(index: Int, positionMillis: Long): Long {
         if (index !in queueItems.indices || index !in 0 until player.mediaItemCount) return 0L
+        resetBufferingWatchdog()
         val item = queueItems[index]
         val plan = buildLocalSeekPlan(item.url, positionMillis)
         val fullLocalCopy = LocalAudioCache.isFullyCached(item.cacheKey)
+        val requestedOffsetSeconds = positionMillis.coerceAtLeast(0L) / 1_000L
+        val currentPositionBaseMillis = positionBaseMillis.getOrNull(index) ?: 0L
+        if (shouldShortCircuitTranscodeSeek(
+                isLiveTranscode = item.url.isPlexLiveTranscodeUrl(),
+                isFullyCached = fullLocalCopy,
+                requestedPositionMillis = positionMillis,
+                currentPositionBaseMillis = currentPositionBaseMillis,
+            )
+        ) {
+            pendingCachedTranscodeSeek = null
+            player.seekTo(index, 0L)
+            return requestedOffsetSeconds * 1_000L
+        }
         if (!plan.restartsLiveTranscode || fullLocalCopy) {
             val wasPlayingOffsetVariant = positionBaseMillis[index] != 0L
             positionBaseMillis[index] = 0L
@@ -1195,14 +1418,18 @@ class LocalPlaybackEngine(
     }
 
     fun stopPlayback() {
+        resetBufferingWatchdog()
         pendingCachedTranscodeSeek = null
         player.stop()
     }
 
     fun release() {
+        if (released) return
+        released = true
+        watchdogHandler.removeCallbacks(bufferingWatchdog)
+        resetBufferingWatchdog()
         pendingCachedTranscodeSeek = null
         listener = null
-        released = true
         player.removeListener(playerListener)
         player.removeAnalyticsListener(analyticsListener)
         player.release()

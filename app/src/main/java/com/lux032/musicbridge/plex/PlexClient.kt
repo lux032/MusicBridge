@@ -24,6 +24,7 @@ import java.net.URL
 import java.net.URLDecoder
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
+import java.util.concurrent.Executors
 import javax.xml.XMLConstants
 import javax.xml.parsers.DocumentBuilderFactory
 
@@ -1400,31 +1401,34 @@ internal fun String.withPlexTranscodeSession(sessionId: String): String {
     }
 }
 
-/** Best-effort release of the PMS transcoder process. Never blocks the caller. */
+private val plexTranscodeStopExecutor = Executors.newSingleThreadExecutor { runnable ->
+    Thread(runnable, "plex-transcode-stop").apply { isDaemon = true }
+}
+
+/** Best-effort release of a PMS music transcoder process. Never blocks the caller. */
 internal fun stopPlexTranscodeSession(serverUri: String, token: String, sessionId: String) {
-    Thread({
-        listOf("music", "video").forEach { mediaType ->
+    runCatching {
+        plexTranscodeStopExecutor.execute {
             var connection: HttpURLConnection? = null
             try {
                 val url = URL(
-                    "${serverUri.trimEnd('/')}/$mediaType/:/transcode/universal/stop" +
+                    "${serverUri.trimEnd('/')}/music/:/transcode/universal/stop" +
                         "?session=${URLEncoder.encode(sessionId, StandardCharsets.UTF_8.name())}" +
                         "&X-Plex-Token=${URLEncoder.encode(token, StandardCharsets.UTF_8.name())}",
                 )
                 connection = (url.openConnection() as HttpURLConnection).apply {
-                    connectTimeout = 3_000
-                    readTimeout = 3_000
+                    connectTimeout = 2_000
+                    readTimeout = 2_000
                     requestMethod = "GET"
                 }
-                val responseCode = connection.responseCode
-                if (responseCode in 200..299) return@Thread
+                connection.responseCode
             } catch (_: Exception) {
-                // The fallback endpoint is attempted below.
+                // Session cleanup is best effort and must not affect playback.
             } finally {
                 connection?.disconnect()
             }
         }
-    }, "plex-transcode-stop").apply { isDaemon = true }.start()
+    }
 }
 
 internal fun PlexTrackStream.withOpusTranscodeMode(
