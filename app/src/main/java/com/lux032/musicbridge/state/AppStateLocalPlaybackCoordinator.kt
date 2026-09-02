@@ -35,7 +35,7 @@ internal class AppStateLocalPlaybackCoordinator(
                     state.miniPlayerState = current.copy(
                         currentIndex = index,
                         isBuffering = state.localPlaybackEngine.isBuffering,
-                        currentPositionMillis = 0L,
+                        currentPositionMillis = state.localPlaybackEngine.currentPositionMillis,
                         durationMillis = track.durationMillis,
                     )
                     state.actionMessage = "正在播放：${track.title}"
@@ -234,9 +234,13 @@ internal class AppStateLocalPlaybackCoordinator(
             currentIndex = newIndex,
             isPaused = false,
             isBuffering = state.localPlaybackEngine.isBuffering,
-            currentPositionMillis = 0L,
+            currentPositionMillis = state.localPlaybackEngine.currentPositionMillis,
             durationMillis = track.durationMillis,
         )
+    }
+
+    fun playLocalNext() {
+        state.localPlaybackEngine.seekToNext()
     }
 
     fun playLocalIndex(index: Int, positionMillis: Long) {

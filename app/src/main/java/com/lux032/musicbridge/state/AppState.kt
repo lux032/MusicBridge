@@ -645,6 +645,8 @@ class AppState(
 
     fun playPrevious() = playbackCoordinator.playPrevious()
 
+    fun playNext() = playbackCoordinator.playNext()
+
     fun enqueueTrack(track: PlexTrackStream, placement: QueuePlacement) =
         playbackCoordinator.enqueueTracks(listOf(track), placement, track.title)
 

@@ -663,6 +663,16 @@ internal class AppStatePlaybackCoordinator(
         }
     }
 
+    fun playNext() {
+        val playerState = state.miniPlayerState ?: return
+        if (playerState.target == PlaybackTarget.LocalDevice) {
+            state.localPlaybackCoordinator.playLocalNext()
+            return
+        }
+        val newIndex = (playerState.currentIndex + 1).coerceAtMost(playerState.tracks.lastIndex)
+        if (newIndex != playerState.currentIndex) playQueueIndex(newIndex, 0L, playerState.target)
+    }
+
     fun playQueueIndex(index: Int, positionMillis: Long, target: PlaybackTarget?) {
         val playerState = state.miniPlayerState ?: return
         val targetIndex = index.coerceIn(0, playerState.tracks.lastIndex)

@@ -32,6 +32,8 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.DecoderReuseEvaluation
 import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.source.LoadEventInfo
+import androidx.media3.exoplayer.source.MediaLoadData
 import com.lux032.musicbridge.plex.stopPlexTranscodeSession
 import com.lux032.musicbridge.plex.withPlexTranscodeSession
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -186,10 +188,10 @@ object LocalAudioCache {
 
     fun evict(key: String) {
         val simpleCache = synchronized(this) { cache } ?: return
-        maintenanceExecutor.execute {
-            runCatching { simpleCache.removeResource(key) }
-                .onFailure { Log.w("LocalAudioCache", "Failed to evict cache key=$key", it) }
-        }
+        // Playback retries immediately after this call. Complete removal first so the
+        // retry cannot observe a stale "fully cached" decision and then lose its span.
+        runCatching { simpleCache.removeResource(key) }
+            .onFailure { Log.w("LocalAudioCache", "Failed to evict cache key=$key", it) }
     }
 
     @Synchronized
@@ -379,13 +381,16 @@ private class RoutingDataSource(
     private val transferListeners = mutableListOf<TransferListener>()
 
     override fun addTransferListener(transferListener: TransferListener) {
-        transferListeners += transferListener
-        delegate?.addTransferListener(transferListener)
+        if (transferListeners.none { it === transferListener }) {
+            transferListeners += transferListener
+            delegate?.addTransferListener(transferListener)
+        }
     }
 
     override fun open(dataSpec: DataSpec): Long {
+        close()
         val cacheKey = dataSpec.key
-        delegate = when (playbackDataSourceRoute(
+        val nextDelegate = when (playbackDataSourceRoute(
             isTranscoded = dataSpec.uri.toString().isPlexLiveTranscodeUrl(),
             isFullyCached = cacheKey != null && LocalAudioCache.isFullyCached(cacheKey),
         )) {
@@ -400,8 +405,15 @@ private class RoutingDataSource(
                 null,
             )
         }
-        transferListeners.forEach { delegate!!.addTransferListener(it) }
-        return delegate!!.open(dataSpec)
+        transferListeners.forEach(nextDelegate::addTransferListener)
+        delegate = nextDelegate
+        return try {
+            nextDelegate.open(dataSpec)
+        } catch (error: Exception) {
+            runCatching { nextDelegate.close() }
+            delegate = null
+            throw error
+        }
     }
 
     override fun read(buffer: ByteArray, offset: Int, length: Int): Int =
@@ -410,8 +422,9 @@ private class RoutingDataSource(
     override fun getUri(): android.net.Uri? = delegate?.uri
 
     override fun close() {
-        delegate?.close()
+        val closing = delegate
         delegate = null
+        closing?.close()
     }
 }
 
@@ -545,6 +558,8 @@ class LocalPlaybackEngine(
     }
 
     private val httpDataSourceFactory = DefaultHttpDataSource.Factory()
+        .setConnectTimeoutMs(15_000)
+        .setReadTimeoutMs(30_000)
     private val simpleCache = LocalAudioCache.configure(context.applicationContext, cacheMaxBytes)
     private val cacheDataSourceFactory = CacheDataSource.Factory()
         .setCache(simpleCache)
@@ -581,6 +596,7 @@ class LocalPlaybackEngine(
     )
     private var hasUnrecoveredPlaybackError = false
     private var recoveryTargetIndex = C.INDEX_UNSET
+    private var resettingRepeatedTranscode = false
     private var released = false
 
     private data class CachedTranscodeSeek(
@@ -599,9 +615,52 @@ class LocalPlaybackEngine(
     internal val mediaSessionPlayer: Player = object : ForwardingPlayer(player) {
         override fun getCurrentPosition(): Long = this@LocalPlaybackEngine.currentPositionMillis
 
+        override fun getContentPosition(): Long = this@LocalPlaybackEngine.currentPositionMillis
+
         override fun getBufferedPosition(): Long = this@LocalPlaybackEngine.bufferedPositionMillis
 
+        override fun getContentBufferedPosition(): Long = this@LocalPlaybackEngine.bufferedPositionMillis
+
         override fun getDuration(): Long = this@LocalPlaybackEngine.durationMillis ?: C.TIME_UNSET
+
+        override fun getContentDuration(): Long = this@LocalPlaybackEngine.durationMillis ?: C.TIME_UNSET
+
+        override fun getTotalBufferedDuration(): Long =
+            (this@LocalPlaybackEngine.bufferedPositionMillis - this@LocalPlaybackEngine.currentPositionMillis)
+                .coerceAtLeast(0L)
+
+        override fun isCurrentMediaItemLive(): Boolean =
+            if (currentItemIsLiveTranscode()) false else player.isCurrentMediaItemLive
+
+        override fun isCurrentMediaItemSeekable(): Boolean =
+            if (currentItemIsLiveTranscode()) durationMillis != null else player.isCurrentMediaItemSeekable
+
+        override fun isCurrentMediaItemDynamic(): Boolean =
+            if (currentItemIsLiveTranscode()) false else player.isCurrentMediaItemDynamic
+
+        override fun getAvailableCommands(): Player.Commands {
+            val commands = player.availableCommands
+            if (!currentItemIsLiveTranscode() || durationMillis == null) return commands
+            return commands.buildUpon()
+                .add(Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM)
+                .add(Player.COMMAND_SEEK_BACK)
+                .add(Player.COMMAND_SEEK_FORWARD)
+                .build()
+        }
+
+        override fun isCommandAvailable(command: Int): Boolean = availableCommands.contains(command)
+
+        override fun seekBack() {
+            this@LocalPlaybackEngine.seekTo(currentPositionMillis - seekBackIncrement)
+        }
+
+        override fun seekForward() {
+            this@LocalPlaybackEngine.seekTo(currentPositionMillis + seekForwardIncrement)
+        }
+
+        override fun seekToDefaultPosition() {
+            this@LocalPlaybackEngine.seekTo(0L)
+        }
 
         override fun seekTo(positionMs: Long) {
             this@LocalPlaybackEngine.seekTo(positionMs)
@@ -630,7 +689,7 @@ class LocalPlaybackEngine(
 
         override fun seekToPreviousMediaItem() {
             val shouldPlay = player.playWhenReady
-            player.seekToPreviousMediaItem()
+            this@LocalPlaybackEngine.seekToPrevious()
             ensurePrepared(shouldPlay)
         }
     }
@@ -639,6 +698,11 @@ class LocalPlaybackEngine(
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
             val newIndex = player.currentMediaItemIndex
             val previousIndex = lastCurrentIndex
+            if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_REPEAT && newIndex in queueItems.indices) {
+                resetRepeatedTranscode(newIndex)
+                listener?.onTrackChanged(newIndex)
+                return
+            }
             lastCurrentIndex = newIndex
             if (previousIndex != C.INDEX_UNSET && previousIndex != newIndex) {
                 if (newIndex == recoveryTargetIndex) {
@@ -704,6 +768,22 @@ class LocalPlaybackEngine(
     }
 
     private val analyticsListener = object : AnalyticsListener {
+        override fun onLoadError(
+            eventTime: AnalyticsListener.EventTime,
+            loadEventInfo: LoadEventInfo,
+            mediaLoadData: MediaLoadData,
+            error: IOException,
+            wasCanceled: Boolean,
+        ) {
+            Log.w(
+                LOG_TAG,
+                "loadError index=${eventTime.mediaPeriodId?.periodUid} uri=${loadEventInfo.uri} " +
+                    "bytes=${loadEventInfo.bytesLoaded} durationMs=${loadEventInfo.loadDurationMs} " +
+                    "canceled=$wasCanceled dataType=${mediaLoadData.dataType}",
+                error,
+            )
+        }
+
         override fun onAudioInputFormatChanged(
             eventTime: AnalyticsListener.EventTime,
             format: androidx.media3.common.Format,
@@ -860,6 +940,26 @@ class LocalPlaybackEngine(
             .build()
     }
 
+    private fun currentItemIsLiveTranscode(): Boolean =
+        queueItems.getOrNull(currentIndex)?.url?.isPlexLiveTranscodeUrl() == true
+
+    private fun resetRepeatedTranscode(index: Int) {
+        if (resettingRepeatedTranscode) return
+        val item = queueItems.getOrNull(index) ?: return
+        if (!item.url.isPlexLiveTranscodeUrl()) return
+        val shouldPlay = player.playWhenReady
+        resettingRepeatedTranscode = true
+        try {
+            positionBaseMillis[index] = 0L
+            player.replaceMediaItem(index, buildMediaItem(item))
+            player.seekTo(index, 0L)
+            player.prepare()
+            player.playWhenReady = shouldPlay
+        } finally {
+            resettingRepeatedTranscode = false
+        }
+    }
+
     private fun ensurePrepared(playWhenReady: Boolean) {
         if (player.mediaItemCount > 0 && player.playbackState == Player.STATE_IDLE) {
             player.prepare()
@@ -869,9 +969,21 @@ class LocalPlaybackEngine(
 
     private fun advanceFromMediaSession() {
         if (!player.hasNextMediaItem()) return
+        val targetIndex = player.nextMediaItemIndex
+        advanceToTransportIndex(targetIndex)
+    }
+
+    private fun advanceToPreviousMediaItem() {
+        if (!player.hasPreviousMediaItem()) return
+        advanceToTransportIndex(player.previousMediaItemIndex)
+    }
+
+    private fun advanceToTransportIndex(targetIndex: Int) {
+        if (targetIndex !in queueItems.indices) return
         val shouldPlay = player.playWhenReady
         recoveryBudget.resetForUserAction()
-        player.seekToNextMediaItem()
+        recoveryTargetIndex = C.INDEX_UNSET
+        seekToItem(targetIndex, 0L)
         ensurePrepared(shouldPlay)
     }
 
@@ -965,14 +1077,14 @@ class LocalPlaybackEngine(
      */
     fun seekToPrevious() {
         val item = queueItems.getOrNull(currentIndex)
-        if (item?.url?.isPlexLiveTranscodeUrl() == true &&
-            currentPositionMillis > player.maxSeekToPreviousPosition
-        ) {
-            seekTo(0L)
+        if (currentPositionMillis > player.maxSeekToPreviousPosition) {
+            if (item?.url?.isPlexLiveTranscodeUrl() == true) seekTo(0L) else player.seekTo(0L)
         } else {
-            player.seekToPrevious()
+            advanceToPreviousMediaItem()
         }
     }
+
+    fun seekToNext() = advanceFromMediaSession()
 
     /**
      * Parks a finished queue: rewinds the final track and stays paused at 0:00 instead of
