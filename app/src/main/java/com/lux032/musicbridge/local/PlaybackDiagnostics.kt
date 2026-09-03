@@ -73,7 +73,9 @@ internal object PlaybackDiagnostics {
     @Volatile private var networkTransports: String = "[UNKNOWN]"
     private var automaticSnapshotsThisSession = 0
 
-    val foregroundTransferListener = byteCountingTransferListener(foregroundBytes)
+    val foregroundTransferListener = byteCountingTransferListener(foregroundBytes) {
+        PrecacheGate.noteForegroundBytes()
+    }
     val precacheTransferListener = byteCountingTransferListener(precacheBytes)
 
     fun initialize(context: Context) {
@@ -220,11 +222,17 @@ internal object PlaybackDiagnostics {
         target
     }
 
-    private fun byteCountingTransferListener(counter: AtomicLong) = object : TransferListener {
+    private fun byteCountingTransferListener(
+        counter: AtomicLong,
+        onBytes: () -> Unit = {},
+    ) = object : TransferListener {
         override fun onTransferInitializing(source: DataSource, dataSpec: DataSpec, isNetwork: Boolean) = Unit
         override fun onTransferStart(source: DataSource, dataSpec: DataSpec, isNetwork: Boolean) = Unit
         override fun onBytesTransferred(source: DataSource, dataSpec: DataSpec, isNetwork: Boolean, bytesTransferred: Int) {
-            if (isNetwork && bytesTransferred > 0) counter.addAndGet(bytesTransferred.toLong())
+            if (isNetwork && bytesTransferred > 0) {
+                counter.addAndGet(bytesTransferred.toLong())
+                onBytes()
+            }
         }
         override fun onTransferEnd(source: DataSource, dataSpec: DataSpec, isNetwork: Boolean) = Unit
     }

@@ -52,6 +52,7 @@ import java.net.URI
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
+import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
@@ -202,7 +203,15 @@ object LocalAudioCache {
     private var evictor: ResizableCacheEvictor? = null
     private var tempDirectory: File? = null
     private val currentGeneration = AtomicInteger(0)
+    private data class ActivePlexPrecacheSession(
+        val serverUri: String,
+        val token: String,
+        val sessionId: String,
+    )
+
     @Volatile private var activePrecacheDataSource: DataSource? = null
+    @Volatile private var activeCacheWriter: CacheWriter? = null
+    @Volatile private var activePlexPrecacheSession: ActivePlexPrecacheSession? = null
     private val precacheExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "local-audio-precache").apply {
             isDaemon = true
@@ -250,16 +259,26 @@ object LocalAudioCache {
     }
 
     fun cancelPrecache() {
-        val dataSource = synchronized(this) {
+        val active = synchronized(this) {
             currentGeneration.incrementAndGet()
             precacheTask?.cancel(true)
             precacheTask = null
             precacheKeys = emptyList()
-            activePrecacheDataSource.also { activePrecacheDataSource = null }
+            val captured = Triple(activePrecacheDataSource, activeCacheWriter, activePlexPrecacheSession)
+            activePrecacheDataSource = null
+            activeCacheWriter = null
+            activePlexPrecacheSession = null
+            captured
         }
-        // Socket close may block; never perform it while holding LocalAudioCache's monitor
-        // or on the main thread handling a network transition.
-        if (dataSource != null) maintenanceExecutor.execute { runCatching { dataSource.close() } }
+        // Cancellation/close may block; never perform either while holding LocalAudioCache's
+        // monitor or on the main thread handling a player/network transition.
+        active.second?.cancel()
+        active.third?.let { session ->
+            stopPlexTranscodeSession(session.serverUri, session.token, session.sessionId)
+        }
+        active.first?.let { dataSource ->
+            maintenanceExecutor.execute { runCatching { dataSource.close() } }
+        }
     }
 
     fun evict(key: String) {
@@ -286,13 +305,19 @@ object LocalAudioCache {
         val safeItems = filterPrecacheItems(items)
         val requestedKeys = safeItems.map(LocalQueueItem::cacheKey)
         var priorDataSource: DataSource? = null
+        var priorCacheWriter: CacheWriter? = null
+        var priorPlexSession: ActivePlexPrecacheSession? = null
         synchronized(this) {
             if (requestedKeys == precacheKeys && precacheTask?.isDone == false) return
             currentGeneration.incrementAndGet()
             precacheTask?.cancel(true)
             precacheTask = null
             priorDataSource = activePrecacheDataSource
+            priorCacheWriter = activeCacheWriter
+            priorPlexSession = activePlexPrecacheSession
             activePrecacheDataSource = null
+            activeCacheWriter = null
+            activePlexPrecacheSession = null
             precacheKeys = requestedKeys
             val simpleCache = cache
             if (safeItems.isNotEmpty() && simpleCache != null) {
@@ -304,6 +329,7 @@ object LocalAudioCache {
                             onItemComplete(item, true)
                             return@forEach
                         }
+                        if (!PrecacheGate.awaitOpen { generationIsCurrent(generation) }) return@forEach
                         if (item.isTranscoded) {
                             precacheTranscode(simpleCache, item, generation)
                         } else {
@@ -317,7 +343,15 @@ object LocalAudioCache {
                                 .setKey(item.cacheKey)
                                 .setFlags(DataSpec.FLAG_MIGHT_NOT_USE_FULL_NETWORK_SPEED)
                                 .build()
-                            runCatching { CacheWriter(cacheDataSource, dataSpec, null, null).cache() }
+                            val writer = CacheWriter(cacheDataSource, dataSpec, null, null)
+                            synchronized(this) { activeCacheWriter = writer }
+                            try {
+                                if (PrecacheGate.awaitOpen { generationIsCurrent(generation) }) writer.cache()
+                            } finally {
+                                synchronized(this) {
+                                    if (activeCacheWriter === writer) activeCacheWriter = null
+                                }
+                            }
                         }
                         if (generationIsCurrent(generation)) {
                             onItemComplete(item, isFullyCached(item.cacheKey))
@@ -325,6 +359,10 @@ object LocalAudioCache {
                     }
                 }
             }
+        }
+        priorCacheWriter?.cancel()
+        priorPlexSession?.let { session ->
+            stopPlexTranscodeSession(session.serverUri, session.token, session.sessionId)
         }
         priorDataSource?.let { closing ->
             maintenanceExecutor.execute { runCatching { closing.close() } }
@@ -349,11 +387,18 @@ object LocalAudioCache {
             .createDataSource()
         var commitStarted = false
         try {
-            synchronized(this) { activePrecacheDataSource = dataSource }
+            synchronized(this) {
+                activePrecacheDataSource = dataSource
+                if (serverUri.isNotBlank() && token.isNotBlank()) {
+                    activePlexPrecacheSession = ActivePlexPrecacheSession(serverUri, token, sessionId)
+                }
+            }
+            if (!PrecacheGate.awaitOpen { generationIsCurrent(generation) }) return
             dataSource.open(DataSpec.Builder().setUri(precacheUrl).build())
             tempFile.outputStream().buffered().use { output ->
                 val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
                 while (generationIsCurrent(generation)) {
+                    if (!PrecacheGate.awaitOpen { generationIsCurrent(generation) }) return
                     val count = dataSource.read(buffer, 0, buffer.size)
                     if (count == C.RESULT_END_OF_INPUT) break
                     if (count > 0) {
@@ -388,7 +433,15 @@ object LocalAudioCache {
                 .setFlags(0)
                 .build()
             if (generationIsCurrent(generation)) {
-                CacheWriter(writeCacheDataSource, dataSpec, null, null).cache()
+                val writer = CacheWriter(writeCacheDataSource, dataSpec, null, null)
+                synchronized(this) { activeCacheWriter = writer }
+                try {
+                    writer.cache()
+                } finally {
+                    synchronized(this) {
+                        if (activeCacheWriter === writer) activeCacheWriter = null
+                    }
+                }
                 val fullyCached = isFullyCached(item.cacheKey)
                 val spans = simpleCache.getCachedSpans(item.cacheKey)
                 if (!transcodeCacheInvariantHolds(
@@ -412,6 +465,7 @@ object LocalAudioCache {
             runCatching { dataSource.close() }
             synchronized(this) {
                 if (activePrecacheDataSource === dataSource) activePrecacheDataSource = null
+                if (activePlexPrecacheSession?.sessionId == sessionId) activePlexPrecacheSession = null
             }
             tempFile.delete()
             if (serverUri.isNotBlank() && token.isNotBlank()) {
@@ -987,13 +1041,15 @@ class LocalPlaybackEngine(
         }
 
         override fun onIsPlayingChanged(isPlaying: Boolean) {
-            if (isPlaying) {
+            updatePrecacheGate()
+            if (isPlaying && !PrecacheGate.shouldYield()) {
                 schedulePrecacheFrom(currentIndex)
             }
             listener?.onIsPlayingChanged(isPlaying)
         }
 
         override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+            updatePrecacheGate()
             if (playWhenReady && player.playbackState == Player.STATE_BUFFERING) {
                 startBufferingWatchdog()
             } else if (!playWhenReady) {
@@ -1002,6 +1058,7 @@ class LocalPlaybackEngine(
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
+            updatePrecacheGate()
             val now = SystemClock.elapsedRealtime()
             if (playbackState == Player.STATE_BUFFERING && player.playWhenReady) {
                 if (bufferingStartedAtMillis == C.TIME_UNSET) {
@@ -1296,11 +1353,43 @@ class LocalPlaybackEngine(
     }
 
     fun recordDiagnosticHeartbeat(playbackState: String) {
+        updatePrecacheGate()
         PlaybackDiagnostics.recordHeartbeat(
             positionMs = currentPositionMillis,
             bufferedPositionMs = bufferedPositionMillis,
             playbackState = playbackState,
         )
+    }
+
+    private fun updatePrecacheGate() {
+        val index = currentIndex
+        val item = queueItems.getOrNull(index)
+        val position = currentPositionMillis
+        val bufferedPosition = bufferedPositionMillis
+        val duration = durationMillis
+        val isPureLocalItem = item?.url?.let { url ->
+            val scheme = runCatching { android.net.Uri.parse(url).scheme?.lowercase(Locale.US) }.getOrNull()
+            scheme == "file" || scheme == "content" || scheme == "android.resource"
+        } == true
+        val foregroundUsesNetwork = item != null &&
+            !isPureLocalItem &&
+            !item.isCachedOriginal &&
+            !LocalAudioCache.isFullyCached(item.cacheKey)
+        val nearTrackEnd = duration != null && duration > 0L &&
+            (bufferedPosition >= duration - 2_000L || duration - position <= 2_000L)
+        when (PrecacheGate.publish(
+            PrecacheGateSnapshot(
+                foregroundUsesNetwork = foregroundUsesNetwork,
+                isBuffering = player.playWhenReady && player.playbackState == Player.STATE_BUFFERING,
+                headroomMillis = (bufferedPosition - position).coerceAtLeast(0L),
+                isNearTrackEnd = nearTrackEnd,
+                publishedAtMillis = SystemClock.elapsedRealtime(),
+            ),
+        )) {
+            PrecacheGateTransition.YIELDED -> LocalAudioCache.cancelPrecache()
+            PrecacheGateTransition.RESUMED -> schedulePrecacheFrom(index)
+            PrecacheGateTransition.NONE -> Unit
+        }
     }
 
     private fun checkBufferingStall() {
@@ -1407,7 +1496,6 @@ class LocalPlaybackEngine(
         }
         lastCurrentIndex = safeIndex
         queuePrecacheCount = precacheCount.coerceAtLeast(0)
-        schedulePrecacheFrom(safeIndex, selectedItem?.cacheKey)
         player.setMediaItems(
             mediaItems,
             safeIndex,
@@ -1415,6 +1503,8 @@ class LocalPlaybackEngine(
         )
         player.prepare()
         player.play()
+        updatePrecacheGate()
+        if (!PrecacheGate.shouldYield()) schedulePrecacheFrom(safeIndex, selectedItem?.cacheKey)
     }
 
     fun insertQueueItems(insertIndex: Int, items: List<LocalQueueItem>) {
@@ -1665,6 +1755,7 @@ class LocalPlaybackEngine(
     }
 
     fun stopPlayback() {
+        PrecacheGate.open()
         resetBufferingWatchdog()
         pendingCachedTranscodeSeek = null
         val item = queueItems.getOrNull(currentIndex)
@@ -1675,6 +1766,7 @@ class LocalPlaybackEngine(
     fun release() {
         if (released) return
         released = true
+        PrecacheGate.open()
         watchdogHandler.removeCallbacks(bufferingWatchdog)
         resetBufferingWatchdog()
         pendingCachedTranscodeSeek = null
