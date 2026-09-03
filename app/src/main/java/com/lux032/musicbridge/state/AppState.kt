@@ -253,6 +253,20 @@ class AppState(
         lastNavAction = NavAction.Push
     }
 
+    fun openPlaybackDetail() {
+        val existing = navigationStack.indexOf(AppSection.PlaybackDetail)
+        when {
+            existing == navigationStack.lastIndex -> return
+            existing >= 0 -> {
+                while (navigationStack.lastIndex > existing) {
+                    navigationStack.removeAt(navigationStack.lastIndex)
+                }
+                lastNavAction = NavAction.Pop
+            }
+            else -> navigateTo(AppSection.PlaybackDetail)
+        }
+    }
+
     fun replaceWith(section: AppSection) {
         navigationStack.clear()
         navigationStack.add(section)
@@ -667,6 +681,8 @@ class AppState(
     fun cancelSleepTimer() = playbackCoordinator.cancelSleepTimer()
 
     override fun onCleared() {
+        LocalPlaybackService.stop(context)
+        PlaybackForegroundService.stop(context)
         localPlaybackEngine.release()
         scope.cancel()
         super.onCleared()

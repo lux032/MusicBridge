@@ -6,6 +6,7 @@ import android.content.Intent
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import com.lux032.musicbridge.MainActivity
+import com.lux032.musicbridge.service.PlaybackForegroundService.Companion.ACTION_OPEN_PLAYBACK_DETAIL
 
 /**
  * Publishes the on-device player as a system MediaSession while local playback is active.
@@ -31,11 +32,14 @@ class LocalPlaybackService : MediaSessionService() {
             return
         }
         val launchIntent = Intent(this, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            action = ACTION_OPEN_PLAYBACK_DETAIL
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
         val sessionActivity = PendingIntent.getActivity(
             this,
-            0,
+            10,
             launchIntent,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )

@@ -2,6 +2,7 @@ package com.lux032.musicbridge
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -64,6 +65,7 @@ import com.lux032.musicbridge.plex.PlexAlbum
 import com.lux032.musicbridge.plex.PlexAlbumTracksResult
 import com.lux032.musicbridge.plex.PlexSection
 import com.lux032.musicbridge.plex.PlexTrackStream
+import com.lux032.musicbridge.service.PlaybackForegroundService.Companion.ACTION_OPEN_PLAYBACK_DETAIL
 import com.lux032.musicbridge.ui.theme.PlexToSonosPlayerTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -83,6 +85,7 @@ class MainActivity : ComponentActivity() {
             statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
             navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
         )
+        handlePlaybackIntent(intent)
         setContent {
             PlexToSonosPlayerTheme {
                 // Content draws its own full-screen gradient; a transparent scaffold avoids
@@ -100,6 +103,24 @@ class MainActivity : ComponentActivity() {
                     )
                 }
             }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handlePlaybackIntent(intent)
+    }
+
+    private fun handlePlaybackIntent(intent: Intent?) {
+        if (intent?.action != ACTION_OPEN_PLAYBACK_DETAIL) return
+        // Consume this command so Activity recreation does not reopen the player.
+        intent.action = null
+        setIntent(intent)
+
+        val playerState = appState.miniPlayerState
+        if (playerState != null && playerState.tracks.getOrNull(playerState.currentIndex) != null) {
+            appState.openPlaybackDetail()
         }
     }
 
@@ -814,7 +835,7 @@ fun PlexAlbumScreen(
                     )
                     .onSizeChanged { miniPlayerHeightPx = it.height },
                 isPlayerOpen = activeSection == AppSection.PlaybackDetail,
-                onOpenPlayback = { state.navigateTo(AppSection.PlaybackDetail) },
+                onOpenPlayback = state::openPlaybackDetail,
             )
         }
 

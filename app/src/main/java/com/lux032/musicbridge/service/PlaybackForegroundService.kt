@@ -145,10 +145,13 @@ class PlaybackForegroundService : Service() {
     private fun buildNotification(): Notification {
         ensureNotificationChannel()
         val launchIntent = Intent(this, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            action = ACTION_OPEN_PLAYBACK_DETAIL
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
         val contentPendingIntent = PendingIntent.getActivity(
-            this, 0, launchIntent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            this, 11, launchIntent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
         val prevPendingIntent = PendingIntent.getBroadcast(
@@ -238,6 +241,8 @@ class PlaybackForegroundService : Service() {
         private const val CHANNEL_ID = "musicbridge_playback"
         private const val NOTIFICATION_ID = 1
         private const val NOTIFICATION_ARTWORK_SIZE_PX = 512
+        const val ACTION_OPEN_PLAYBACK_DETAIL =
+            "com.lux032.musicbridge.action.OPEN_PLAYBACK_DETAIL"
         const val ACTION_STOP = "com.lux032.musicbridge.STOP_PLAYBACK"
         const val ACTION_PREVIOUS = "com.lux032.musicbridge.ACTION_PREVIOUS"
         const val ACTION_TOGGLE_PAUSE = "com.lux032.musicbridge.ACTION_TOGGLE_PAUSE"
