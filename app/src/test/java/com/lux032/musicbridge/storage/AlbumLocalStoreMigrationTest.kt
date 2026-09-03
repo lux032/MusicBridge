@@ -2,6 +2,8 @@ package com.lux032.musicbridge.storage
 
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
+import com.lux032.musicbridge.plex.PlexAlbum
+import com.lux032.musicbridge.plex.PlexSection
 import com.lux032.musicbridge.plex.PlexTrackStream
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -22,6 +24,157 @@ class AlbumLocalStoreMigrationTest {
 
     @Test
     fun version7To8AddsOnlyMissingColumnsAndPreservesRows() = verifyMigration(fromVersion = 7)
+
+    @Test
+    fun version10To11AddsAlbumFormatColumnsAndRoundTripsValues() {
+        SQLiteDatabase.create(null).use { db ->
+            db.execSQL("CREATE TABLE albums (source_id TEXT, rating_key TEXT, title TEXT)")
+            ensureVersion11Columns(db)
+            ensureVersion11Columns(db)
+            assertTrue(db.columnNames("albums").containsAll(listOf("format", "subformat")))
+        }
+
+        val context = cleanDatabaseContext()
+        val store = AlbumLocalStore(context)
+        val album = PlexAlbum(
+            ratingKey = "album",
+            title = "Live Release",
+            artistName = "Artist",
+            year = 2024,
+            thumbUrl = null,
+            userRating = null,
+            addedAtEpochSeconds = null,
+            lastViewedAtEpochSeconds = null,
+            section = PlexSection("1", "Music", "artist"),
+            sourceId = "source",
+            leafCount = 10,
+            format = "Album",
+            subformat = "Live,Remix",
+        )
+        store.replaceAllAlbums("source", listOf(album))
+        val stored = store.getAllAlbums("source").single()
+        assertEquals("Album", stored.format)
+        assertEquals("Live,Remix", stored.subformat)
+        context.deleteDatabase(DATABASE_NAME)
+    }
+
+    @Test
+    fun version10To11AddsFormatAndSubformatAndReadsSuccessfully() {
+        val context = cleanDatabaseContext()
+        context.openOrCreateDatabase(DATABASE_NAME, Context.MODE_PRIVATE, null).use { db ->
+            db.execSQL(
+                """
+                CREATE TABLE albums (
+                    source_id TEXT NOT NULL,
+                    rating_key TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    artist_name TEXT,
+                    year INTEGER,
+                    thumb_url TEXT,
+                    user_rating REAL,
+                    added_at_epoch_seconds INTEGER,
+                    last_viewed_at_epoch_seconds INTEGER,
+                    section_key TEXT NOT NULL,
+                    section_title TEXT NOT NULL,
+                    section_type TEXT NOT NULL,
+                    leaf_count INTEGER,
+                    PRIMARY KEY (source_id, rating_key)
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                """INSERT INTO albums VALUES
+                    ('source', 'legacy-album', 'Legacy Album', 'Legacy Artist', 2020, NULL, NULL,
+                     NULL, NULL, '1', 'Music', 'artist', 9)"""
+            )
+            db.execSQL(
+                """
+                CREATE TABLE album_tracks (
+                    source_id TEXT NOT NULL,
+                    rating_key TEXT NOT NULL,
+                    album_rating_key TEXT,
+                    PRIMARY KEY (source_id, rating_key)
+                )
+                """.trimIndent()
+            )
+            db.version = 10
+        }
+
+        val albums = AlbumLocalStore(context).getAlbumsByArtist("source", "Legacy Artist")
+
+        assertEquals(1, albums.size)
+        assertEquals("legacy-album", albums.single().ratingKey)
+        assertEquals(null, albums.single().format)
+        assertEquals(null, albums.single().subformat)
+        context.openOrCreateDatabase(DATABASE_NAME, Context.MODE_PRIVATE, null).use { db ->
+            assertEquals(11, db.version)
+            assertTrue(db.columnNames("albums").containsAll(listOf("format", "subformat")))
+        }
+        context.deleteDatabase(DATABASE_NAME)
+    }
+
+    @Test
+    fun artistAlbumsUseStoredTrackCountWhenLeafCountIsMissing() {
+        val context = cleanDatabaseContext()
+        val store = AlbumLocalStore(context)
+        val album = PlexAlbum(
+            ratingKey = "album",
+            title = "Release",
+            artistName = "Artist",
+            year = 2024,
+            thumbUrl = null,
+            userRating = null,
+            addedAtEpochSeconds = null,
+            lastViewedAtEpochSeconds = null,
+            section = PlexSection("1", "Music", "artist"),
+            sourceId = "source",
+            leafCount = null,
+        )
+        store.replaceAllAlbums("source", listOf(album))
+        store.replaceAllAlbumTracks(
+            "source",
+            mapOf("album" to listOf(
+                track("source", "track-1", viewCount = 0, lastViewedAt = 0),
+                track("source", "track-2", viewCount = 0, lastViewedAt = 0),
+            )),
+        )
+
+        assertEquals(2, store.getAlbumsByArtist("source", "Artist").single().leafCount)
+        context.deleteDatabase(DATABASE_NAME)
+    }
+
+    @Test
+    fun updateAlbumsMetadataUpdatesOnlyNonNullValues() {
+        val context = cleanDatabaseContext()
+        val store = AlbumLocalStore(context)
+        val original = PlexAlbum(
+            ratingKey = "album",
+            title = "Release",
+            artistName = "Artist",
+            year = 2024,
+            thumbUrl = null,
+            userRating = null,
+            addedAtEpochSeconds = null,
+            lastViewedAtEpochSeconds = null,
+            section = PlexSection("1", "Music", "artist"),
+            sourceId = "source",
+            leafCount = 8,
+            format = "Album",
+            subformat = "Remix",
+        )
+        store.replaceAllAlbums("source", listOf(original))
+
+        store.updateAlbumsMetadata(
+            "source",
+            listOf(original.copy(leafCount = 2, format = "Single", subformat = null)),
+        )
+
+        val updated = store.getAllAlbums("source").single()
+        assertEquals(2, updated.leafCount)
+        assertEquals("Single", updated.format)
+        assertEquals("Remix", updated.subformat)
+        context.deleteDatabase(DATABASE_NAME)
+    }
 
     @Test
     fun recordTrackPlaybackUpdatesBothTablesAtomicallyAndIsolatesSources() {

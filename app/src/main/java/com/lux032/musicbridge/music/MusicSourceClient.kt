@@ -27,6 +27,7 @@ interface MusicSourceClient {
     suspend fun setTrackFavorite(ratingKey: String, isFavorite: Boolean)
     suspend fun setArtistFavorite(ratingKey: String, isFavorite: Boolean)
     suspend fun fetchArtistTracks(artist: PlexArtist): List<PlexTrackStream>
+    suspend fun fetchArtistAlbums(artistRatingKey: String): List<PlexAlbum> = emptyList()
     suspend fun reportTimeline(
         ratingKey: String,
         state: String,

@@ -532,8 +532,12 @@ fun PlexAlbumScreen(
                             )
                         }
                     }
-                    LaunchedEffect(state.selectedArtist?.ratingKey, state.selectedArtist?.name) {
-                        state.selectedArtist?.let { state.loadArtistTracks(it) }
+                    LaunchedEffect(state.selectedArtist?.name) {
+                        artistAlbumsListState.scrollToItem(0)
+                        state.selectedArtist?.let {
+                            state.loadArtistTracks(it)
+                            state.loadArtistAlbums(it)
+                        }
                     }
                     Box(
                         modifier = Modifier.fillMaxSize(),

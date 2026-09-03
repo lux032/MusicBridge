@@ -57,6 +57,8 @@ data class PlexAlbum(
     val sourceId: String = "",
     val leafCount: Int? = null,
     val musicAnalysisVersion: String? = null,
+    val format: String? = null,
+    val subformat: String? = null,
 ) {
     val isFavorite: Boolean
         get() = (userRating ?: 0f) > 0f
@@ -571,6 +573,69 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient, SonicC
             .distinctBy(PlexTrackStream::ratingKey)
     }
 
+    override suspend fun fetchArtistAlbums(artistRatingKey: String): List<PlexAlbum> = withContext(Dispatchers.IO) {
+        val normalizedRatingKey = artistRatingKey.trim()
+        if (normalizedRatingKey.isEmpty()) return@withContext emptyList()
+
+        val token = resolveToken()
+        val server = resolveServer(token)
+        val accessToken = server.accessToken.orEmpty().ifBlank { token }
+        val sections = listMusicSections(server, token)
+        if (sections.isEmpty()) {
+            error("服务器 '${server.name}' 上没有找到音乐库。")
+        }
+        val root = parseXml(
+            request(
+                method = "GET",
+                url = "${server.uri}/library/metadata/$normalizedRatingKey/children",
+                headers = mapOf("X-Plex-Token" to accessToken),
+            ).body,
+        )
+        val responseSectionKey = root.getAttribute("librarySectionID").trim()
+        val responseSection = sections.firstOrNull { it.key == responseSectionKey } ?: sections.first()
+        val directories = root.getElementsByTagName("Directory")
+        buildList {
+            for (index in 0 until directories.length) {
+                val directory = directories.item(index) as? Element ?: continue
+                if (directory.getAttribute("type") != "album") continue
+                val title = directory.getAttribute("title").trim()
+                val ratingKey = directory.getAttribute("ratingKey").trim()
+                if (title.isBlank() || ratingKey.isBlank()) continue
+
+                var format: String? = null
+                val subformats = mutableListOf<String>()
+                val childNodes = directory.childNodes
+                for (childIndex in 0 until childNodes.length) {
+                    val child = childNodes.item(childIndex) as? Element ?: continue
+                    val tag = child.getAttribute("tag").trim().ifBlank { null } ?: continue
+                    when (child.tagName) {
+                        "Format" -> if (format == null) format = tag
+                        "Subformat" -> subformats += tag
+                    }
+                }
+                add(
+                    PlexAlbum(
+                        ratingKey = ratingKey,
+                        title = title,
+                        artistName = directory.getAttribute("parentTitle").trim().ifBlank { null },
+                        year = directory.getAttribute("year").trim().toIntOrNull(),
+                        thumbUrl = directory.getAttribute("thumb").trim().takeIf(String::isNotBlank)
+                            ?.let { buildMediaUrl(server.uri, it, accessToken) },
+                        userRating = directory.getAttribute("userRating").trim().toFloatOrNull(),
+                        addedAtEpochSeconds = directory.getAttribute("addedAt").trim().toLongOrNull(),
+                        lastViewedAtEpochSeconds = directory.getAttribute("lastViewedAt").trim().toLongOrNull(),
+                        section = responseSection,
+                        sourceId = config.sourceId,
+                        leafCount = directory.getAttribute("leafCount").trim().toIntOrNull()?.takeIf { it > 0 },
+                        musicAnalysisVersion = directory.getAttribute("musicAnalysisVersion").trim().ifBlank { null },
+                        format = format,
+                        subformat = subformats.joinToString(",").ifBlank { null },
+                    )
+                )
+            }
+        }
+    }
+
     override suspend fun reportTimeline(
         ratingKey: String,
         state: String,
@@ -739,7 +804,7 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient, SonicC
     private fun listAlbums(server: PlexServer, section: PlexSection, token: String): List<PlexAlbum> {
         val response = request(
             method = "GET",
-            url = "${server.uri}/library/sections/${section.key}/all?type=9",
+            url = "${server.uri}/library/sections/${section.key}/all?type=9&includeMeta=1",
             headers = mapOf("X-Plex-Token" to server.accessToken.orEmpty().ifBlank { token }),
         )
         val root = parseXml(response.body)
@@ -747,10 +812,22 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient, SonicC
         return buildList {
             for (index in 0 until directories.length) {
                 val directory = directories.item(index) as? Element ?: continue
+                if (directory.getAttribute("type") != "album") continue
                 val title = directory.getAttribute("title").trim()
                 val ratingKey = directory.getAttribute("ratingKey").trim()
                 if (title.isBlank() || ratingKey.isBlank()) {
                     continue
+                }
+                var format: String? = null
+                val subformats = mutableListOf<String>()
+                val childNodes = directory.childNodes
+                for (childIndex in 0 until childNodes.length) {
+                    val child = childNodes.item(childIndex) as? Element ?: continue
+                    val tag = child.getAttribute("tag").trim().ifBlank { null } ?: continue
+                    when (child.tagName) {
+                        "Format" -> if (format == null) format = tag
+                        "Subformat" -> subformats += tag
+                    }
                 }
                 add(
                     PlexAlbum(
@@ -769,6 +846,8 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient, SonicC
                         sourceId = config.sourceId,
                         leafCount = directory.getAttribute("leafCount").trim().toIntOrNull(),
                         musicAnalysisVersion = directory.getAttribute("musicAnalysisVersion").trim().ifBlank { null },
+                        format = format,
+                        subformat = subformats.joinToString(",").ifBlank { null },
                     )
                 )
             }

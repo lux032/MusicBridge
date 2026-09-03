@@ -67,21 +67,30 @@ class AlbumLocalStore(context: Context) {
 
     fun getAlbumsByArtist(sourceId: String, artistName: String): List<PlexAlbum> {
         val normalizedArtist = artistName.trim().ifBlank { "未知艺人" }
-        val selection = if (normalizedArtist == "未知艺人") {
-            "${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ? AND (${AlbumDatabaseHelper.COLUMN_ARTIST_NAME} IS NULL OR TRIM(${AlbumDatabaseHelper.COLUMN_ARTIST_NAME}) = '')"
+        val artistSelection = if (normalizedArtist == "未知艺人") {
+            "(t1.${AlbumDatabaseHelper.COLUMN_ARTIST_NAME} IS NULL OR TRIM(t1.${AlbumDatabaseHelper.COLUMN_ARTIST_NAME}) = '')"
         } else {
-            "${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ? AND TRIM(${AlbumDatabaseHelper.COLUMN_ARTIST_NAME}) = ?"
+            "TRIM(t1.${AlbumDatabaseHelper.COLUMN_ARTIST_NAME}) = ?"
         }
         val selectionArgs = if (normalizedArtist == "未知艺人") arrayOf(sourceId) else arrayOf(sourceId, normalizedArtist)
 
-        return helper.readableDatabase.query(
-            AlbumDatabaseHelper.TABLE_ALBUMS,
-            null,
-            selection,
+        return helper.readableDatabase.rawQuery(
+            """
+            SELECT t1.*,
+                   COALESCE(
+                       t1.${AlbumDatabaseHelper.COLUMN_LEAF_COUNT},
+                       NULLIF((
+                           SELECT COUNT(*)
+                           FROM ${AlbumDatabaseHelper.TABLE_ALBUM_TRACKS} t2
+                           WHERE t2.${AlbumDatabaseHelper.COLUMN_TRACK_ALBUM_RATING_KEY} = t1.${AlbumDatabaseHelper.COLUMN_RATING_KEY}
+                             AND t2.${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = t1.${AlbumDatabaseHelper.COLUMN_SOURCE_ID}
+                       ), 0)
+                   ) AS effective_leaf_count
+            FROM ${AlbumDatabaseHelper.TABLE_ALBUMS} t1
+            WHERE t1.${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ? AND $artistSelection
+            ORDER BY t1.${AlbumDatabaseHelper.COLUMN_YEAR} DESC, t1.${AlbumDatabaseHelper.COLUMN_TITLE} COLLATE NOCASE ASC
+            """.trimIndent(),
             selectionArgs,
-            null,
-            null,
-            "${AlbumDatabaseHelper.COLUMN_YEAR} DESC, ${AlbumDatabaseHelper.COLUMN_TITLE} COLLATE NOCASE ASC"
         ).use { cursor ->
             buildList {
                 while (cursor.moveToNext()) {
@@ -168,6 +177,30 @@ class AlbumLocalStore(context: Context) {
             album.toContentValues(),
             SQLiteDatabase.CONFLICT_REPLACE,
         )
+    }
+
+    fun updateAlbumsMetadata(sourceId: String, albums: List<PlexAlbum>) {
+        if (sourceId.isBlank() || albums.isEmpty()) return
+        val database = helper.writableDatabase
+        database.beginTransaction()
+        try {
+            albums.forEach { album ->
+                database.execSQL(
+                    """
+                    UPDATE ${AlbumDatabaseHelper.TABLE_ALBUMS}
+                    SET ${AlbumDatabaseHelper.COLUMN_FORMAT} = COALESCE(?, ${AlbumDatabaseHelper.COLUMN_FORMAT}),
+                        ${AlbumDatabaseHelper.COLUMN_SUBFORMAT} = COALESCE(?, ${AlbumDatabaseHelper.COLUMN_SUBFORMAT}),
+                        ${AlbumDatabaseHelper.COLUMN_LEAF_COUNT} = COALESCE(?, ${AlbumDatabaseHelper.COLUMN_LEAF_COUNT})
+                    WHERE ${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ?
+                      AND ${AlbumDatabaseHelper.COLUMN_RATING_KEY} = ?
+                    """.trimIndent(),
+                    arrayOf<Any?>(album.format, album.subformat, album.leafCount, sourceId, album.ratingKey),
+                )
+            }
+            database.setTransactionSuccessful()
+        } finally {
+            database.endTransaction()
+        }
     }
 
     fun deleteServerData(sourceId: String) {
@@ -323,7 +356,12 @@ class AlbumLocalStore(context: Context) {
                 type = string(AlbumDatabaseHelper.COLUMN_SECTION_TYPE),
             ),
             sourceId = string(AlbumDatabaseHelper.COLUMN_SOURCE_ID),
-            leafCount = nullableInt(AlbumDatabaseHelper.COLUMN_LEAF_COUNT),
+            leafCount = getColumnIndex("effective_leaf_count")
+                .takeIf { it >= 0 && !isNull(it) }
+                ?.let(::getInt)
+                ?: nullableInt(AlbumDatabaseHelper.COLUMN_LEAF_COUNT),
+            format = nullableString(AlbumDatabaseHelper.COLUMN_FORMAT),
+            subformat = nullableString(AlbumDatabaseHelper.COLUMN_SUBFORMAT),
         )
     }
 
@@ -377,6 +415,8 @@ class AlbumLocalStore(context: Context) {
             put(AlbumDatabaseHelper.COLUMN_SECTION_TITLE, section.title)
             put(AlbumDatabaseHelper.COLUMN_SECTION_TYPE, section.type)
             put(AlbumDatabaseHelper.COLUMN_LEAF_COUNT, leafCount)
+            put(AlbumDatabaseHelper.COLUMN_FORMAT, format)
+            put(AlbumDatabaseHelper.COLUMN_SUBFORMAT, subformat)
         }
 
     private fun PlexTrackStream.toContentValues(): ContentValues =
@@ -448,6 +488,11 @@ internal fun ensureVersion10Columns(db: SQLiteDatabase) {
     }
 }
 
+internal fun ensureVersion11Columns(db: SQLiteDatabase) {
+    addColumnIfNotExists(db, "albums", "format", "TEXT")
+    addColumnIfNotExists(db, "albums", "subformat", "TEXT")
+}
+
 private class AlbumDatabaseHelper(context: Context) :
     SQLiteOpenHelper(context, DATABASE_NAME, null, DATABASE_VERSION) {
 
@@ -495,11 +540,12 @@ private class AlbumDatabaseHelper(context: Context) :
         }
         if (oldVersion < 9) ensureVersion9Columns(db)
         if (oldVersion < 10) ensureVersion10Columns(db)
+        if (oldVersion < 11) ensureVersion11Columns(db)
     }
 
     companion object {
         private const val DATABASE_NAME = "plex_album_cache.db"
-        private const val DATABASE_VERSION = 10
+        private const val DATABASE_VERSION = 11
 
         const val TABLE_ALBUMS = "albums"
         const val TABLE_TRACKS = "tracks"
@@ -537,6 +583,8 @@ private class AlbumDatabaseHelper(context: Context) :
         const val COLUMN_TRACK_NUMBER = "track_number"
         const val COLUMN_TRACK_MUSIC_ANALYSIS_VERSION = "music_analysis_version"
         const val COLUMN_LEAF_COUNT = "leaf_count"
+        const val COLUMN_FORMAT = "format"
+        const val COLUMN_SUBFORMAT = "subformat"
     }
 
     private fun createAlbumsTable(db: SQLiteDatabase) {
@@ -556,6 +604,8 @@ private class AlbumDatabaseHelper(context: Context) :
                 $COLUMN_SECTION_TITLE TEXT NOT NULL,
                 $COLUMN_SECTION_TYPE TEXT NOT NULL,
                 $COLUMN_LEAF_COUNT INTEGER,
+                $COLUMN_FORMAT TEXT,
+                $COLUMN_SUBFORMAT TEXT,
                 PRIMARY KEY ($COLUMN_SOURCE_ID, $COLUMN_RATING_KEY)
             )
             """.trimIndent()

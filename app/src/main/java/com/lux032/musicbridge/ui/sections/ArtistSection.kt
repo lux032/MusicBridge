@@ -1,7 +1,6 @@
 package com.lux032.musicbridge
 
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -11,7 +10,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.LazyItemScope
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyGridState
@@ -33,7 +31,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -41,6 +38,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.lux032.musicbridge.model.ArtistAlbumCategory
+import com.lux032.musicbridge.model.ArtistAlbumClassification
+import com.lux032.musicbridge.model.ReleaseKind
+import com.lux032.musicbridge.model.classifyArtistAlbum
 import com.lux032.musicbridge.plex.PlexAlbum
 import com.lux032.musicbridge.plex.PlexTrackStream
 import kotlinx.coroutines.launch
@@ -484,9 +485,16 @@ internal fun ArtistAlbumsSection(
     // Shares the root now-playing tint so this page stays consistent with the mini player
     // and bottom bar.
     val palette = LocalArtworkPalette.current
-    // Reference layout shows newest releases first.
-    val sortedAlbums = remember(currentArtist.albums) {
-        currentArtist.albums.sortedByDescending { it.year ?: Int.MIN_VALUE }
+    val albumSections = remember(currentArtist.albums, layoutInfo.albumGridColumns) {
+        currentArtist.albums
+            .map { ClassifiedArtistAlbum(it, classifyArtistAlbum(it)) }
+            .groupBy { it.classification.category }
+            .mapValues { (_, albums) ->
+                albums.sortedWith(
+                    compareByDescending<ClassifiedArtistAlbum> { it.album.year ?: Int.MIN_VALUE }
+                        .thenBy { it.album.title.lowercase() }
+                ).chunked(layoutInfo.albumGridColumns)
+            }
     }
     val topTracks = remember(artistTracks) { artistTracks.take(10) }
 
@@ -603,49 +611,62 @@ internal fun ArtistAlbumsSection(
             }
         }
 
-        if (sortedAlbums.isNotEmpty()) {
-            item(contentType = "albums-header") {
-                Text(
-                    text = Strings.albums,
-                    style = MaterialTheme.typography.titleLarge,
-                    color = AppColors.TextPrimary,
-                    fontWeight = FontWeight.SemiBold,
-                )
-            }
-            itemsIndexed(
-                sortedAlbums.chunked(3),
-                key = { _, rowAlbums -> "artist-album-row-${rowAlbums.first().ratingKey}" },
-                contentType = { _, _ -> "album-row" },
-            ) { _, rowAlbums ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .animateItem(fadeInSpec = null, fadeOutSpec = null),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    rowAlbums.forEach { album ->
-                        Box(modifier = Modifier.weight(1f)) {
-                            AlbumCoverCard(
-                                album = album,
-                                selected = selectedAlbum?.ratingKey == album.ratingKey,
-                                onClick = { onAlbumClick(album) },
-                                onQueueAction = { onAlbumQueueAction(album, it) },
-                                compact = true,
-                                // The artist name is redundant on their own page; show year · track count.
-                                subtitleOverride = listOfNotNull(
-                                    album.year?.toString(),
-                                    album.leafCount?.let(Strings.tracks),
-                                ).joinToString(" · ").ifBlank { album.artistName.orEmpty() },
-                            )
+        val categories = listOf(
+            ArtistAlbumCategory.Album to Strings.studioAlbums,
+            ArtistAlbumCategory.SingleEp to Strings.singlesAndEps,
+            ArtistAlbumCategory.CompilationLive to Strings.compilationsAndLive,
+        )
+        categories.forEach { (category, title) ->
+            val rows = albumSections[category].orEmpty()
+            if (rows.isNotEmpty()) {
+                item(key = "artist-album-header-$category", contentType = "albums-header") {
+                    Text(
+                        text = title,
+                        style = MaterialTheme.typography.titleLarge,
+                        color = AppColors.TextPrimary,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+                itemsIndexed(
+                    rows,
+                    key = { _, row -> "artist-album-row-$category-${row.first().album.ratingKey}" },
+                    contentType = { _, _ -> "album-row" },
+                ) { _, row ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().animateItem(fadeInSpec = null, fadeOutSpec = null),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        row.forEach { classified ->
+                            val album = classified.album
+                            Box(modifier = Modifier.weight(1f)) {
+                                AlbumCoverCard(
+                                    album = album,
+                                    selected = selectedAlbum?.ratingKey == album.ratingKey,
+                                    onClick = { onAlbumClick(album) },
+                                    onQueueAction = { onAlbumQueueAction(album, it) },
+                                    compact = true,
+                                    subtitleOverride = artistAlbumSubtitle(classified),
+                                )
+                            }
                         }
-                    }
-                    repeat(3 - rowAlbums.size) {
-                        Spacer(modifier = Modifier.weight(1f))
+                        repeat(layoutInfo.albumGridColumns - row.size) {
+                            Spacer(modifier = Modifier.weight(1f))
+                        }
                     }
                 }
             }
         }
 
+        if (isArtistTracksLoading || topTracks.isNotEmpty()) {
+            item(contentType = "tracks-header") {
+                Text(
+                    text = Strings.topTracks,
+                    style = MaterialTheme.typography.titleLarge,
+                    color = AppColors.TextPrimary,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+        }
         if (isArtistTracksLoading) {
             item(contentType = "tracks-loading") {
                 Box(
@@ -659,87 +680,85 @@ internal fun ArtistAlbumsSection(
                     )
                 }
             }
-        } else if (topTracks.isNotEmpty()) {
-            item(contentType = "tracks-header") {
-                Text(
-                    text = Strings.topTracks,
-                    style = MaterialTheme.typography.titleLarge,
-                    color = AppColors.TextPrimary,
-                    fontWeight = FontWeight.SemiBold,
-                )
-            }
+        } else {
             itemsIndexed(
                 topTracks,
-                key = { index, track -> track.ratingKey ?: "artist-track-$index" },
+                key = { index, track -> track.ratingKey.ifBlank { "artist-track-$index" } },
                 contentType = { _, _ -> "track" },
             ) { index, track ->
-                var showQueueMenu by remember { mutableStateOf(false) }
-                Box(modifier = Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .clickable(enabled = !isPlaybackLoading) {
-                                onPlayTrack(currentArtist, track, index)
-                            }
-                            .padding(vertical = 4.dp),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        AsyncAlbumArtwork(
-                            imageUrl = track.thumbUrl,
-                            title = track.title,
-                            modifier = Modifier
-                                .size(48.dp)
-                                .clip(RoundedCornerShape(10.dp)),
-                            thumbnailSize = 48.dp,
-                        )
-                        Column(
-                            modifier = Modifier.weight(1f),
-                            verticalArrangement = Arrangement.spacedBy(3.dp),
-                        ) {
-                            Text(
-                                text = track.title,
-                                color = AppColors.TextPrimary,
-                                fontWeight = FontWeight.Medium,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                            Text(
-                                text = track.artistName ?: track.albumTitle.orEmpty(),
-                                color = AppColors.TextTertiary,
-                                style = MaterialTheme.typography.bodySmall,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                        track.durationMillis?.let {
-                            Text(
-                                text = formatDuration(it),
-                                color = AppColors.TextTertiary,
-                                style = MaterialTheme.typography.bodySmall,
-                            )
-                        }
-                        IconCircleButton(onClick = { showQueueMenu = true }) {
-                            Icon(
-                                imageVector = Icons.Filled.MoreVert,
-                                contentDescription = null,
-                                tint = AppColors.TextTertiary,
-                                modifier = Modifier.size(18.dp),
-                            )
-                        }
-                    }
-                    QueueActionMenu(
-                        expanded = showQueueMenu,
-                        onDismiss = { showQueueMenu = false },
-                        onAction = { placement ->
-                            showQueueMenu = false
-                            onQueueTrack(track, placement)
-                        },
-                    )
-                }
+                ArtistTrackRow(
+                    artist = currentArtist,
+                    track = track,
+                    index = index,
+                    isPlaybackLoading = isPlaybackLoading,
+                    onPlayTrack = onPlayTrack,
+                    onQueueTrack = onQueueTrack,
+                )
             }
         }
+    }
+}
+
+private data class ClassifiedArtistAlbum(
+    val album: PlexAlbum,
+    val classification: ArtistAlbumClassification,
+)
+
+private fun artistAlbumSubtitle(classified: ClassifiedArtistAlbum): String =
+    listOfNotNull(
+        classified.album.year?.toString(),
+        when (classified.classification.kind) {
+            ReleaseKind.Album -> classified.album.leafCount?.let(Strings.tracks)
+            ReleaseKind.Ep -> listOfNotNull(Strings.epLabel, classified.album.leafCount?.let(Strings.tracks)).joinToString(" · ")
+            ReleaseKind.Single -> Strings.singleLabel
+            ReleaseKind.Compilation -> Strings.compilationLabel
+            ReleaseKind.Live -> Strings.liveLabel
+        },
+    ).joinToString(" · ").ifBlank { classified.album.artistName.orEmpty() }
+
+@Composable
+private fun ArtistTrackRow(
+    artist: ArtistSummary,
+    track: PlexTrackStream,
+    index: Int,
+    isPlaybackLoading: Boolean,
+    onPlayTrack: (ArtistSummary, PlexTrackStream, Int) -> Unit,
+    onQueueTrack: (PlexTrackStream, QueuePlacement) -> Unit,
+) {
+    var showQueueMenu by remember { mutableStateOf(false) }
+    Box {
+        Row(
+            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+                .clickable(enabled = !isPlaybackLoading) { onPlayTrack(artist, track, index) }
+                .padding(vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            AsyncAlbumArtwork(
+                imageUrl = track.thumbUrl,
+                title = track.title,
+                modifier = Modifier.size(48.dp).clip(RoundedCornerShape(10.dp)),
+                thumbnailSize = 48.dp,
+            )
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(track.title, color = AppColors.TextPrimary, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(track.artistName ?: track.albumTitle.orEmpty(), color = AppColors.TextTertiary, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            track.durationMillis?.let {
+                Text(formatDuration(it), color = AppColors.TextTertiary, style = MaterialTheme.typography.bodySmall)
+            }
+            IconCircleButton(onClick = { showQueueMenu = true }) {
+                Icon(Icons.Filled.MoreVert, contentDescription = null, tint = AppColors.TextTertiary, modifier = Modifier.size(18.dp))
+            }
+        }
+        QueueActionMenu(
+            expanded = showQueueMenu,
+            onDismiss = { showQueueMenu = false },
+            onAction = {
+                showQueueMenu = false
+                onQueueTrack(track, it)
+            },
+        )
     }
 }
 

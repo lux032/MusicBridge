@@ -150,6 +150,7 @@ class AppState(
     var playbackMode by mutableStateOf(PlaybackMode.Sequential)
     var recentPlayedAlbumKeys by mutableStateOf(appPreferences.loadRecentPlayedAlbumKeys(initialPreferences.id))
     var artists by mutableStateOf<List<ArtistSummary>>(emptyList())
+    var artistAlbumsRevision by mutableIntStateOf(0)
     var playlists by mutableStateOf<List<PlexPlaylist>>(emptyList())
     var selectedPlaylist by mutableStateOf<PlexPlaylist?>(null)
     var playlistTrackResult by mutableStateOf<PlexPlaylistTracksResult?>(null)
@@ -212,7 +213,8 @@ class AppState(
     // only when either changes. A library sync rebuilds `artists`, which keeps the
     // cached album list in step with the underlying database.
     val selectedArtist: ArtistSummary? by derivedStateOf {
-        selectedArtistName?.let { selectedName ->
+        val selectedName = (selectedArtistName to artistAlbumsRevision).first
+        selectedName?.let {
             val albums = albumLocalStore.getAlbumsByArtist(connectionPreferences.id, selectedName)
             val summary = artists.firstOrNull { it.name == selectedName }
             summary?.let {
@@ -241,6 +243,10 @@ class AppState(
 
     fun getSavedLazyScrollPosition(section: AppSection): SavedScrollPosition =
         savedLazyPositions[section] ?: SavedScrollPosition()
+
+    fun resetLazyScrollPosition(section: AppSection) {
+        savedLazyPositions.remove(section)
+    }
 
     /** Direction of the most recent navigation — the section AnimatedContent reads this to
      *  pick its transition style (player morph / push / pop / tab fade). */
@@ -512,6 +518,8 @@ class AppState(
     fun toggleArtistFavorite(artist: ArtistSummary) = libraryCoordinator.toggleArtistFavorite(artist)
 
     fun loadArtistTracks(artist: ArtistSummary) = libraryCoordinator.loadArtistTracks(artist)
+
+    fun loadArtistAlbums(artist: ArtistSummary) = libraryCoordinator.loadArtistAlbums(artist)
 
     suspend fun loadArtists() = libraryCoordinator.loadArtists()
 

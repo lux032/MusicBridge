@@ -10,12 +10,15 @@ import com.lux032.musicbridge.plex.PlexTrackStream
 import com.lux032.musicbridge.plex.isFavorite
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 internal class AppStateLibraryCoordinator(
     private val state: AppState,
 ) {
+    private var artistAlbumsJob: Job? = null
+
     suspend fun loadAlbumsFromLocalStore() {
         val sourceId = state.connectionPreferences.id
         val albums = withContext(Dispatchers.IO) {
@@ -145,13 +148,18 @@ internal class AppStateLibraryCoordinator(
     }
 
     fun openArtistAlbums(artist: ArtistSummary) {
+        val artistChanged = state.selectedArtistName != artist.name
         state.selectedArtistName = artist.name
+        if (artistChanged) state.resetLazyScrollPosition(AppSection.ArtistAlbums)
         if (state.activeSection == AppSection.ArtistAlbums) return
         state.navigateTo(AppSection.ArtistAlbums)
     }
 
     fun openArtistAlbumsByName(artistName: String?) {
         val normalizedName = artistName?.trim().orEmpty().ifBlank { "未知艺人" }
+        if (state.selectedArtistName != normalizedName) {
+            state.resetLazyScrollPosition(AppSection.ArtistAlbums)
+        }
         state.selectedArtistName = normalizedName
         state.navigateTo(AppSection.ArtistAlbums)
     }
@@ -445,6 +453,28 @@ internal class AppStateLibraryCoordinator(
             }
             if (state.selectedArtistName == artist.name) {
                 state.isArtistTracksLoading = false
+            }
+        }
+    }
+
+    fun loadArtistAlbums(artist: ArtistSummary) {
+        val ratingKey = artist.ratingKey?.trim().orEmpty()
+        if (ratingKey.isEmpty()) return
+
+        artistAlbumsJob?.cancel()
+        artistAlbumsJob = state.scope.launch {
+            runCatching {
+                state.clientFor(artist.sourceId).fetchArtistAlbums(ratingKey)
+            }.onSuccess { freshAlbums ->
+                if (freshAlbums.isEmpty()) return@onSuccess
+                withContext(Dispatchers.IO) {
+                    state.albumLocalStore.updateAlbumsMetadata(artist.sourceId, freshAlbums)
+                }
+                if (state.selectedArtistName == artist.name) {
+                    state.artistAlbumsRevision++
+                }
+            }.onFailure { error ->
+                if (error is CancellationException) throw error
             }
         }
     }
