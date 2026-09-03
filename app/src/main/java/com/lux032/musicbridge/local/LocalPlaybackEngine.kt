@@ -274,7 +274,10 @@ object LocalAudioCache {
                 while (generationIsCurrent(generation)) {
                     val count = dataSource.read(buffer, 0, buffer.size)
                     if (count == C.RESULT_END_OF_INPUT) break
-                    if (count > 0) output.write(buffer, 0, count)
+                    if (count > 0) {
+                        PlaybackDiagnostics.recordPrecacheBytes(count)
+                        output.write(buffer, 0, count)
+                    }
                 }
             }
             if (!generationIsCurrent(generation) || !verifyOggStreamComplete(tempFile)) return
@@ -614,16 +617,20 @@ class NetworkQualityMonitor(context: Context) {
 
     private val callback = object : ConnectivityManager.NetworkCallback() {
         override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+            PlaybackDiagnostics.updateNetworkCapabilities(capabilities)
             _isWifi.value = capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
                 capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
         }
 
         override fun onLost(network: Network) {
+            PlaybackDiagnostics.updateNetworkCapabilities(readCapabilities())
             _isWifi.value = readIsWifi()
         }
     }
 
     init {
+        PlaybackDiagnostics.initialize(context)
+        PlaybackDiagnostics.updateNetworkCapabilities(readCapabilities())
         runCatching {
             connectivityManager.registerDefaultNetworkCallback(callback)
         }
@@ -631,10 +638,12 @@ class NetworkQualityMonitor(context: Context) {
 
     fun currentIsWifi(): Boolean = _isWifi.value
 
+    private fun readCapabilities(): NetworkCapabilities? = runCatching {
+        connectivityManager.getNetworkCapabilities(connectivityManager.activeNetwork)
+    }.getOrNull()
+
     private fun readIsWifi(): Boolean {
-        val capabilities = runCatching {
-            connectivityManager.getNetworkCapabilities(connectivityManager.activeNetwork)
-        }.getOrNull() ?: return true
+        val capabilities = readCapabilities() ?: return false
         return capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
             capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
     }
@@ -678,6 +687,11 @@ class LocalPlaybackEngine(
     private val httpDataSourceFactory = DefaultHttpDataSource.Factory()
         .setConnectTimeoutMs(15_000)
         .setReadTimeoutMs(30_000)
+        .setTransferListener(PlaybackDiagnostics.foregroundTransferListener)
+    private val precacheHttpDataSourceFactory = DefaultHttpDataSource.Factory()
+        .setConnectTimeoutMs(15_000)
+        .setReadTimeoutMs(30_000)
+        .setTransferListener(PlaybackDiagnostics.precacheTransferListener)
     private val simpleCache = LocalAudioCache.configure(context.applicationContext, cacheMaxBytes)
     private val cacheDataSourceFactory = CacheDataSource.Factory()
         .setCache(simpleCache)
@@ -719,6 +733,7 @@ class LocalPlaybackEngine(
     private var bufferingStallStartedAtMillis = C.TIME_UNSET
     private var bufferingStallPositionMillis = C.TIME_UNSET
     private var bufferingStallBufferedPositionMillis = C.TIME_UNSET
+    private var bufferingStartedAtMillis = C.TIME_UNSET
     private var released = false
 
     private val bufferingWatchdog = object : Runnable {
@@ -872,9 +887,24 @@ class LocalPlaybackEngine(
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
+            val now = SystemClock.elapsedRealtime()
             if (playbackState == Player.STATE_BUFFERING && player.playWhenReady) {
+                if (bufferingStartedAtMillis == C.TIME_UNSET) {
+                    bufferingStartedAtMillis = now
+                    PlaybackDiagnostics.record(
+                        "BUFFERING_START",
+                        "index=$currentIndex positionMs=$currentPositionMillis bufferedPositionMs=$bufferedPositionMillis",
+                    )
+                }
                 startBufferingWatchdog()
             } else {
+                if (bufferingStartedAtMillis != C.TIME_UNSET) {
+                    PlaybackDiagnostics.record(
+                        "BUFFERING_END",
+                        "durationMs=${now - bufferingStartedAtMillis} state=$playbackState",
+                    )
+                    bufferingStartedAtMillis = C.TIME_UNSET
+                }
                 resetBufferingWatchdog()
             }
             if (playbackState == Player.STATE_READY && player.playWhenReady) {
@@ -890,6 +920,11 @@ class LocalPlaybackEngine(
 
         override fun onPlayerError(error: PlaybackException) {
             logPlaybackError(error)
+            PlaybackDiagnostics.record(
+                "PLAYER_ERROR",
+                "code=${error.errorCode} name=${error.errorCodeName} message=${error.message}",
+            )
+            PlaybackDiagnostics.saveAutomaticSnapshot("player_error_${error.errorCodeName}")
             hasUnrecoveredPlaybackError = true
             val failedIndex = currentIndex
             val wasPlayRequested = player.playWhenReady
@@ -921,13 +956,11 @@ class LocalPlaybackEngine(
             error: IOException,
             wasCanceled: Boolean,
         ) {
-            Log.w(
-                LOG_TAG,
-                "loadError index=${eventTime.mediaPeriodId?.periodUid} uri=${loadEventInfo.uri} " +
-                    "bytes=${loadEventInfo.bytesLoaded} durationMs=${loadEventInfo.loadDurationMs} " +
-                    "canceled=$wasCanceled dataType=${mediaLoadData.dataType}",
-                error,
-            )
+            val detail = "index=${eventTime.mediaPeriodId?.periodUid} uri=${loadEventInfo.uri} " +
+                "bytes=${loadEventInfo.bytesLoaded} durationMs=${loadEventInfo.loadDurationMs} " +
+                "canceled=$wasCanceled dataType=${mediaLoadData.dataType}"
+            PlaybackDiagnostics.record("LOAD_ERROR", "$detail error=${error.javaClass.simpleName}:${error.message}")
+            Log.w(LOG_TAG, detail, error)
         }
 
         override fun onAudioInputFormatChanged(
@@ -1003,8 +1036,7 @@ class LocalPlaybackEngine(
         if (errorCode == PlaybackException.ERROR_CODE_DECODING_FAILED) return true
         var cause: Throwable? = this
         while (cause != null) {
-            val name = cause.javaClass.name
-            if (name.contains("ParserException") || name.contains("UnrecognizedInputFormatException")) return true
+            if (cause is ParserException) return true
             cause = cause.cause
         }
         return false
@@ -1029,12 +1061,10 @@ class LocalPlaybackEngine(
         var cause: Throwable? = error
         var depth = 0
         while (cause != null) {
-            val category = when {
-                cause is MediaCodec.CodecException -> "MediaCodec.CodecException"
-                cause.javaClass.name.contains("DecoderInitializationException") -> "DecoderInitializationException"
-                cause.javaClass.name.contains("AudioSink") && cause.javaClass.simpleName == "WriteException" -> "AudioSink.WriteException"
-                cause.javaClass.name.contains("AudioSink") && cause.javaClass.simpleName == "InitializationException" -> "AudioSink.InitializationException"
-                cause.javaClass.name.contains("HttpDataSource") -> "HttpDataSourceException"
+            val category = when (cause) {
+                is MediaCodec.CodecException -> "MediaCodec.CodecException"
+                is HttpDataSource.HttpDataSourceException -> "HttpDataSourceException"
+                is IOException -> "IOException"
                 else -> "other"
             }
             val detail = if (cause is MediaCodec.CodecException) {
@@ -1049,6 +1079,7 @@ class LocalPlaybackEngine(
     }
 
     init {
+        PlaybackDiagnostics.initialize(context)
         player.addListener(playerListener)
         player.addAnalyticsListener(analyticsListener)
         player.repeatMode = Player.REPEAT_MODE_OFF
@@ -1127,6 +1158,14 @@ class LocalPlaybackEngine(
         watchdogHandler.postDelayed(bufferingWatchdog, BUFFERING_WATCHDOG_TICK_MILLIS)
     }
 
+    fun recordDiagnosticHeartbeat(playbackState: String) {
+        PlaybackDiagnostics.recordHeartbeat(
+            positionMs = currentPositionMillis,
+            bufferedPositionMs = bufferedPositionMillis,
+            playbackState = playbackState,
+        )
+    }
+
     private fun checkBufferingStall() {
         if (!shouldWatchBuffering()) {
             resetBufferingWatchdog()
@@ -1147,6 +1186,11 @@ class LocalPlaybackEngine(
 
         val failedIndex = currentIndex
         val targetMillis = currentPositionMillis
+        PlaybackDiagnostics.record(
+            "WATCHDOG_STALL",
+            "index=$failedIndex positionMs=$targetMillis bufferedPositionMs=$bufferedPositionMillis",
+        )
+        PlaybackDiagnostics.saveAutomaticSnapshot("buffering_watchdog_stall")
         resetBufferingWatchdog()
         val error = bufferingStallException()
         when (recoveryBudget.onFailure(failedIndex)) {
@@ -1199,6 +1243,7 @@ class LocalPlaybackEngine(
         startPositionMillis: Long,
         precacheCount: Int = 0,
     ) {
+        PlaybackDiagnostics.beginPlaybackSession()
         pendingCachedTranscodeSeek = null
         hasUnrecoveredPlaybackError = false
         recoveryTargetIndex = C.INDEX_UNSET
@@ -1413,7 +1458,7 @@ class LocalPlaybackEngine(
             .take(queuePrecacheCount)
         LocalAudioCache.precache(
             items,
-            httpDataSourceFactory,
+            precacheHttpDataSourceFactory,
         )
     }
 

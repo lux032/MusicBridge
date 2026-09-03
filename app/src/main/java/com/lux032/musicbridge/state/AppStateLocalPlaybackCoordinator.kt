@@ -289,8 +289,10 @@ internal class AppStateLocalPlaybackCoordinator(
                     val playbackState = when {
                         engine.isEnded || engine.isIdleAfterError -> "stopped"
                         isPaused -> "paused"
+                        isBuffering -> "buffering"
                         else -> "playing"
                     }
+                    engine.recordDiagnosticHeartbeat(playbackState)
 
                     state.miniPlayerState = current.copy(
                         currentIndex = index,

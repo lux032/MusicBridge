@@ -30,6 +30,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.*
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.material.icons.Icons
@@ -75,15 +76,21 @@ import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import com.lux032.musicbridge.sonos.SonosController
 import com.lux032.musicbridge.sonos.SonosRoom
+import android.content.Intent
 import android.os.Build
 import android.util.Log
+import android.widget.Toast
+import androidx.core.content.FileProvider
+import com.lux032.musicbridge.local.PlaybackDiagnostics
 import java.util.Locale
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -2541,6 +2548,7 @@ internal fun SettingsSection(
             onLocalCacheSizeChange = onLocalCacheSizeChange,
             onClearLocalCache = onClearLocalCache,
         )
+        PlaybackDiagnosticsCard()
         HorizontalDivider(color = AppColors.Border)
         OpusTranscodeStrategyCard(
             currentMode = opusTranscodeMode,
@@ -2551,6 +2559,105 @@ internal fun SettingsSection(
             currentMode = sonosHiResTranscodeMode,
             onModeChange = onSonosHiResTranscodeModeChange,
         )
+    }
+}
+
+@Composable
+private fun PlaybackDiagnosticsCard() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var status by remember { mutableStateOf("正在读取已保存快照…") }
+
+    LaunchedEffect(context) {
+        val count = withContext(Dispatchers.IO) { PlaybackDiagnostics.snapshotCount(context) }
+        status = "已保存 $count 份快照"
+    }
+
+    Surface(
+        shape = RoundedCornerShape(26.dp),
+        color = AppColors.CardSurface,
+        border = BorderStroke(1.dp, AppColors.Border),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text("🛠️ 卡顿诊断快照", style = MaterialTheme.typography.titleLarge, color = AppColors.TextPrimary)
+            Text(
+                "听到卡顿后立即点击保存。快照包含最近 3 分钟日志，并标记最后 60 秒。",
+                color = AppColors.TextSecondary,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Button(
+                onClick = {
+                    scope.launch {
+                        val result = withContext(Dispatchers.IO) {
+                            PlaybackDiagnostics.saveManualSnapshot(context)
+                        }
+                        result.onSuccess { file ->
+                            status = "✅ 已保存快照：${file.name}"
+                            Toast.makeText(context, "$status\n稍后可连接电脑排查", Toast.LENGTH_LONG).show()
+                        }.onFailure { error ->
+                            status = "保存失败：${error.message}"
+                            Toast.makeText(context, status, Toast.LENGTH_LONG).show()
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("抓取卡顿诊断快照") }
+            OutlinedButton(
+                onClick = {
+                    scope.launch {
+                        val latest = withContext(Dispatchers.IO) {
+                            PlaybackDiagnostics.latestSnapshot(context)
+                        }
+                        if (latest == null) {
+                            Toast.makeText(context, "暂无可分享的诊断快照", Toast.LENGTH_LONG).show()
+                        } else {
+                            runCatching {
+                                val uri = FileProvider.getUriForFile(
+                                    context,
+                                    "${context.packageName}.fileprovider",
+                                    latest,
+                                )
+                                context.startActivity(
+                                    Intent.createChooser(
+                                        Intent(Intent.ACTION_SEND).apply {
+                                            type = "text/plain"
+                                            putExtra(Intent.EXTRA_STREAM, uri)
+                                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                        },
+                                        "分享诊断快照",
+                                    ),
+                                )
+                            }.onFailure {
+                                Toast.makeText(context, "分享失败：${it.message}", Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("分享最新快照") }
+            TextButton(
+                onClick = {
+                    scope.launch {
+                        val cleared = withContext(Dispatchers.IO) {
+                            PlaybackDiagnostics.clearSnapshots(context)
+                        }
+                        status = if (cleared) "已清空诊断快照" else "清空失败：外部存储不可用"
+                        Toast.makeText(context, status, Toast.LENGTH_LONG).show()
+                    }
+                },
+            ) { Text("清空快照") }
+            Text(status, color = AppColors.TextSecondary, style = MaterialTheme.typography.bodySmall)
+            SelectionContainer {
+                Text(
+                    PlaybackDiagnostics.ADB_PULL_COMMAND,
+                    color = AppColors.TextTertiary,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
     }
 }
 
