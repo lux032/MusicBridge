@@ -270,7 +270,7 @@ internal fun PlaybackDetailSection(
                 Text(
                     currentTrack.title,
                     modifier = Modifier.weight(1f).basicMarquee(),
-                    style = if (compact) MaterialTheme.typography.titleMedium else MaterialTheme.typography.titleLarge,
+                    style = MaterialTheme.typography.headlineSmall,
                     color = AppColors.TextPrimary,
                     fontWeight = FontWeight.Bold,
                     maxLines = 1,
@@ -306,7 +306,8 @@ internal fun PlaybackDetailSection(
                 ) {
                     Text(
                         text = displayAlbum.artistName ?: Strings.unknownArtist,
-                        color = palette.accent,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = AppColors.TextPrimary,
                         fontWeight = FontWeight.SemiBold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -340,6 +341,7 @@ internal fun PlaybackDetailSection(
                 ) {
                     Text(
                         text = albumLabel,
+                        style = MaterialTheme.typography.bodyMedium,
                         color = AppColors.TextSecondary,
                         fontWeight = FontWeight.Medium,
                         maxLines = 1,
