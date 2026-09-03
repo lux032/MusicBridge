@@ -77,6 +77,8 @@ data class PlexTrackStream(
     val sourceAudioBitrateKbps: Int? = null,
     val sourceAudioSampleRate: Int? = null,
     val playbackMimeType: String? = null,
+    /** Plex lyric stream (Stream streamType="4") when the server exposes one. */
+    val lyricUrl: String? = null,
     val sourceId: String = "",
     val musicAnalysisVersion: String? = null,
     val viewCount: Long? = null,
@@ -488,6 +490,7 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient, SonicC
                     sourceAudioBitrateKbps = track.firstAudioBitrateKbps(),
                     sourceAudioSampleRate = sourceAudioSampleRate,
                     playbackMimeType = sourceAudioCodec.transcodedPlaybackMimeType(config.opusTranscodeMode, sourceAudioSampleRate, config.sonosHiResTranscodeMode),
+                    lyricUrl = track.firstLyricUrl(server.uri, accessToken),
                     sourceId = config.sourceId,
                     musicAnalysisVersion = behavior.musicAnalysisVersion,
                     viewCount = behavior.viewCount,
@@ -866,6 +869,7 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient, SonicC
                         sourceAudioBitrateKbps = track.firstAudioBitrateKbps(),
                         sourceAudioSampleRate = sourceAudioSampleRate,
                         playbackMimeType = sourceAudioCodec.transcodedPlaybackMimeType(config.opusTranscodeMode, sourceAudioSampleRate, config.sonosHiResTranscodeMode),
+                        lyricUrl = track.firstLyricUrl(server.uri, accessToken),
                         sourceId = config.sourceId,
                         musicAnalysisVersion = behavior.musicAnalysisVersion,
                         viewCount = behavior.viewCount,
@@ -930,6 +934,7 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient, SonicC
                         sourceAudioBitrateKbps = track.firstAudioBitrateKbps(),
                         sourceAudioSampleRate = sourceAudioSampleRate,
                         playbackMimeType = sourceAudioCodec.transcodedPlaybackMimeType(config.opusTranscodeMode, sourceAudioSampleRate, config.sonosHiResTranscodeMode),
+                        lyricUrl = track.firstLyricUrl(server.uri, accessToken),
                         sourceId = config.sourceId,
                         musicAnalysisVersion = behavior.musicAnalysisVersion,
                         viewCount = behavior.viewCount,
@@ -1531,35 +1536,44 @@ internal fun PlexTrackStream.withOpusTranscodeMode(
  * support neither ranges nor reuse. Those are normalized back to the direct file URL
  * first — on-device playback has no use for the Sonos opus workarounds.
  */
+internal fun PlexTrackStream.willTranscodeLocally(policy: LocalPlaybackPolicy): Boolean {
+    val direct = withDirectFileUrl()
+    val limitKbps = policy.streamingLimit.maxSourceBitrateKbps ?: return false
+    val sourceBitrate = direct.sourceAudioBitrateKbps
+    val isNativeOpusWithUnknownBitrate =
+        direct.sourceAudioCodec.equals("opus", ignoreCase = true) && sourceBitrate == null
+    if (isNativeOpusWithUnknownBitrate || (sourceBitrate != null && sourceBitrate <= limitKbps)) return false
+
+    val baseUrl = direct.streamUrl.substringBefore('?')
+    val token = direct.streamUrl.substringAfter('?', "")
+        .split('&')
+        .firstOrNull { it.startsWith("X-Plex-Token=") }
+        ?.substringAfter("X-Plex-Token=")
+        .orEmpty()
+    return baseUrl.contains("/library/parts") && token.isNotBlank()
+}
+
 internal fun PlexTrackStream.withLocalPlaybackPolicy(
     policy: LocalPlaybackPolicy,
     clientIdentifier: String,
 ): PlexTrackStream {
     val direct = withDirectFileUrl()
-    val limitKbps = policy.streamingLimit.maxSourceBitrateKbps
-    val sourceBitrate = direct.sourceAudioBitrateKbps
-    val isNativeOpusWithUnknownBitrate =
-        direct.sourceAudioCodec.equals("opus", ignoreCase = true) && sourceBitrate == null
-    val shouldTranscode = limitKbps != null &&
-        !isNativeOpusWithUnknownBitrate &&
-        (sourceBitrate == null || sourceBitrate > limitKbps)
+    val shouldTranscode = direct.willTranscodeLocally(policy)
     android.util.Log.i(
         "LocalPlaybackPolicy",
-        "codec=${direct.sourceAudioCodec.orEmpty()}, sourceKbps=${sourceBitrate ?: -1}, " +
-            "limitKbps=${limitKbps ?: -1}, transcode=$shouldTranscode",
+        "codec=${direct.sourceAudioCodec.orEmpty()}, sourceKbps=${direct.sourceAudioBitrateKbps ?: -1}, " +
+            "limitKbps=${policy.streamingLimit.maxSourceBitrateKbps ?: -1}, transcode=$shouldTranscode",
     )
     if (!shouldTranscode) return direct
     val bitrateKbps = policy.opusBitrate.kbps
     // Direct file URLs look like "<server>/library/parts/<id>/<ts>/file.ext?X-Plex-Token=...".
     val baseUrl = direct.streamUrl.substringBefore('?')
-    if (!baseUrl.contains("/library/parts")) return direct
     val serverUri = baseUrl.substringBefore("/library/parts")
     val token = direct.streamUrl.substringAfter('?', "")
         .split('&')
         .firstOrNull { it.startsWith("X-Plex-Token=") }
         ?.substringAfter("X-Plex-Token=")
         .orEmpty()
-    if (serverUri.isBlank() || token.isBlank()) return direct
 
     val profile =
         "add-transcode-target(type=musicProfile&context=streaming&protocol=http&container=ogg&audioCodec=opus&maxAudioBitrate=$bitrateKbps&replace=true)"
@@ -1676,6 +1690,17 @@ private fun Element.firstPartKey(): String? {
         if (key.isNotBlank()) {
             return key
         }
+    }
+    return null
+}
+
+private fun Element.firstLyricUrl(serverUri: String, token: String): String? {
+    val streams = getElementsByTagName("Stream")
+    for (index in 0 until streams.length) {
+        val stream = streams.item(index) as? Element ?: continue
+        if (stream.getAttribute("streamType").trim() != "4") continue
+        val key = stream.getAttribute("key").trim().ifBlank { null } ?: continue
+        return buildStreamUrl(serverUri, key, token)
     }
     return null
 }
@@ -1800,6 +1825,7 @@ private fun org.w3c.dom.NodeList.toTrackStreams(
                     sourceAudioBitrateKbps = track.firstAudioBitrateKbps(),
                     sourceAudioSampleRate = sourceAudioSampleRate,
                     playbackMimeType = sourceAudioCodec.transcodedPlaybackMimeType(opusMode, sourceAudioSampleRate, hiResMode),
+                    lyricUrl = track.firstLyricUrl(serverUri, token),
                     sourceId = sourceId,
                     musicAnalysisVersion = behavior.musicAnalysisVersion,
                     viewCount = behavior.viewCount,

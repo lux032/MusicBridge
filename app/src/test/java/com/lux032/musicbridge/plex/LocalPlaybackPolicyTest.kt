@@ -50,15 +50,19 @@ class LocalPlaybackPolicyTest {
     fun opusWithMissingPlexBitrateStaysDirect() {
         val opus = track.copy(sourceAudioCodec = "opus", sourceAudioBitrateKbps = null)
 
-        val result = opus.withLocalPlaybackPolicy(policy(LocalStreamingLimit.KBPS_320), "client")
+        val selectedPolicy = policy(LocalStreamingLimit.KBPS_320)
+        val result = opus.withLocalPlaybackPolicy(selectedPolicy, "client")
 
         assertEquals(opus.streamUrl, result.streamUrl)
+        assertEquals(false, opus.willTranscodeLocally(selectedPolicy))
     }
 
     @Test
     fun sourceAboveLimitUsesSelectedOpusTier() {
-        val result = track.withLocalPlaybackPolicy(policy(LocalStreamingLimit.KBPS_320), "client")
+        val selectedPolicy = policy(LocalStreamingLimit.KBPS_320)
+        val result = track.withLocalPlaybackPolicy(selectedPolicy, "client")
 
+        assertTrue(track.willTranscodeLocally(selectedPolicy))
         assertTrue(result.streamUrl.contains("/music/:/transcode/universal/start.ogg"))
         assertTrue(result.streamUrl.contains("audioCodec=opus"))
         assertTrue(result.streamUrl.contains("maxAudioBitrate=128"))
