@@ -389,6 +389,7 @@ class AlbumLocalStore(context: Context) {
             sourceAudioCodec = nullableString(AlbumDatabaseHelper.COLUMN_TRACK_SOURCE_AUDIO_CODEC),
             sourceAudioBitrateKbps = nullableInt(AlbumDatabaseHelper.COLUMN_TRACK_BITRATE_KBPS),
             sourceAudioSampleRate = nullableInt(AlbumDatabaseHelper.COLUMN_TRACK_SAMPLE_RATE),
+            bitDepth = nullableInt(AlbumDatabaseHelper.COLUMN_TRACK_BIT_DEPTH),
             playbackMimeType = nullableString(AlbumDatabaseHelper.COLUMN_TRACK_PLAYBACK_MIME_TYPE),
             sourceId = string(AlbumDatabaseHelper.COLUMN_SOURCE_ID),
             musicAnalysisVersion = nullableString(AlbumDatabaseHelper.COLUMN_TRACK_MUSIC_ANALYSIS_VERSION),
@@ -435,6 +436,7 @@ class AlbumLocalStore(context: Context) {
             put(AlbumDatabaseHelper.COLUMN_TRACK_SOURCE_AUDIO_CODEC, sourceAudioCodec)
             put(AlbumDatabaseHelper.COLUMN_TRACK_BITRATE_KBPS, sourceAudioBitrateKbps)
             put(AlbumDatabaseHelper.COLUMN_TRACK_SAMPLE_RATE, sourceAudioSampleRate)
+            put(AlbumDatabaseHelper.COLUMN_TRACK_BIT_DEPTH, bitDepth)
             put(AlbumDatabaseHelper.COLUMN_TRACK_PLAYBACK_MIME_TYPE, playbackMimeType)
             put(AlbumDatabaseHelper.COLUMN_TRACK_MUSIC_ANALYSIS_VERSION, musicAnalysisVersion)
             put(AlbumDatabaseHelper.COLUMN_TRACK_VIEW_COUNT, viewCount)
@@ -493,6 +495,12 @@ internal fun ensureVersion11Columns(db: SQLiteDatabase) {
     addColumnIfNotExists(db, "albums", "subformat", "TEXT")
 }
 
+internal fun ensureVersion12Columns(db: SQLiteDatabase) {
+    for (table in listOf("tracks", "album_tracks")) {
+        addColumnIfNotExists(db, table, "bit_depth", "INTEGER")
+    }
+}
+
 private class AlbumDatabaseHelper(context: Context) :
     SQLiteOpenHelper(context, DATABASE_NAME, null, DATABASE_VERSION) {
 
@@ -541,11 +549,12 @@ private class AlbumDatabaseHelper(context: Context) :
         if (oldVersion < 9) ensureVersion9Columns(db)
         if (oldVersion < 10) ensureVersion10Columns(db)
         if (oldVersion < 11) ensureVersion11Columns(db)
+        if (oldVersion < 12) ensureVersion12Columns(db)
     }
 
     companion object {
         private const val DATABASE_NAME = "plex_album_cache.db"
-        private const val DATABASE_VERSION = 11
+        private const val DATABASE_VERSION = 12
 
         const val TABLE_ALBUMS = "albums"
         const val TABLE_TRACKS = "tracks"
@@ -574,6 +583,7 @@ private class AlbumDatabaseHelper(context: Context) :
         const val COLUMN_TRACK_THUMB_URL = "thumb_url"
         const val COLUMN_TRACK_SOURCE_AUDIO_CODEC = "source_audio_codec"
         const val COLUMN_TRACK_SAMPLE_RATE = "sample_rate"
+        const val COLUMN_TRACK_BIT_DEPTH = "bit_depth"
         const val COLUMN_TRACK_BITRATE_KBPS = "bitrate_kbps"
         const val COLUMN_TRACK_PLAYBACK_MIME_TYPE = "playback_mime_type"
         const val COLUMN_TRACK_VIEW_COUNT = "view_count"
@@ -635,6 +645,7 @@ private class AlbumDatabaseHelper(context: Context) :
                 $COLUMN_TRACK_THUMB_URL TEXT,
                 $COLUMN_TRACK_SOURCE_AUDIO_CODEC TEXT,
                 $COLUMN_TRACK_SAMPLE_RATE INTEGER,
+                $COLUMN_TRACK_BIT_DEPTH INTEGER,
                 $COLUMN_TRACK_BITRATE_KBPS INTEGER,
                 $COLUMN_TRACK_PLAYBACK_MIME_TYPE TEXT,
                 $COLUMN_TRACK_VIEW_COUNT INTEGER,
@@ -672,6 +683,7 @@ private class AlbumDatabaseHelper(context: Context) :
                 $COLUMN_TRACK_THUMB_URL TEXT,
                 $COLUMN_TRACK_SOURCE_AUDIO_CODEC TEXT,
                 $COLUMN_TRACK_SAMPLE_RATE INTEGER,
+                $COLUMN_TRACK_BIT_DEPTH INTEGER,
                 $COLUMN_TRACK_BITRATE_KBPS INTEGER,
                 $COLUMN_TRACK_PLAYBACK_MIME_TYPE TEXT,
                 $COLUMN_TRACK_VIEW_COUNT INTEGER,

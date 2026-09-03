@@ -82,6 +82,7 @@ import android.util.Log
 import android.widget.Toast
 import androidx.core.content.FileProvider
 import com.lux032.musicbridge.local.PlaybackDiagnostics
+import com.lux032.musicbridge.local.originalCacheKey
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -101,6 +102,7 @@ internal fun PlaybackDetailSection(
     playbackMode: PlaybackMode,
     sleepTimerState: SleepTimerState,
     localPlaybackPolicy: LocalPlaybackPolicy,
+    cachedOriginalTrackKeys: Set<String>,
     isLoading: Boolean,
     isFavoriteLoading: Boolean,
     onBack: () -> Unit,
@@ -365,8 +367,8 @@ internal fun PlaybackDetailSection(
                     }
                 }
             }
-            val qualityBadges = remember(currentTrack, currentState.target, localPlaybackPolicy) {
-                currentTrack.outputQualityBadges(currentState.target, localPlaybackPolicy)
+            val qualityBadges = remember(currentTrack, currentState.target, localPlaybackPolicy, cachedOriginalTrackKeys) {
+                currentTrack.outputQualityBadges(currentState.target, localPlaybackPolicy, cachedOriginalTrackKeys)
             }
             if (qualityBadges.isNotEmpty()) {
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -737,7 +739,7 @@ internal fun PlaybackDetailSection(
                     onArtistClick(displayAlbum.artistName)
                 }
                 Text(Strings.trackDetails, color = AppColors.TextSecondary, fontWeight = FontWeight.SemiBold)
-                Text(currentTrack.trackDetailText(currentState.target, localPlaybackPolicy), color = AppColors.TextTertiary, style = MaterialTheme.typography.bodyMedium)
+                Text(currentTrack.trackDetailText(currentState.target, localPlaybackPolicy, cachedOriginalTrackKeys), color = AppColors.TextTertiary, style = MaterialTheme.typography.bodyMedium)
                 Spacer(Modifier.height(24.dp))
             }
         }
@@ -1202,23 +1204,38 @@ private fun AudioQualityBadge(text: String) {
     }
 }
 
-private fun PlexTrackStream.outputQualityBadges(target: PlaybackTarget, policy: LocalPlaybackPolicy): List<String> {
+internal fun originalAudioQualityBadges(codec: String?, bitDepth: Int?, sampleRate: Int?): List<String> = buildList {
+    codec?.takeIf { it.isNotBlank() }?.let { add(it.uppercase(Locale.ROOT)) }
+    bitDepth?.takeIf { it > 0 }?.let { add("${it}bit") }
+    sampleRate?.takeIf { it > 0 }?.let { rate ->
+        add(if (rate % 1000 == 0) "${rate / 1000}kHz" else String.format(Locale.ROOT, "%.1fkHz", rate / 1000f))
+    }
+}
+
+private fun PlexTrackStream.outputQualityBadges(
+    target: PlaybackTarget,
+    policy: LocalPlaybackPolicy,
+    cachedOriginalTrackKeys: Set<String>,
+): List<String> {
     if (sourceId.isBlank()) return emptyList()
-    val localTranscode = target == PlaybackTarget.LocalDevice && willTranscodeLocally(policy)
+    val cachedOriginal = originalCacheKey(sourceId, ratingKey, partKey) in cachedOriginalTrackKeys
+    val localTranscode = target == PlaybackTarget.LocalDevice && !cachedOriginal && willTranscodeLocally(policy)
     val sonosTranscode = target is PlaybackTarget.Sonos && !playbackMimeType.isNullOrBlank()
     return when {
         localTranscode -> listOf("TRANSCODE", "OPUS", "${policy.opusBitrate.kbps}k")
         sonosTranscode && playbackMimeType.equals("audio/mpeg", true) -> listOf("TRANSCODE", "MP3", "320k")
         sonosTranscode && playbackMimeType.equals("audio/flac", true) -> listOf("TRANSCODE", "FLAC")
-        else -> buildList {
-            sourceAudioCodec?.takeIf { it.isNotBlank() }?.let { add(it.uppercase(Locale.ROOT)) }
-            sourceAudioSampleRate?.takeIf { it > 0 }?.let { rate -> add(if (rate % 1000 == 0) "${rate / 1000}kHz" else String.format(Locale.ROOT, "%.1fkHz", rate / 1000f)) }
-        }
+        else -> originalAudioQualityBadges(sourceAudioCodec, bitDepth, sourceAudioSampleRate)
     }
 }
 
-private fun PlexTrackStream.trackDetailText(target: PlaybackTarget, policy: LocalPlaybackPolicy): String =
-    outputQualityBadges(target, policy).joinToString(" · ").ifBlank { sourceAudioCodec?.uppercase(Locale.ROOT) ?: "—" }
+private fun PlexTrackStream.trackDetailText(
+    target: PlaybackTarget,
+    policy: LocalPlaybackPolicy,
+    cachedOriginalTrackKeys: Set<String>,
+): String = outputQualityBadges(target, policy, cachedOriginalTrackKeys)
+    .joinToString(" · ")
+    .ifBlank { sourceAudioCodec?.uppercase(Locale.ROOT) ?: "—" }
 
 @Composable
 private fun MoreSheetAction(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, onClick: () -> Unit) {

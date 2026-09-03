@@ -26,6 +26,31 @@ class AlbumLocalStoreMigrationTest {
     fun version7To8AddsOnlyMissingColumnsAndPreservesRows() = verifyMigration(fromVersion = 7)
 
     @Test
+    fun version11To12AddsTrackBitDepthColumnsIdempotently() {
+        SQLiteDatabase.create(null).use { db ->
+            db.execSQL("CREATE TABLE tracks (source_id TEXT, rating_key TEXT)")
+            db.execSQL("CREATE TABLE album_tracks (source_id TEXT, rating_key TEXT)")
+            ensureVersion12Columns(db)
+            ensureVersion12Columns(db)
+            assertTrue(db.columnNames("tracks").contains("bit_depth"))
+            assertTrue(db.columnNames("album_tracks").contains("bit_depth"))
+        }
+
+        val context = cleanDatabaseContext()
+        val store = AlbumLocalStore(context)
+        val track = track("source", "depth-track", 0, 0).copy(
+            bitDepth = 24,
+            sourceAudioSampleRate = 48_000,
+            userRating = 10f,
+        )
+        store.replaceAllFavoriteTracks("source", listOf(track))
+        val stored = store.getFavoriteTracks("source").single()
+        assertEquals(24, stored.bitDepth)
+        assertEquals(48_000, stored.sourceAudioSampleRate)
+        context.deleteDatabase(DATABASE_NAME)
+    }
+
+    @Test
     fun version10To11AddsAlbumFormatColumnsAndRoundTripsValues() {
         SQLiteDatabase.create(null).use { db ->
             db.execSQL("CREATE TABLE albums (source_id TEXT, rating_key TEXT, title TEXT)")
@@ -89,6 +114,15 @@ class AlbumLocalStoreMigrationTest {
             )
             db.execSQL(
                 """
+                CREATE TABLE tracks (
+                    source_id TEXT NOT NULL,
+                    rating_key TEXT NOT NULL,
+                    PRIMARY KEY (source_id, rating_key)
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
                 CREATE TABLE album_tracks (
                     source_id TEXT NOT NULL,
                     rating_key TEXT NOT NULL,
@@ -107,8 +141,10 @@ class AlbumLocalStoreMigrationTest {
         assertEquals(null, albums.single().format)
         assertEquals(null, albums.single().subformat)
         context.openOrCreateDatabase(DATABASE_NAME, Context.MODE_PRIVATE, null).use { db ->
-            assertEquals(11, db.version)
+            assertEquals(12, db.version)
             assertTrue(db.columnNames("albums").containsAll(listOf("format", "subformat")))
+            assertTrue(db.columnNames("tracks").contains("bit_depth"))
+            assertTrue(db.columnNames("album_tracks").contains("bit_depth"))
         }
         context.deleteDatabase(DATABASE_NAME)
     }

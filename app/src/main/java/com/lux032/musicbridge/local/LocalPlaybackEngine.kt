@@ -51,6 +51,7 @@ import java.io.IOException
 import java.net.URI
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
@@ -65,7 +66,64 @@ data class LocalQueueItem(
     val artist: String?,
     val artworkUrl: String?,
     val durationMillis: Long?,
+    val isCachedOriginal: Boolean = false,
+    val fallbackItem: LocalQueueItem? = null,
 )
+
+private fun localAudioCacheKey(parts: List<String>): String =
+    "local:" + MessageDigest.getInstance("SHA-256")
+        .digest(parts.joinToString("|").toByteArray(Charsets.UTF_8))
+        .joinToString("") { byte -> "%02x".format(byte) }
+
+internal fun originalCacheKey(sourceId: String, ratingKey: String, partKey: String): String =
+    localAudioCacheKey(listOf(sourceId, ratingKey, partKey, "original"))
+
+internal fun transcodedCacheKey(sourceId: String, ratingKey: String, partKey: String, opusKbps: Int): String =
+    localAudioCacheKey(listOf(sourceId, ratingKey, partKey, "opus:$opusKbps"))
+
+internal fun shouldUseCachedOriginal(needsTranscode: Boolean, isFullyCached: Boolean): Boolean =
+    needsTranscode && isFullyCached
+
+internal data class CachedOriginalFallback(
+    val replacement: LocalQueueItem,
+    val positionBaseMillis: Long = 0L,
+)
+
+internal fun cachedOriginalFallback(item: LocalQueueItem): CachedOriginalFallback? =
+    item.fallbackItem?.takeIf { item.isCachedOriginal }?.let(::CachedOriginalFallback)
+
+internal fun filterPrecacheItems(items: List<LocalQueueItem>): List<LocalQueueItem> =
+    items.filterNot(LocalQueueItem::isCachedOriginal)
+
+internal fun shouldEnqueueCompletionPrecache(
+    isWifi: Boolean,
+    item: LocalQueueItem,
+    isFullyCached: Boolean,
+): Boolean = isWifi && !item.isCachedOriginal && !item.isTranscoded && !isFullyCached
+
+internal fun resolvePrecacheBatch(
+    completionItems: List<LocalQueueItem>,
+    upcomingItems: List<LocalQueueItem>,
+    isWifi: Boolean,
+    foregroundKey: String?,
+    preloadKey: String?,
+): List<LocalQueueItem> {
+    val protectedKeys = setOfNotNull(foregroundKey, preloadKey)
+    val released = if (isWifi) completionItems else emptyList()
+    return (released + upcomingItems)
+        .asSequence()
+        .filterNot(LocalQueueItem::isCachedOriginal)
+        .filterNot { it.cacheKey in protectedKeys }
+        .distinctBy(LocalQueueItem::cacheKey)
+        .toList()
+}
+
+internal fun pcmBitDepth(pcmEncoding: Int): Int? = when (pcmEncoding) {
+    C.ENCODING_PCM_16BIT -> 16
+    C.ENCODING_PCM_24BIT -> 24
+    C.ENCODING_PCM_32BIT -> 32
+    else -> null
+}
 
 /**
  * Shared on-device audio cache (LRU). Direct files may populate it during playback. Live
@@ -183,14 +241,25 @@ object LocalAudioCache {
     @Synchronized
     fun usedBytes(): Long = runCatching { cache?.cacheSpace ?: 0L }.getOrDefault(0L)
 
-    @Synchronized
     fun clear() {
-        cancelPrecacheLocked()
-        precacheKeys = emptyList()
-        val simpleCache = cache ?: return
+        cancelPrecache()
+        val simpleCache = synchronized(this) { cache } ?: return
         maintenanceExecutor.execute {
             runCatching { simpleCache.keys.forEach { key -> simpleCache.removeResource(key) } }
         }
+    }
+
+    fun cancelPrecache() {
+        val dataSource = synchronized(this) {
+            currentGeneration.incrementAndGet()
+            precacheTask?.cancel(true)
+            precacheTask = null
+            precacheKeys = emptyList()
+            activePrecacheDataSource.also { activePrecacheDataSource = null }
+        }
+        // Socket close may block; never perform it while holding LocalAudioCache's monitor
+        // or on the main thread handling a network transition.
+        if (dataSource != null) maintenanceExecutor.execute { runCatching { dataSource.close() } }
     }
 
     fun evict(key: String) {
@@ -208,45 +277,58 @@ object LocalAudioCache {
         return length > 0L && simpleCache.isCached(key, 0L, length)
     }
 
-    /** Downloads queue resources sequentially. Transcodes are staged and committed only after EOS validation. */
-    @Synchronized
-    fun precache(items: List<LocalQueueItem>, upstreamFactory: DataSource.Factory) {
-        val requestedKeys = items.map(LocalQueueItem::cacheKey)
-        if (requestedKeys == precacheKeys && precacheTask?.isDone == false) return
-        cancelPrecacheLocked()
-        val generation = currentGeneration.incrementAndGet()
-        precacheKeys = requestedKeys
-        if (items.isEmpty()) return
-        val simpleCache = cache ?: return
-        precacheTask = precacheExecutor.submit {
-            items.forEach { item ->
-                if (!generationIsCurrent(generation) || isFullyCached(item.cacheKey)) return@forEach
-                if (item.isTranscoded) {
-                    precacheTranscode(simpleCache, item, generation)
-                } else {
-                    val cacheDataSource = CacheDataSource.Factory()
-                        .setCache(simpleCache)
-                        .setUpstreamDataSourceFactory(upstreamFactory)
-                        .setFlags(CacheDataSource.FLAG_BLOCK_ON_CACHE or CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
-                        .createDataSource()
-                    val dataSpec = DataSpec.Builder()
-                        .setUri(item.url)
-                        .setKey(item.cacheKey)
-                        .setFlags(DataSpec.FLAG_MIGHT_NOT_USE_FULL_NETWORK_SPEED)
-                        .build()
-                    runCatching { CacheWriter(cacheDataSource, dataSpec, null, null).cache() }
+    /** Downloads queue resources sequentially. Cached-original items are cache-only by contract. */
+    fun precache(
+        items: List<LocalQueueItem>,
+        upstreamFactory: DataSource.Factory,
+        onItemComplete: (LocalQueueItem, Boolean) -> Unit = { _, _ -> },
+    ) {
+        val safeItems = filterPrecacheItems(items)
+        val requestedKeys = safeItems.map(LocalQueueItem::cacheKey)
+        var priorDataSource: DataSource? = null
+        synchronized(this) {
+            if (requestedKeys == precacheKeys && precacheTask?.isDone == false) return
+            currentGeneration.incrementAndGet()
+            precacheTask?.cancel(true)
+            precacheTask = null
+            priorDataSource = activePrecacheDataSource
+            activePrecacheDataSource = null
+            precacheKeys = requestedKeys
+            val simpleCache = cache
+            if (safeItems.isNotEmpty() && simpleCache != null) {
+                val generation = currentGeneration.incrementAndGet()
+                precacheTask = precacheExecutor.submit {
+                    safeItems.forEach { item ->
+                        if (item.isCachedOriginal || !generationIsCurrent(generation)) return@forEach
+                        if (isFullyCached(item.cacheKey)) {
+                            onItemComplete(item, true)
+                            return@forEach
+                        }
+                        if (item.isTranscoded) {
+                            precacheTranscode(simpleCache, item, generation)
+                        } else {
+                            val cacheDataSource = CacheDataSource.Factory()
+                                .setCache(simpleCache)
+                                .setUpstreamDataSourceFactory(upstreamFactory)
+                                .setFlags(CacheDataSource.FLAG_BLOCK_ON_CACHE or CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+                                .createDataSource()
+                            val dataSpec = DataSpec.Builder()
+                                .setUri(item.url)
+                                .setKey(item.cacheKey)
+                                .setFlags(DataSpec.FLAG_MIGHT_NOT_USE_FULL_NETWORK_SPEED)
+                                .build()
+                            runCatching { CacheWriter(cacheDataSource, dataSpec, null, null).cache() }
+                        }
+                        if (generationIsCurrent(generation)) {
+                            onItemComplete(item, isFullyCached(item.cacheKey))
+                        }
+                    }
                 }
             }
         }
-    }
-
-    @Synchronized
-    private fun cancelPrecacheLocked() {
-        currentGeneration.incrementAndGet()
-        runCatching { activePrecacheDataSource?.close() }
-        activePrecacheDataSource = null
-        precacheTask?.cancel(true)
-        precacheTask = null
+        priorDataSource?.let { closing ->
+            maintenanceExecutor.execute { runCatching { closing.close() } }
+        }
     }
 
     private fun generationIsCurrent(generation: Int): Boolean =
@@ -357,9 +439,14 @@ internal fun parsePlexTranscodeEndpoint(url: String): PlexTranscodeEndpoint? = r
     if (serverUri.isBlank() || token.isBlank()) null else PlexTranscodeEndpoint(serverUri, token)
 }.getOrNull()
 
-internal enum class PlaybackDataSourceRoute { DIRECT_CACHE, TRANSCODE_CACHE, TRANSCODE_UPSTREAM }
+internal enum class PlaybackDataSourceRoute { DIRECT_CACHE, TRANSCODE_CACHE, TRANSCODE_UPSTREAM, CACHED_ORIGINAL }
 
-internal fun playbackDataSourceRoute(isTranscoded: Boolean, isFullyCached: Boolean): PlaybackDataSourceRoute = when {
+internal fun playbackDataSourceRoute(
+    isTranscoded: Boolean,
+    isFullyCached: Boolean,
+    isCachedOriginal: Boolean = false,
+): PlaybackDataSourceRoute = when {
+    isCachedOriginal -> PlaybackDataSourceRoute.CACHED_ORIGINAL
     !isTranscoded -> PlaybackDataSourceRoute.DIRECT_CACHE
     isFullyCached -> PlaybackDataSourceRoute.TRANSCODE_CACHE
     else -> PlaybackDataSourceRoute.TRANSCODE_UPSTREAM
@@ -371,8 +458,18 @@ internal fun transcodeCacheInvariantHolds(
     expectedLength: Long,
 ): Boolean = fullyCached && expectedLength > 0L && spans == listOf(0L to expectedLength)
 
-internal fun missingTranscodeCacheSpanException(): IOException =
-    IOException("Cache span evicted or missing for transcode stream")
+private const val MISSING_CACHE_SPAN_MESSAGE = "Cache span evicted or missing for transcode stream"
+
+internal fun missingTranscodeCacheSpanException(): IOException = IOException(MISSING_CACHE_SPAN_MESSAGE)
+
+internal fun isMissingCacheSpanError(error: IOException): Boolean {
+    var cause: Throwable? = error
+    while (cause != null) {
+        if (cause.message == MISSING_CACHE_SPAN_MESSAGE) return true
+        cause = cause.cause
+    }
+    return false
+}
 
 internal class FailingDataSource : DataSource {
     override fun addTransferListener(transferListener: TransferListener) = Unit
@@ -408,6 +505,7 @@ private class RoutingDataSource(
     private val directCacheFactory: DataSource.Factory,
     private val httpFactory: DataSource.Factory,
     private val cache: SimpleCache,
+    private val isCachedOriginalKey: (String?) -> Boolean,
 ) : DataSource {
     private var delegate: DataSource? = null
     private var activeSessionId: String? = null
@@ -435,11 +533,13 @@ private class RoutingDataSource(
         val route = playbackDataSourceRoute(
             isTranscoded = dataSpec.uri.toString().isPlexLiveTranscodeUrl(),
             isFullyCached = cacheKey != null && LocalAudioCache.isFullyCached(cacheKey),
+            isCachedOriginal = isCachedOriginalKey(cacheKey),
         )
         val nextDelegate = when (route) {
             PlaybackDataSourceRoute.DIRECT_CACHE -> directCacheFactory.createDataSource()
             PlaybackDataSourceRoute.TRANSCODE_UPSTREAM -> httpFactory.createDataSource()
-            PlaybackDataSourceRoute.TRANSCODE_CACHE -> CacheDataSource(
+            PlaybackDataSourceRoute.TRANSCODE_CACHE,
+            PlaybackDataSourceRoute.CACHED_ORIGINAL -> CacheDataSource(
                 cache,
                 FailingDataSource(),
                 FileDataSource(),
@@ -532,6 +632,7 @@ private inline fun <reified T : Throwable> Throwable.hasCause(): Boolean = findC
 
 private class TranscodeLoadErrorHandlingPolicy : DefaultLoadErrorHandlingPolicy() {
     override fun getRetryDelayMsFor(loadErrorInfo: LoadErrorHandlingPolicy.LoadErrorInfo): Long {
+        if (isMissingCacheSpanError(loadErrorInfo.exception)) return C.TIME_UNSET
         val fatalZeroByteLoad = isFatalZeroByteTranscodeLoad(
             url = loadErrorInfo.loadEventInfo.uri.toString(),
             bytesLoaded = loadErrorInfo.loadEventInfo.bytesLoaded,
@@ -665,6 +766,8 @@ class LocalPlaybackEngine(
         fun onBufferingChanged(isBuffering: Boolean)
         fun onQueueEnded()
         fun onTrackSkipped(index: Int)
+        fun onCachedOriginalFallback(cacheKey: String)
+        fun onAudioFormat(index: Int, sampleRate: Int?, bitDepth: Int?, isTranscoded: Boolean)
         fun onPlayerError(message: String)
     }
 
@@ -676,6 +779,7 @@ class LocalPlaybackEngine(
         private const val BUFFERING_STALL_TIMEOUT_MILLIS = 8_000L
         private const val BUFFERING_WATCHDOG_TICK_MILLIS = 1_000L
         private const val MAX_CONSECUTIVE_PLAYBACK_FAILURES = 3
+        private const val MAX_COMPLETION_PRECACHE_ATTEMPTS = 2
 
         /**
          * The engine instance owned by AppState. Registered here so [LocalPlaybackService]
@@ -696,12 +800,17 @@ class LocalPlaybackEngine(
     private val cacheDataSourceFactory = CacheDataSource.Factory()
         .setCache(simpleCache)
         .setUpstreamDataSourceFactory(httpDataSourceFactory)
-        .setFlags(CacheDataSource.FLAG_BLOCK_ON_CACHE or CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+        // Foreground direct playback must never wait behind a background writer for a cache range.
+        .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
 
     private val player: ExoPlayer = ExoPlayer.Builder(context.applicationContext)
         .setMediaSourceFactory(
             DefaultMediaSourceFactory(
-                DataSource.Factory { RoutingDataSource(cacheDataSourceFactory, httpDataSourceFactory, simpleCache) },
+                DataSource.Factory {
+                    RoutingDataSource(cacheDataSourceFactory, httpDataSourceFactory, simpleCache) { cacheKey ->
+                        cacheKey != null && cacheKey in cachedOriginalKeys
+                    }
+                },
             ).setLoadErrorHandlingPolicy(TranscodeLoadErrorHandlingPolicy()),
         )
         .setAudioAttributes(
@@ -718,9 +827,14 @@ class LocalPlaybackEngine(
     /** Original queue metadata is retained because a live transcode seek replaces only
      *  the current MediaItem URL, and that URL must be restored before a later replay. */
     private val queueItems = mutableListOf<LocalQueueItem>()
+    @Volatile private var cachedOriginalKeys: Set<String> = emptySet()
     private val positionBaseMillis = mutableListOf<Long>()
     private var lastCurrentIndex = C.INDEX_UNSET
     private var queuePrecacheCount = 0
+    private var networkIsWifi = true
+    private data class CompletionPrecacheEntry(val item: LocalQueueItem, val failedAttempts: Int = 0)
+    private val completionPrecacheLock = Any()
+    private val completionPrecacheItems = linkedMapOf<String, CompletionPrecacheEntry>()
     private var pendingCachedTranscodeSeek: CachedTranscodeSeek? = null
     private val recoveryBudget = PlaybackRecoveryBudget(
         maxRetriesPerItem = 1,
@@ -862,6 +976,7 @@ class LocalPlaybackEngine(
                 resetBufferingWatchdog()
                 pendingCachedTranscodeSeek = null
                 restoreOriginalQueueItem(previousIndex)
+                queueItems.getOrNull(previousIndex)?.let(::enqueueCompletionPrecache)
             }
             if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO ||
                 reason == Player.MEDIA_ITEM_TRANSITION_REASON_SEEK
@@ -914,6 +1029,7 @@ class LocalPlaybackEngine(
                 playbackState == Player.STATE_BUFFERING && player.playWhenReady,
             )
             if (playbackState == Player.STATE_ENDED) {
+                queueItems.getOrNull(currentIndex)?.let(::enqueueCompletionPrecache)
                 listener?.onQueueEnded()
             }
         }
@@ -939,6 +1055,20 @@ class LocalPlaybackEngine(
                 Log.w(LOG_TAG, "Cached Opus seek failed at ${failedSeek.targetMillis}ms; retrying with Plex offset", error)
                 recoveryBudget.markRetryConsumed(failedIndex)
                 restartLiveTranscode(failedSeek.index, failedSeek.targetMillis, wasPlayRequested)
+                return
+            }
+            val cachedFallback = failedItem?.let(::cachedOriginalFallback)
+            if (failedItem != null && cachedFallback != null) {
+                val logicalPosition = currentPositionMillis
+                LocalAudioCache.evict(failedItem.cacheKey)
+                queueItems[failedIndex] = cachedFallback.replacement
+                positionBaseMillis[failedIndex] = cachedFallback.positionBaseMillis
+                refreshCachedOriginalKeys()
+                listener?.onCachedOriginalFallback(failedItem.cacheKey)
+                recoveryBudget.markRetryConsumed(failedIndex)
+                player.replaceMediaItem(failedIndex, buildMediaItem(cachedFallback.replacement))
+                seekToItem(failedIndex, logicalPosition)
+                ensurePrepared(wasPlayRequested)
                 return
             }
             if (failedItem?.isTranscoded == true && error.isCacheCorruptionCandidate()) {
@@ -968,11 +1098,18 @@ class LocalPlaybackEngine(
             format: androidx.media3.common.Format,
             decoderReuseEvaluation: DecoderReuseEvaluation?,
         ) {
+            val index = player.currentMediaItemIndex
             Log.i(
                 LOG_TAG,
-                "audioFormat index=${player.currentMediaItemIndex} format=$format " +
+                "audioFormat index=$index format=$format " +
                     "decoder=${decoderReuseEvaluation?.decoderName} reuseResult=${decoderReuseEvaluation?.result} " +
                     "discardReasons=${decoderReuseEvaluation?.discardReasons}",
+            )
+            listener?.onAudioFormat(
+                index = index,
+                sampleRate = format.sampleRate.takeIf { it > 0 },
+                bitDepth = pcmBitDepth(format.pcmEncoding),
+                isTranscoded = queueItems.getOrNull(index)?.isTranscoded == true,
             )
         }
     }
@@ -1244,12 +1381,14 @@ class LocalPlaybackEngine(
         precacheCount: Int = 0,
     ) {
         PlaybackDiagnostics.beginPlaybackSession()
+        synchronized(completionPrecacheLock) { completionPrecacheItems.clear() }
         pendingCachedTranscodeSeek = null
         hasUnrecoveredPlaybackError = false
         recoveryTargetIndex = C.INDEX_UNSET
         recoveryBudget.resetForUserAction()
         queueItems.clear()
         queueItems.addAll(items)
+        refreshCachedOriginalKeys()
         positionBaseMillis.clear()
         repeat(items.size) { positionBaseMillis += 0L }
         val safeIndex = startIndex.coerceIn(0, (items.size - 1).coerceAtLeast(0))
@@ -1268,7 +1407,7 @@ class LocalPlaybackEngine(
         }
         lastCurrentIndex = safeIndex
         queuePrecacheCount = precacheCount.coerceAtLeast(0)
-        schedulePrecacheFrom(safeIndex)
+        schedulePrecacheFrom(safeIndex, selectedItem?.cacheKey)
         player.setMediaItems(
             mediaItems,
             safeIndex,
@@ -1282,9 +1421,33 @@ class LocalPlaybackEngine(
         if (!isActive) return
         val safeIndex = insertIndex.coerceIn(0, player.mediaItemCount)
         queueItems.addAll(safeIndex, items)
+        refreshCachedOriginalKeys()
         positionBaseMillis.addAll(safeIndex, List(items.size) { 0L })
         if (lastCurrentIndex >= safeIndex) lastCurrentIndex += items.size
         player.addMediaItems(safeIndex, items.map(::buildMediaItem))
+    }
+
+    fun replaceQueueItems(replacements: Map<Int, LocalQueueItem>, precacheCount: Int) {
+        val invalid = replacements.keys.filter { it !in queueItems.indices || it !in 0 until player.mediaItemCount }
+        if (invalid.isNotEmpty()) {
+            Log.w(LOG_TAG, "Ignoring network re-evaluation with invalid queue indices=$invalid size=${queueItems.size}")
+            return
+        }
+        replacements.forEach { (index, item) ->
+            queueItems[index] = item
+            positionBaseMillis[index] = 0L
+            player.replaceMediaItem(index, buildMediaItem(item))
+        }
+        refreshCachedOriginalKeys()
+        queuePrecacheCount = precacheCount.coerceAtLeast(0)
+        schedulePrecacheFrom(currentIndex)
+    }
+
+    private fun refreshCachedOriginalKeys() {
+        cachedOriginalKeys = queueItems.asSequence()
+            .filter(LocalQueueItem::isCachedOriginal)
+            .map(LocalQueueItem::cacheKey)
+            .toSet()
     }
 
     fun playAt(index: Int, positionMillis: Long = 0L) {
@@ -1321,6 +1484,7 @@ class LocalPlaybackEngine(
     fun pause() {
         resetBufferingWatchdog()
         player.pause()
+        queueItems.getOrNull(currentIndex)?.let(::enqueueCompletionPrecache)
     }
 
     /**
@@ -1451,21 +1615,61 @@ class LocalPlaybackEngine(
         player.replaceMediaItem(index, buildMediaItem(queueItems[index]))
     }
 
-    private fun schedulePrecacheFrom(index: Int) {
+    private fun enqueueCompletionPrecache(item: LocalQueueItem) {
+        if (!shouldEnqueueCompletionPrecache(networkIsWifi, item, LocalAudioCache.isFullyCached(item.cacheKey))) return
+        synchronized(completionPrecacheLock) {
+            completionPrecacheItems.putIfAbsent(item.cacheKey, CompletionPrecacheEntry(item))
+        }
+        schedulePrecacheFrom(currentIndex)
+    }
+
+    fun setNetworkIsWifi(isWifi: Boolean) {
+        networkIsWifi = isWifi
+        if (isWifi) schedulePrecacheFrom(currentIndex)
+    }
+
+    private fun schedulePrecacheFrom(index: Int, foregroundKeyOverride: String? = null) {
         if (index !in queueItems.indices) return
-        // Skip the current item and Media3's immediate next-item preload candidate.
-        val items = queueItems.drop(index + 2)
-            .take(queuePrecacheCount)
-        LocalAudioCache.precache(
-            items,
-            precacheHttpDataSourceFactory,
+        val completionSnapshot = synchronized(completionPrecacheLock) {
+            completionPrecacheItems.entries.removeAll { LocalAudioCache.isFullyCached(it.key) }
+            completionPrecacheItems.values.map(CompletionPrecacheEntry::item)
+        }
+        // Keep this +2 boundary: current playback and Media3's immediate preload candidate
+        // may still own cache ranges, so only released completion items may precede it.
+        val upcoming = filterPrecacheItems(queueItems.drop(index + 2)).take(queuePrecacheCount)
+        val foregroundKey = foregroundKeyOverride ?: if (
+            player.playbackState == Player.STATE_READY || player.playbackState == Player.STATE_BUFFERING
+        ) {
+            queueItems.getOrNull(currentIndex)?.cacheKey
+        } else {
+            null
+        }
+        val preloadKey = queueItems.getOrNull(index + 1)?.cacheKey
+        val items = resolvePrecacheBatch(
+            completionItems = completionSnapshot,
+            upcomingItems = upcoming,
+            isWifi = networkIsWifi,
+            foregroundKey = foregroundKey,
+            preloadKey = preloadKey,
         )
+        LocalAudioCache.precache(items, precacheHttpDataSourceFactory) { item, success ->
+            synchronized(completionPrecacheLock) {
+                val entry = completionPrecacheItems[item.cacheKey] ?: return@synchronized
+                if (success || entry.failedAttempts + 1 >= MAX_COMPLETION_PRECACHE_ATTEMPTS) {
+                    completionPrecacheItems.remove(item.cacheKey)
+                } else {
+                    completionPrecacheItems[item.cacheKey] = entry.copy(failedAttempts = entry.failedAttempts + 1)
+                }
+            }
+        }
     }
 
     fun stopPlayback() {
         resetBufferingWatchdog()
         pendingCachedTranscodeSeek = null
+        val item = queueItems.getOrNull(currentIndex)
         player.stop()
+        item?.let(::enqueueCompletionPrecache)
     }
 
     fun release() {
@@ -1474,6 +1678,9 @@ class LocalPlaybackEngine(
         watchdogHandler.removeCallbacks(bufferingWatchdog)
         resetBufferingWatchdog()
         pendingCachedTranscodeSeek = null
+        LocalAudioCache.cancelPrecache()
+        synchronized(completionPrecacheLock) { completionPrecacheItems.clear() }
+        player.stop()
         listener = null
         player.removeListener(playerListener)
         player.removeAnalyticsListener(analyticsListener)

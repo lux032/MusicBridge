@@ -66,6 +66,8 @@ class AppState(
     internal val sonosController = SonosController()
     internal val plexTranscodeProxy = PlexTranscodeProxy.getInstance(context)
     internal val networkQualityMonitor = NetworkQualityMonitor(context)
+    var currentNetworkIsWifi by mutableStateOf(networkQualityMonitor.currentIsWifi())
+        internal set
     internal val localPlaybackEngine = LocalPlaybackEngine(
         context = context,
         cacheMaxBytes = appPreferences.loadLocalCacheSize().bytes,
@@ -94,6 +96,8 @@ class AppState(
         private set
     var localCacheSize by mutableStateOf(appPreferences.loadLocalCacheSize())
         private set
+    var cachedOriginalTrackKeys by mutableStateOf<Set<String>>(emptySet())
+        internal set
 
     /** All-albums grid presentation, persisted so the user's choices survive navigation
      *  and app restarts. */
@@ -386,7 +390,7 @@ class AppState(
 
     /** Policy captured when a local queue is built; Sonos never reads these settings. */
     internal fun currentLocalPlaybackPolicy(): LocalPlaybackPolicy {
-        val wifi = networkQualityMonitor.currentIsWifi()
+        val wifi = currentNetworkIsWifi
         return LocalPlaybackPolicy(
             streamingLimit = if (wifi) wifiStreamingLimit else cellularStreamingLimit,
             opusBitrate = localOpusBitrate,

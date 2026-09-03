@@ -497,6 +497,7 @@ fun PlexAlbumScreen(
                             playbackMode = state.playbackMode,
                             sleepTimerState = sleepTimerState,
                             localPlaybackPolicy = state.currentLocalPlaybackPolicy(),
+                            cachedOriginalTrackKeys = state.cachedOriginalTrackKeys,
                             isLoading = state.isPlaybackCommandLoading,
                             isFavoriteLoading = state.isFavoriteMutationLoading,
                             onBack = state::navigateBack,

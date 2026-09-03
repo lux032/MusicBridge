@@ -1,17 +1,37 @@
 package com.lux032.musicbridge
 
+import com.lux032.musicbridge.local.LocalAudioCache
 import com.lux032.musicbridge.local.LocalPlaybackEngine
 import com.lux032.musicbridge.local.LocalPlaybackService
 import com.lux032.musicbridge.local.LocalQueueItem
+import com.lux032.musicbridge.local.originalCacheKey
+import com.lux032.musicbridge.local.shouldUseCachedOriginal
+import com.lux032.musicbridge.local.transcodedCacheKey
 import com.lux032.musicbridge.plex.PlexAlbum
 import com.lux032.musicbridge.plex.PlexTrackStream
+import com.lux032.musicbridge.plex.willTranscodeLocally
 import com.lux032.musicbridge.plex.withLocalPlaybackPolicy
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.security.MessageDigest
+
+internal fun networkReevaluationIndices(
+    queueSize: Int,
+    currentIndex: Int,
+    playbackMode: PlaybackMode,
+): List<Int> {
+    if (queueSize <= 0) return emptyList()
+    // Every non-current item is potentially reachable after a later mode change. Shuffle
+    // and RepeatAll already make indices before current directly reachable.
+    return when (playbackMode) {
+        PlaybackMode.Sequential,
+        PlaybackMode.RepeatOne,
+        PlaybackMode.RepeatAll,
+        PlaybackMode.Shuffle -> (0 until queueSize).filter { it != currentIndex }
+    }
+}
 
 /**
  * Drives on-device playback through [LocalPlaybackEngine]. Mirrors the Sonos side of
@@ -92,6 +112,28 @@ internal class AppStateLocalPlaybackCoordinator(
                 }
             }
 
+            override fun onCachedOriginalFallback(cacheKey: String) {
+                state.scope.launch {
+                    state.cachedOriginalTrackKeys = state.cachedOriginalTrackKeys - cacheKey
+                }
+            }
+
+            override fun onAudioFormat(index: Int, sampleRate: Int?, bitDepth: Int?, isTranscoded: Boolean) {
+                if (isTranscoded) return
+                state.scope.launch {
+                    val current = state.miniPlayerState ?: return@launch
+                    if (current.target != PlaybackTarget.LocalDevice || index !in current.tracks.indices) return@launch
+                    val existing = current.tracks[index]
+                    val updated = existing.copy(
+                        sourceAudioSampleRate = existing.sourceAudioSampleRate ?: sampleRate,
+                        bitDepth = existing.bitDepth ?: bitDepth,
+                    )
+                    if (updated == existing) return@launch
+                    val tracks = current.tracks.toMutableList().also { it[index] = updated }
+                    state.miniPlayerState = current.copy(tracks = tracks)
+                }
+            }
+
             override fun onPlayerError(message: String) {
                 state.scope.launch {
                     if (state.miniPlayerState?.target != PlaybackTarget.LocalDevice) return@launch
@@ -100,6 +142,40 @@ internal class AppStateLocalPlaybackCoordinator(
                 }
             }
         }
+        state.localPlaybackEngine.setNetworkIsWifi(state.currentNetworkIsWifi)
+        state.scope.launch {
+            var previousIsWifi = state.networkQualityMonitor.currentIsWifi()
+            state.networkQualityMonitor.isWifi.collect { isWifi ->
+                if (isWifi == previousIsWifi) return@collect
+                val switchedToCellular = previousIsWifi && !isWifi
+                previousIsWifi = isWifi
+                state.currentNetworkIsWifi = isWifi
+                state.localPlaybackEngine.setNetworkIsWifi(isWifi)
+                if (switchedToCellular) LocalAudioCache.cancelPrecache()
+                reEvaluateQueueForNetworkChange()
+            }
+        }
+    }
+
+    private suspend fun reEvaluateQueueForNetworkChange() {
+        val current = state.miniPlayerState ?: return
+        if (current.target != PlaybackTarget.LocalDevice) return
+        val currentIndex = state.localPlaybackEngine.currentIndex
+        val indices = networkReevaluationIndices(current.tracks.size, currentIndex, state.playbackMode)
+        if (indices.isEmpty()) return
+        val policy = state.currentLocalPlaybackPolicy()
+        val replacements = withContext(Dispatchers.IO) {
+            indices.associateWith { index -> current.tracks[index].toLocalQueueItem(policy) }
+        }
+        if (state.miniPlayerState?.tracks !== current.tracks || state.localPlaybackEngine.currentIndex != currentIndex) return
+        val preservedKeys = state.cachedOriginalTrackKeys.toMutableSet()
+        indices.forEach { index ->
+            val track = current.tracks[index]
+            preservedKeys.remove(originalCacheKey(track.sourceId, track.ratingKey, track.partKey))
+        }
+        preservedKeys += replacements.values.filter(LocalQueueItem::isCachedOriginal).map(LocalQueueItem::cacheKey)
+        state.cachedOriginalTrackKeys = preservedKeys
+        state.localPlaybackEngine.replaceQueueItems(replacements, policy.precacheCount.count)
     }
 
     fun startLocalPlayback(
@@ -128,7 +204,9 @@ internal class AppStateLocalPlaybackCoordinator(
         )
         state.errorMessage = null
         state.isPlaybackCommandLoading = false
-        rebuildEngineQueue(tracks, safeIndex, initialPositionMillis)
+        state.scope.launch {
+            rebuildEngineQueue(tracks, safeIndex, initialPositionMillis)
+        }
         // A running sleep timer may still point at a Sonos room; local playback now owns it.
         SleepTimerController.attachRoom(null)
         LocalPlaybackService.start(state.context)
@@ -139,16 +217,19 @@ internal class AppStateLocalPlaybackCoordinator(
 
     /** Rebuilds the engine queue from the current display queue, applying the
      *  network-appropriate stream quality to every URL. */
-    private fun rebuildEngineQueue(
+    private suspend fun rebuildEngineQueue(
         tracks: List<PlexTrackStream>,
         startIndex: Int,
         startPositionMillis: Long,
     ) {
         val policy = state.currentLocalPlaybackPolicy()
+        val items = withContext(Dispatchers.IO) { tracks.map { it.toLocalQueueItem(policy) } }
+        if (state.miniPlayerState?.tracks !== tracks) return
         val engine = state.localPlaybackEngine
         engine.setPlaybackMode(state.playbackMode)
+        updateCachedOriginalKeys(items)
         engine.setQueue(
-            tracks.map { it.toLocalQueueItem(policy) },
+            items,
             startIndex,
             startPositionMillis,
             policy.precacheCount.count,
@@ -156,36 +237,56 @@ internal class AppStateLocalPlaybackCoordinator(
     }
 
     private fun PlexTrackStream.toLocalQueueItem(policy: LocalPlaybackPolicy): LocalQueueItem {
+        val origKey = originalCacheKey(sourceId, ratingKey, partKey)
+        val needsTranscode = willTranscodeLocally(policy)
+        if (shouldUseCachedOriginal(needsTranscode, LocalAudioCache.isFullyCached(origKey))) {
+            val direct = withLocalPlaybackPolicy(policy.copy(streamingLimit = LocalStreamingLimit.MAXIMUM), state.plexClientIdentifier)
+            return direct.toQueueItem(origKey, isTranscoded = false).copy(
+                isCachedOriginal = true,
+                fallbackItem = toTranscodedLocalQueueItem(policy),
+            )
+        }
         val effective = withLocalPlaybackPolicy(policy, state.plexClientIdentifier)
         val isTranscoded = effective.streamUrl.contains("/:/transcode/universal/start", ignoreCase = true)
-        val outputIdentity = if (isTranscoded) {
-            "opus:${policy.opusBitrate.kbps}"
+        val key = if (isTranscoded) {
+            transcodedCacheKey(sourceId, ratingKey, partKey, policy.opusBitrate.kbps)
         } else {
-            "original"
+            origKey
         }
-        val stableIdentity = listOf(sourceId, ratingKey, partKey, outputIdentity).joinToString("|")
-        val cacheKey = MessageDigest.getInstance("SHA-256")
-            .digest(stableIdentity.toByteArray(Charsets.UTF_8))
-            .joinToString("") { byte -> "%02x".format(byte) }
-        return LocalQueueItem(
-            url = effective.streamUrl,
-            cacheKey = "local:$cacheKey",
-            isTranscoded = isTranscoded,
-            title = effective.title,
-            artist = effective.artistName,
-            artworkUrl = effective.thumbUrl,
-            durationMillis = effective.durationMillis,
+        return effective.toQueueItem(key, isTranscoded)
+    }
+
+    private fun PlexTrackStream.toTranscodedLocalQueueItem(policy: LocalPlaybackPolicy): LocalQueueItem {
+        val effective = withLocalPlaybackPolicy(policy, state.plexClientIdentifier)
+        return effective.toQueueItem(
+            transcodedCacheKey(sourceId, ratingKey, partKey, policy.opusBitrate.kbps),
+            isTranscoded = true,
         )
+    }
+
+    private fun PlexTrackStream.toQueueItem(cacheKey: String, isTranscoded: Boolean) = LocalQueueItem(
+        url = streamUrl,
+        cacheKey = cacheKey,
+        isTranscoded = isTranscoded,
+        title = title,
+        artist = artistName,
+        artworkUrl = thumbUrl,
+        durationMillis = durationMillis,
+    )
+
+    private fun updateCachedOriginalKeys(items: List<LocalQueueItem>) {
+        state.cachedOriginalTrackKeys = items.filter(LocalQueueItem::isCachedOriginal).mapTo(mutableSetOf()) { it.cacheKey }
     }
 
     /** Inserts tracks into the live engine queue so its indices stay aligned with
      *  [MiniPlayerState.tracks] after an enqueue. */
     fun insertIntoLocalQueue(insertIndex: Int, tracks: List<PlexTrackStream>) {
         val policy = state.currentLocalPlaybackPolicy()
-        state.localPlaybackEngine.insertQueueItems(
-            insertIndex,
-            tracks.map { it.toLocalQueueItem(policy) },
-        )
+        state.scope.launch {
+            val items = withContext(Dispatchers.IO) { tracks.map { it.toLocalQueueItem(policy) } }
+            state.cachedOriginalTrackKeys = state.cachedOriginalTrackKeys + items.filter(LocalQueueItem::isCachedOriginal).map { it.cacheKey }
+            state.localPlaybackEngine.insertQueueItems(insertIndex, items)
+        }
     }
 
     fun toggleLocalPause(playerState: MiniPlayerState) {

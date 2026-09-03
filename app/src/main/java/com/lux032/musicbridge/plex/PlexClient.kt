@@ -78,6 +78,7 @@ data class PlexTrackStream(
     val sourceAudioCodec: String? = null,
     val sourceAudioBitrateKbps: Int? = null,
     val sourceAudioSampleRate: Int? = null,
+    val bitDepth: Int? = null,
     val playbackMimeType: String? = null,
     /** Plex lyric stream (Stream streamType="4") when the server exposes one. */
     val lyricUrl: String? = null,
@@ -309,6 +310,7 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient, SonicC
                     queryParameters = listOf(
                         "type" to "10",
                         "sort" to "lastViewedAt:desc",
+                        "includeElements" to "Stream",
                         "includeStreams" to "1",
                         "X-Plex-Container-Start" to "0",
                         "X-Plex-Container-Size" to limit.toString(),
@@ -353,6 +355,7 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient, SonicC
                             path = "/library/sections/${section.key}/all",
                             queryParameters = listOf(
                                 "type" to "10",
+                                "includeElements" to "Stream",
                                 "includeStreams" to "1",
                                 "sort" to "addedAt:asc",
                                 "X-Plex-Container-Start" to containerStart.toString(),
@@ -451,7 +454,7 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient, SonicC
         val accessToken = server.accessToken.orEmpty().ifBlank { token }
         val response = request(
             method = "GET",
-            url = buildPlexUrl(server.uri, "/playlists/${playlist.ratingKey}/items", listOf("includeStreams" to "1")),
+            url = buildPlexUrl(server.uri, "/playlists/${playlist.ratingKey}/items", listOf("includeElements" to "Stream", "includeStreams" to "1")),
             headers = mapOf("X-Plex-Token" to accessToken),
         )
         val root = parseXml(response.body)
@@ -491,6 +494,7 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient, SonicC
                     sourceAudioCodec = sourceAudioCodec,
                     sourceAudioBitrateKbps = track.firstAudioBitrateKbps(),
                     sourceAudioSampleRate = sourceAudioSampleRate,
+                    bitDepth = track.firstAudioBitDepth(),
                     playbackMimeType = sourceAudioCodec.transcodedPlaybackMimeType(config.opusTranscodeMode, sourceAudioSampleRate, config.sonosHiResTranscodeMode),
                     lyricUrl = track.firstLyricUrl(server.uri, accessToken),
                     sourceId = config.sourceId,
@@ -542,7 +546,7 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient, SonicC
         val root = parseXml(
             request(
                 method = "GET",
-                url = buildPlexUrl(server.uri, "/library/metadata/$normalizedKey", listOf("includeStreams" to "1")),
+                url = buildPlexUrl(server.uri, "/library/metadata/$normalizedKey", listOf("includeElements" to "Stream", "includeStreams" to "1")),
                 headers = mapOf("X-Plex-Token" to accessToken),
             ).body,
         )
@@ -904,6 +908,7 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient, SonicC
                 queryParameters = listOf(
                     "type" to "10",
                     "artist.id" to artist.ratingKey,
+                    "includeElements" to "Stream",
                     "includeStreams" to "1",
                 ),
             ),
@@ -947,6 +952,7 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient, SonicC
                         sourceAudioCodec = sourceAudioCodec,
                         sourceAudioBitrateKbps = track.firstAudioBitrateKbps(),
                         sourceAudioSampleRate = sourceAudioSampleRate,
+                        bitDepth = track.firstAudioBitDepth(),
                         playbackMimeType = sourceAudioCodec.transcodedPlaybackMimeType(config.opusTranscodeMode, sourceAudioSampleRate, config.sonosHiResTranscodeMode),
                         lyricUrl = track.firstLyricUrl(server.uri, accessToken),
                         sourceId = config.sourceId,
@@ -968,7 +974,11 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient, SonicC
         val accessToken = server.accessToken.orEmpty().ifBlank { token }
         val response = request(
             method = "GET",
-            url = buildPlexUrl(server.uri, "/library/metadata/${album.ratingKey}/children", listOf("includeStreams" to "1")),
+            url = buildPlexUrl(
+                server.uri,
+                "/library/metadata/${album.ratingKey}/children",
+                listOf("includeElements" to "Stream", "includeStreams" to "1"),
+            ),
             headers = mapOf("X-Plex-Token" to accessToken),
         )
         val root = parseXml(response.body)
@@ -1012,6 +1022,7 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient, SonicC
                         sourceAudioCodec = sourceAudioCodec,
                         sourceAudioBitrateKbps = track.firstAudioBitrateKbps(),
                         sourceAudioSampleRate = sourceAudioSampleRate,
+                        bitDepth = track.firstAudioBitDepth(),
                         playbackMimeType = sourceAudioCodec.transcodedPlaybackMimeType(config.opusTranscodeMode, sourceAudioSampleRate, config.sonosHiResTranscodeMode),
                         lyricUrl = track.firstLyricUrl(server.uri, accessToken),
                         sourceId = config.sourceId,
@@ -1040,6 +1051,7 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient, SonicC
                     queryParameters = listOf(
                         "type" to "10",
                         "userRating" to FAVORITE_TRACK_RATING.toString(),
+                        "includeElements" to "Stream",
                         "includeStreams" to "1",
                         "sort" to "addedAt:asc",
                         "X-Plex-Container-Start" to containerStart.toString(),
@@ -1081,6 +1093,7 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient, SonicC
                     queryParameters = listOf(
                         "type" to "10",
                         "userRating>=" to FAVORITE_TRACK_RATING.toString(),
+                        "includeElements" to "Stream",
                         "includeStreams" to "1",
                         "sort" to "addedAt:asc",
                         "X-Plex-Container-Start" to containerStart.toString(),
@@ -1815,7 +1828,7 @@ internal fun parseFirstAudioSampleRateFromJson(body: String): Int? {
     return media.firstAudioSampleRate()
 }
 
-private fun Element.firstAudioSampleRate(): Int? {
+internal fun Element.firstAudioSampleRate(): Int? {
     val mediaNodes = getElementsByTagName("Media")
     for (index in 0 until mediaNodes.length) {
         val media = mediaNodes.item(index) as? Element ?: continue
@@ -1826,6 +1839,21 @@ private fun Element.firstAudioSampleRate(): Int? {
             stream.getAttribute("samplingRate").trim().toIntOrNull()?.takeIf { it > 0 }?.let { return it }
         }
         media.getAttribute("samplingRate").trim().toIntOrNull()?.takeIf { it > 0 }?.let { return it }
+    }
+    return null
+}
+
+internal fun Element.firstAudioBitDepth(): Int? {
+    val mediaNodes = getElementsByTagName("Media")
+    for (index in 0 until mediaNodes.length) {
+        val media = mediaNodes.item(index) as? Element ?: continue
+        val streams = media.getElementsByTagName("Stream")
+        for (streamIndex in 0 until streams.length) {
+            val stream = streams.item(streamIndex) as? Element ?: continue
+            if (stream.getAttribute("streamType").trim() != "2") continue
+            stream.getAttribute("bitDepth").trim().toIntOrNull()?.takeIf { it > 0 }?.let { return it }
+        }
+        media.getAttribute("bitDepth").trim().toIntOrNull()?.takeIf { it > 0 }?.let { return it }
     }
     return null
 }
@@ -1903,6 +1931,7 @@ private fun org.w3c.dom.NodeList.toTrackStreams(
                     sourceAudioCodec = sourceAudioCodec,
                     sourceAudioBitrateKbps = track.firstAudioBitrateKbps(),
                     sourceAudioSampleRate = sourceAudioSampleRate,
+                    bitDepth = track.firstAudioBitDepth(),
                     playbackMimeType = sourceAudioCodec.transcodedPlaybackMimeType(opusMode, sourceAudioSampleRate, hiResMode),
                     lyricUrl = track.firstLyricUrl(serverUri, token),
                     sourceId = sourceId,
@@ -1987,6 +2016,7 @@ private fun parseFavoriteTracksJson(
                             }
                         },
                     sourceAudioSampleRate = sourceAudioSampleRate,
+                    bitDepth = media.firstAudioBitDepth(),
                     playbackMimeType = sourceAudioCodec.transcodedPlaybackMimeType(opusMode, sourceAudioSampleRate, hiResMode),
                     sourceId = sourceId,
                     musicAnalysisVersion = behavior.musicAnalysisVersion,
@@ -1999,7 +2029,7 @@ private fun parseFavoriteTracksJson(
     }
 }
 
-private fun JSONObject.firstAudioSampleRate(): Int? {
+internal fun JSONObject.firstAudioSampleRate(): Int? {
     fun JSONObject.positiveInt(name: String): Int? = opt(name)?.toString()?.toIntOrNull()?.takeIf { it > 0 }
     val parts = optJSONArray("Part")
     if (parts != null) {
@@ -2013,6 +2043,22 @@ private fun JSONObject.firstAudioSampleRate(): Int? {
         }
     }
     return positiveInt("samplingRate")
+}
+
+internal fun JSONObject.firstAudioBitDepth(): Int? {
+    fun JSONObject.positiveInt(name: String): Int? = opt(name)?.toString()?.toIntOrNull()?.takeIf { it > 0 }
+    val parts = optJSONArray("Part")
+    if (parts != null) {
+        for (partIndex in 0 until parts.length()) {
+            val streams = parts.optJSONObject(partIndex)?.optJSONArray("Stream") ?: continue
+            for (streamIndex in 0 until streams.length()) {
+                val stream = streams.optJSONObject(streamIndex) ?: continue
+                if (stream.opt("streamType")?.toString() != "2") continue
+                stream.positiveInt("bitDepth")?.let { return it }
+            }
+        }
+    }
+    return positiveInt("bitDepth")
 }
 
 private fun JSONObject.firstAudioCodec(): String? {
