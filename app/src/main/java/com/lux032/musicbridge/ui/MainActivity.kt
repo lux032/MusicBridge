@@ -710,8 +710,14 @@ fun PlexAlbumScreen(
                             bottomContentPadding = contentBottomPadding,
                             onBack = state::navigateBack,
                             onPlayAlbum = state::playDownloadedAlbum,
-                            onPlayTrack = { group, _, index ->
-                                state.playDownloadedAlbum(group, startIndex = index)
+                            onPlayTrack = { group, track, index ->
+                                // Locate the tapped track by identity: the rendered order can
+                                // differ from the group order, and a wrong index plays the
+                                // wrong song.
+                                val exactIndex = group.tracks.indexOfFirst {
+                                    it.sourceId == track.sourceId && it.ratingKey == track.ratingKey
+                                }.takeIf { it >= 0 } ?: index
+                                state.playDownloadedAlbum(group, startIndex = exactIndex)
                             },
                             onDeleteAlbum = state::deleteDownloadedAlbum,
                             onDeleteTrack = { track ->

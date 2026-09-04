@@ -108,6 +108,7 @@ internal class AppStatePlaybackCoordinator(
         }
         val requestGeneration = nextPlaybackRequestGeneration()
         val displayAlbum = resolveAlbumForTrack(targetTrack, album)
+        stopLocalPlaybackForSonosHandover()
         state.albumPlaybackJob?.cancel()
         state.playbackReportingJob?.cancel()
         state.appPreferences.markAlbumPlayed(displayAlbum.sourceId, displayAlbum.ratingKey)
@@ -225,6 +226,7 @@ internal class AppStatePlaybackCoordinator(
             null
         }
         val requestGeneration = nextPlaybackRequestGeneration()
+        stopLocalPlaybackForSonosHandover()
         state.albumPlaybackJob?.cancel()
         state.playbackReportingJob?.cancel()
         state.appPreferences.markAlbumPlayed(albumTrackResult.album.sourceId, albumTrackResult.album.ratingKey)
@@ -451,6 +453,7 @@ internal class AppStatePlaybackCoordinator(
         if (playlistResult.tracks.isEmpty()) return
         transcodeRestartSeek = null
         val requestGeneration = nextPlaybackRequestGeneration()
+        stopLocalPlaybackForSonosHandover()
         state.albumPlaybackJob?.cancel()
         state.playbackReportingJob?.cancel()
         state.selectPlaybackTarget(PlaybackTarget.Sonos(room))
@@ -1189,6 +1192,33 @@ internal class AppStatePlaybackCoordinator(
     private fun nextPlaybackRequestGeneration(): Long {
         playbackToggleGeneration.incrementAndGet()
         return playbackRequestGeneration.incrementAndGet()
+    }
+
+    /**
+     * Retires every in-flight Sonos playback request. Callers that take playback over from
+     * another coordinator use this so the cancelled Sonos network calls cannot land on
+     * [AppState.errorMessage] after the handover.
+     */
+    fun invalidateInFlightPlaybackRequests() {
+        nextPlaybackRequestGeneration()
+    }
+
+    /**
+     * Snapshot of the live playback request generation. Coordinators that hand work to a
+     * network round trip capture this and re-check it before acting on the result.
+     */
+    val currentPlaybackRequestGeneration: Long
+        get() = playbackRequestGeneration.get()
+
+    /**
+     * Stops the on-device engine before a Sonos push. Both engines render independently,
+     * so leaving the local player running would double up the audio.
+     */
+    private fun stopLocalPlaybackForSonosHandover() {
+        val isLocalActive = state.miniPlayerState?.target == PlaybackTarget.LocalDevice ||
+            state.localPlaybackEngine.isPlayRequested
+        if (!isLocalActive) return
+        state.localPlaybackCoordinator.stopLocalPlayback()
     }
 
     private fun isCurrentPlaybackRequest(generation: Long): Boolean =

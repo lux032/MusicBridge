@@ -3,6 +3,7 @@ package com.lux032.musicbridge
 import com.lux032.musicbridge.plex.PlexAlbum
 import com.lux032.musicbridge.plex.PlexAlbumTracksResult
 import com.lux032.musicbridge.plex.PlexArtist
+import com.lux032.musicbridge.plex.PlexClient
 import com.lux032.musicbridge.plex.PlexPlaylist
 import com.lux032.musicbridge.plex.PlexPlaylistTracksResult
 import com.lux032.musicbridge.plex.PlexSection
@@ -12,6 +13,7 @@ import com.lux032.musicbridge.storage.DownloadedAlbumGroup
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -19,6 +21,7 @@ internal class AppStateLibraryCoordinator(
     private val state: AppState,
 ) {
     private var artistAlbumsJob: Job? = null
+    private var offlineHydrationJob: Job? = null
 
     suspend fun loadAlbumsFromLocalStore() {
         val sourceId = state.connectionPreferences.id
@@ -268,56 +271,216 @@ internal class AppStateLibraryCoordinator(
         state.actionMessage = "已删除专辑离线原档: ${album.title}"
     }
 
+    /**
+     * Plays an offline album while honouring the active output target.
+     *
+     * Tapping an offline album is a content choice, not an output switch, so the Sonos
+     * session must survive it: on Sonos the offline entry only identifies which album to
+     * push, and the authoritative server streams are re-hydrated for the speaker.
+     */
     fun playDownloadedAlbum(group: DownloadedAlbumGroup, startIndex: Int = 0) {
-        val tracks = group.tracks.map { it.toTrackStream() }
-        if (tracks.isEmpty()) return
-        val fakeAlbum = PlexAlbum(
-            ratingKey = group.albumRatingKey.ifBlank { "downloaded:${group.albumTitle}" },
-            title = group.albumTitle,
-            artistName = group.artistName,
-            year = null,
-            thumbUrl = group.thumbPath?.let { "file://$it" },
-            userRating = null,
-            addedAtEpochSeconds = null,
-            lastViewedAtEpochSeconds = null,
-            section = PlexSection("", "", ""),
-            sourceId = group.sourceId,
-        )
-        state.selectedPlaybackTarget = PlaybackTarget.LocalDevice
-        state.localPlaybackCoordinator.startLocalPlayback(
-            album = fakeAlbum,
-            tracks = tracks,
-            startIndex = startIndex.coerceIn(0, tracks.lastIndex),
-            initialPositionMillis = 0L,
+        if (group.tracks.isEmpty()) return
+        val safeIndex = startIndex.coerceIn(0, group.tracks.lastIndex)
+        when (offlinePlaybackRoute(state.selectedPlaybackTarget)) {
+            OfflinePlaybackRoute.LocalOriginal -> {
+                // startLocalPlayback owns the target switch; never hard-set it here.
+                state.localPlaybackCoordinator.startLocalPlayback(
+                    album = downloadedGroupAlbum(group),
+                    tracks = group.tracks.map { it.toTrackStream() },
+                    startIndex = safeIndex,
+                    initialPositionMillis = 0L,
+                )
+            }
+            OfflinePlaybackRoute.SonosHydrated -> playDownloadedAlbumOnSonos(group, safeIndex)
+        }
+    }
+
+    private fun playDownloadedAlbumOnSonos(group: DownloadedAlbumGroup, startIndex: Int) {
+        val requestedRatingKey = group.tracks.getOrNull(startIndex)?.ratingKey
+        launchOfflineSonosHydration(
+            preparingMessage = "正在为 Sonos 准备《${group.albumTitle}》...",
+            hydrate = { hydrateDownloadedGroupForSonos(group) },
+            dispatch = { hydrated ->
+                state.startAlbumPlayback(
+                    albumTrackResult = hydrated,
+                    startIndex = resolveHydratedStartIndex(hydrated.tracks, requestedRatingKey),
+                    initialPositionMillis = 0L,
+                )
+            },
         )
     }
 
-    fun shuffleAllDownloadedTracks() {
-        val allDownloaded = state.offlineDownloadManager.downloadedAlbums.value
-            .flatMap { it.tracks }
-            .map { it.toTrackStream() }
-            .shuffled()
-        if (allDownloaded.isEmpty()) return
-        val fakeAlbum = PlexAlbum(
-            ratingKey = "downloaded:all",
-            title = Strings.allDownloadedTracks,
-            artistName = Strings.offlineMusic,
-            year = null,
-            thumbUrl = allDownloaded.firstNotNullOfOrNull { it.thumbUrl },
-            userRating = null,
-            addedAtEpochSeconds = null,
-            lastViewedAtEpochSeconds = null,
-            section = PlexSection("", "", ""),
-            sourceId = allDownloaded.firstOrNull()?.sourceId.orEmpty(),
-        )
-        state.selectedPlaybackTarget = PlaybackTarget.LocalDevice
-        state.localPlaybackCoordinator.startLocalPlayback(
-            album = fakeAlbum,
-            tracks = allDownloaded,
-            startIndex = 0,
-            initialPositionMillis = 0L,
+    /** Cancels an in-flight offline hydration so its result cannot reach playback. */
+    fun cancelOfflineHydration() {
+        offlineHydrationJob?.cancel()
+        offlineHydrationJob = null
+    }
+
+    /**
+     * Runs an offline hydration for Sonos and dispatches the result only while the session
+     * it was started for is still the live one.
+     *
+     * Hydration is a network round trip: the user can switch output or start other
+     * playback before it returns. Both the captured target and the playback generation are
+     * re-checked so a late success cannot overwrite the queue that replaced it, and a late
+     * failure cannot raise a Sonos error over an output the user already left.
+     */
+    private fun <T> launchOfflineSonosHydration(
+        preparingMessage: String,
+        hydrate: suspend () -> T,
+        dispatch: (T) -> Unit,
+    ) {
+        if (state.isPlaybackCommandLoading) return
+        val requestedTarget = state.selectedPlaybackTarget
+        val requestedGeneration = state.currentPlaybackRequestGeneration
+        offlineHydrationJob?.cancel()
+        state.isPlaybackCommandLoading = true
+        state.errorMessage = null
+        state.actionMessage = preparingMessage
+        offlineHydrationJob = state.scope.launch {
+            var didHandOffToPlayback = false
+            try {
+                val hydrated = runCatching { hydrate() }
+                if (!isActive) return@launch
+                if (!isOfflineHydrationStillCurrent(
+                        requestedTarget = requestedTarget,
+                        currentTarget = state.selectedPlaybackTarget,
+                        requestedGeneration = requestedGeneration,
+                        currentGeneration = state.currentPlaybackRequestGeneration,
+                    )
+                ) {
+                    return@launch
+                }
+                hydrated
+                    .onSuccess { result ->
+                        // The playback pipeline owns the loading flag from here on.
+                        didHandOffToPlayback = true
+                        state.isPlaybackCommandLoading = false
+                        dispatch(result)
+                    }
+                    .onFailure { error ->
+                        if (error is CancellationException) return@onFailure
+                        // The user never asked to change output: stay on Sonos and surface
+                        // the failure instead of dropping back to the phone speaker.
+                        state.actionMessage = null
+                        state.errorMessage = Strings.sonosOfflineHydrationFailed(error.message)
+                    }
+            } finally {
+                // Release the flag on every exit path, cancellation included. A latched
+                // "true" would silently swallow every later offline tap. Sessions that are
+                // no longer current are skipped: whoever superseded us owns the flag.
+                val stillOwnsLoadingFlag = !didHandOffToPlayback && isOfflineHydrationStillCurrent(
+                    requestedTarget = requestedTarget,
+                    currentTarget = state.selectedPlaybackTarget,
+                    requestedGeneration = requestedGeneration,
+                    currentGeneration = state.currentPlaybackRequestGeneration,
+                )
+                if (stillOwnsLoadingFlag) state.isPlaybackCommandLoading = false
+            }
+        }
+    }
+
+    /**
+     * Resolves server-side streams for a downloaded album. Sonos cannot read the phone's
+     * private `file://` originals, and high-resolution originals still need the server's
+     * transcode path, so the speaker always plays the authoritative Plex streams.
+     */
+    private suspend fun hydrateDownloadedGroupForSonos(group: DownloadedAlbumGroup): PlexAlbumTracksResult {
+        val client = state.clientFor(group.sourceId)
+        val albumRequest = downloadedGroupAlbum(group)
+        val remote = if (group.albumRatingKey.isNotBlank()) {
+            runCatching { client.fetchAlbumTrackStreams(albumRequest) }.getOrNull()
+        } else {
+            null
+        }
+        val remoteByRatingKey = remote?.tracks.orEmpty().associateBy(PlexTrackStream::ratingKey)
+        val hydrated = group.tracks.mapNotNull { downloaded ->
+            remoteByRatingKey[downloaded.ratingKey]
+                ?: (client as? PlexClient)?.fetchTrackStream(downloaded.ratingKey)
+        }
+        check(hydrated.isNotEmpty()) { "服务器未返回可推送的曲目" }
+        return PlexAlbumTracksResult(
+            serverName = remote?.serverName.orEmpty(),
+            album = remote?.album ?: albumRequest,
+            tracks = hydrated,
         )
     }
+
+    private fun downloadedGroupAlbum(group: DownloadedAlbumGroup): PlexAlbum = PlexAlbum(
+        ratingKey = group.albumRatingKey.ifBlank { "downloaded:${group.albumTitle}" },
+        title = group.albumTitle,
+        artistName = group.artistName,
+        year = null,
+        thumbUrl = group.thumbPath?.let { "file://$it" },
+        userRating = null,
+        addedAtEpochSeconds = null,
+        lastViewedAtEpochSeconds = null,
+        section = PlexSection("", "", ""),
+        sourceId = group.sourceId,
+    )
+
+    fun shuffleAllDownloadedTracks() {
+        val groups = state.offlineDownloadManager.downloadedAlbums.value
+        if (groups.all { it.tracks.isEmpty() }) return
+        when (offlinePlaybackRoute(state.selectedPlaybackTarget)) {
+            OfflinePlaybackRoute.LocalOriginal -> {
+                val allDownloaded = groups
+                    .flatMap { it.tracks }
+                    .map { it.toTrackStream() }
+                    .shuffled()
+                if (allDownloaded.isEmpty()) return
+                // startLocalPlayback owns the target switch; never hard-set it here.
+                state.localPlaybackCoordinator.startLocalPlayback(
+                    album = allDownloadedAlbum(allDownloaded.firstNotNullOfOrNull { it.thumbUrl }, allDownloaded.firstOrNull()?.sourceId),
+                    tracks = allDownloaded,
+                    startIndex = 0,
+                    initialPositionMillis = 0L,
+                )
+            }
+            OfflinePlaybackRoute.SonosHydrated -> shuffleAllDownloadedTracksOnSonos(groups)
+        }
+    }
+
+    private fun shuffleAllDownloadedTracksOnSonos(groups: List<DownloadedAlbumGroup>) {
+        launchOfflineSonosHydration(
+            preparingMessage = "正在为 Sonos 准备离线曲目...",
+            hydrate = {
+                val hydrated = groups
+                    .filter { it.tracks.isNotEmpty() }
+                    .flatMap { group ->
+                        runCatching { hydrateDownloadedGroupForSonos(group).tracks }.getOrDefault(emptyList())
+                    }
+                    .distinctBy(PlexTrackStream::ratingKey)
+                    .shuffled()
+                check(hydrated.isNotEmpty()) { "服务器未返回可推送的曲目" }
+                PlexPlaylistTracksResult(
+                    serverName = "",
+                    playlist = PlexPlaylist(
+                        ratingKey = "downloaded:all",
+                        title = Strings.allDownloadedTracks,
+                        thumbUrl = hydrated.firstNotNullOfOrNull { it.thumbUrl },
+                        leafCount = hydrated.size,
+                        sourceId = hydrated.firstOrNull()?.sourceId.orEmpty(),
+                    ),
+                    tracks = hydrated,
+                )
+            },
+            dispatch = { result -> state.startPlaylistPlayback(result, shuffle = false) },
+        )
+    }
+
+    private fun allDownloadedAlbum(thumbUrl: String?, sourceId: String?): PlexAlbum = PlexAlbum(
+        ratingKey = "downloaded:all",
+        title = Strings.allDownloadedTracks,
+        artistName = Strings.offlineMusic,
+        year = null,
+        thumbUrl = thumbUrl,
+        userRating = null,
+        addedAtEpochSeconds = null,
+        lastViewedAtEpochSeconds = null,
+        section = PlexSection("", "", ""),
+        sourceId = sourceId.orEmpty(),
+    )
 
 
     fun openFavoriteTracks() {

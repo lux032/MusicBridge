@@ -241,6 +241,11 @@ object Strings {
     val offlineDownloadsTitle get() = if (isZhCN) "离线下载" else "Offline Downloads"
     val offlineMusic get() = if (isZhCN) "离线音乐" else "Offline Music"
     val allDownloadedTracks get() = if (isZhCN) "所有已下载歌曲" else "All Downloaded Tracks"
+    val sonosOfflineHydrationFailed get() = if (isZhCN) {
+        reason: String? -> "无法连接服务器投流到 Sonos：${reason ?: "未知错误"}"
+    } else {
+        reason: String? -> "Cannot reach the server to cast to Sonos: ${reason ?: "Unknown error"}"
+    }
     val shuffleAllOffline get() = if (isZhCN) "随机播放全部" else "Shuffle All"
     val sortRecentDownloaded get() = if (isZhCN) "最新下载" else "Recently Downloaded"
     val sortAlbumName get() = if (isZhCN) "专辑名称 A→Z" else "Album Name A–Z"

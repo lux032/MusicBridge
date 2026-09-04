@@ -11,11 +11,21 @@ import com.lux032.musicbridge.plex.PlexAlbum
 import com.lux032.musicbridge.plex.PlexTrackStream
 import com.lux032.musicbridge.plex.willTranscodeLocally
 import com.lux032.musicbridge.plex.withLocalPlaybackPolicy
+import com.lux032.musicbridge.service.PlaybackForegroundService
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+
+/**
+ * How long a local-playback handover waits for a cancelled Sonos push to unwind before it
+ * silences the speaker anyway. The SOAP call is a blocking socket read, so the join has to
+ * be bounded or an unreachable speaker would stall the stop command indefinitely.
+ */
+private const val SONOS_HANDOVER_JOIN_TIMEOUT_MILLIS = 2_000L
 
 internal fun networkReevaluationIndices(
     queueSize: Int,
@@ -195,8 +205,30 @@ internal class AppStateLocalPlaybackCoordinator(
     ) {
         if (tracks.isEmpty()) return
         val safeIndex = startIndex.coerceIn(0, tracks.lastIndex)
+        // Only release a room this app is actually driving; a merely selected room may be
+        // playing something the user started from another controller.
+        val handedOverSonosRoom = sonosRoomToReleaseForLocalPlayback(state.miniPlayerState)
+        val sonosPushJob = state.albumPlaybackJob
+        // Retire in-flight Sonos requests first: their cancelled network calls must not
+        // surface as errors once the local engine owns playback.
+        state.invalidateInFlightPlaybackRequests()
         state.albumPlaybackJob?.cancel()
         state.playbackReportingJob?.cancel()
+        if (handedOverSonosRoom != null) {
+            // Sonos renders one pushed track at a time, so cancelling our push loop leaves
+            // the speaker playing the current track and it would overlap the phone output.
+            PlaybackForegroundService.stop(state.context)
+            state.scope.launch {
+                // Let the cancelled push unwind first: a playTrack() that returns after our
+                // stop would make the speaker start over. Bounded, because the SOAP call is
+                // a blocking socket read that cancellation cannot interrupt.
+                withTimeoutOrNull(SONOS_HANDOVER_JOIN_TIMEOUT_MILLIS) {
+                    runCatching { sonosPushJob?.cancelAndJoin() }
+                }
+                runCatching { state.sonosController.pause(handedOverSonosRoom) }
+                runCatching { state.sonosController.stop(handedOverSonosRoom) }
+            }
+        }
         // Keep the active session aligned with the local engine after an output switch.
         state.selectPlaybackTarget(PlaybackTarget.LocalDevice)
         state.appPreferences.markAlbumPlayed(album.sourceId, album.ratingKey)
