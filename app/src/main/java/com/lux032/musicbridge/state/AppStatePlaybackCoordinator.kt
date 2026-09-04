@@ -852,6 +852,55 @@ internal class AppStatePlaybackCoordinator(
         }
     }
 
+    fun playAlbum(album: PlexAlbum, startIndex: Int = 0) {
+        state.isPlaybackCommandLoading = true
+        state.errorMessage = null
+        state.scope.launch {
+            try {
+                val cachedTracks = withContext(Dispatchers.IO) {
+                    state.albumLocalStore.getAlbumTracks(album.sourceId, album.ratingKey)
+                }
+                if (cachedTracks.isNotEmpty()) {
+                    val result = PlexAlbumTracksResult("", album, cachedTracks)
+                    state.selectedAlbum = album
+                    state.trackResult = result
+                    startAlbumPlayback(result, startIndex, 0L)
+                    state.isPlaybackCommandLoading = false
+                    // Background silent refresh
+                    runCatching {
+                        state.clientFor(album.sourceId).fetchAlbumTrackStreams(album)
+                    }.onSuccess { fresh ->
+                        withContext(Dispatchers.IO) {
+                            state.albumLocalStore.saveAlbumTracks(album.sourceId, album.ratingKey, fresh.tracks)
+                        }
+                    }
+                    return@launch
+                }
+
+                val freshResult = runCatching {
+                    state.clientFor(album.sourceId).fetchAlbumTrackStreams(album)
+                }.getOrThrow()
+
+                if (freshResult.tracks.isNotEmpty()) {
+                    withContext(Dispatchers.IO) {
+                        state.albumLocalStore.saveAlbumTracks(album.sourceId, album.ratingKey, freshResult.tracks)
+                    }
+                    state.selectedAlbum = album
+                    state.trackResult = freshResult
+                    startAlbumPlayback(freshResult, startIndex, 0L)
+                } else {
+                    state.errorMessage = "该专辑没有可播放的曲目"
+                }
+            } catch (error: Throwable) {
+                if (error !is CancellationException) {
+                    state.errorMessage = error.message ?: "播放专辑失败"
+                }
+            } finally {
+                state.isPlaybackCommandLoading = false
+            }
+        }
+    }
+
     fun enqueueAlbum(album: PlexAlbum, placement: QueuePlacement) {
         if (state.miniPlayerState == null) {
             state.actionMessage = null

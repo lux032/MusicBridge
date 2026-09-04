@@ -382,6 +382,7 @@ fun PlexAlbumScreen(
                     onBack = state::navigateBack,
                     onAlbumClick = state::openAlbumDetail,
                     onAlbumQueueAction = state::enqueueAlbum,
+                    onPlayAlbum = state::playAlbum,
                     onSortOptionChange = state::updateAlbumSortOption,
                     onFavoritesOnlyChange = state::updateAlbumFavoritesOnly,
                     onDecadeFilterChange = state::updateAlbumDecadeFilter,
@@ -556,6 +557,7 @@ fun PlexAlbumScreen(
                             onBack = state::navigateBack,
                             onAlbumClick = state::openAlbumDetail,
                             onAlbumQueueAction = state::enqueueAlbum,
+                            onPlayAlbum = state::playAlbum,
                             onShuffleArtist = state::shuffleArtist,
                             onToggleArtistFavorite = state::toggleArtistFavorite,
                             onQueueTrack = state::enqueueTrack,
@@ -607,6 +609,7 @@ fun PlexAlbumScreen(
                             onBack = state::navigateBack,
                             onAlbumClick = state::openAlbumDetail,
                             onAlbumQueueAction = state::enqueueAlbum,
+                            onPlayAlbum = state::playAlbum,
                         )
                     }
                 } else if (currentSection == AppSection.RecentAdded) {
@@ -637,6 +640,7 @@ fun PlexAlbumScreen(
                             onBack = state::navigateBack,
                             onAlbumClick = state::openAlbumDetail,
                             onAlbumQueueAction = state::enqueueAlbum,
+                            onPlayAlbum = state::playAlbum,
                         )
                     }
                 } else if (currentSection == AppSection.AlbumDetail) {
@@ -715,6 +719,7 @@ fun PlexAlbumScreen(
                         onRefreshFavorites = { scope.launch { state.refreshAlbums() } },
                         onAlbumClick = state::openAlbumDetail,
                         onAlbumQueueAction = state::enqueueAlbum,
+                        onPlayAlbum = state::playAlbum,
                         onOpenAllAlbums = {
                             state.albumSearchQuery = ""
                             state.navigateTo(AppSection.AllAlbums)

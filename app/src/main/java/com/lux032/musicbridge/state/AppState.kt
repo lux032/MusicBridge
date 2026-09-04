@@ -679,6 +679,9 @@ class AppState(
     fun enqueueAlbum(album: PlexAlbum, placement: QueuePlacement) =
         playbackCoordinator.enqueueAlbum(album, placement)
 
+    fun playAlbum(album: PlexAlbum, startIndex: Int = 0) =
+        playbackCoordinator.playAlbum(album, startIndex)
+
     fun switchPlaybackTarget(target: PlaybackTarget) = playbackCoordinator.switchPlaybackTarget(target)
 
     fun seekPlayback(state: MiniPlayerState, positionMillis: Long) =

@@ -465,6 +465,7 @@ internal fun ArtistAlbumsSection(
     onBack: () -> Unit,
     onAlbumClick: (PlexAlbum) -> Unit,
     onAlbumQueueAction: (PlexAlbum, QueuePlacement) -> Unit,
+    onPlayAlbum: (PlexAlbum) -> Unit = {},
     onShuffleArtist: (ArtistSummary) -> Unit,
     onToggleArtistFavorite: (ArtistSummary) -> Unit,
     onPlayTrack: (ArtistSummary, PlexTrackStream, Int) -> Unit,
@@ -644,6 +645,7 @@ internal fun ArtistAlbumsSection(
                                     selected = selectedAlbum?.ratingKey == album.ratingKey,
                                     onClick = { onAlbumClick(album) },
                                     onQueueAction = { onAlbumQueueAction(album, it) },
+                                    onPlay = { onPlayAlbum(album) },
                                     compact = true,
                                     subtitleOverride = artistAlbumSubtitle(classified),
                                 )

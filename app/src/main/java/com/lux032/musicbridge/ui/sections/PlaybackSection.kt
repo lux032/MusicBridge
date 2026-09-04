@@ -1741,6 +1741,10 @@ private fun AlbumDetailHeroWide(
                 onShowAlbumQueueMenuChange(false)
                 onQueueAlbum(album, placement)
             },
+            onPlay = {
+                onShowAlbumQueueMenuChange(false)
+                onPlayAlbum(trackResult)
+            },
         )
     }
 
@@ -1858,6 +1862,10 @@ private fun AlbumDetailHeroCompact(
                 onAction = { placement ->
                     onShowAlbumQueueMenuChange(false)
                     onQueueAlbum(album, placement)
+                },
+                onPlay = {
+                    onShowAlbumQueueMenuChange(false)
+                    onPlayAlbum(trackResult)
                 },
             )
         }

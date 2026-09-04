@@ -427,6 +427,7 @@ internal fun AlbumCoverCard(
     selected: Boolean,
     onClick: () -> Unit,
     onQueueAction: ((QueuePlacement) -> Unit)? = null,
+    onPlay: (() -> Unit)? = null,
     compact: Boolean = false,
     subtitleOverride: String? = null,
 ) {
@@ -508,6 +509,12 @@ internal fun AlbumCoverCard(
                 showQueueMenu = false
                 onQueueAction?.invoke(placement)
             },
+            onPlay = onPlay?.let { playAction ->
+                {
+                    showQueueMenu = false
+                    playAction()
+                }
+            },
         )
     }
 }
@@ -517,8 +524,23 @@ internal fun QueueActionMenu(
     expanded: Boolean,
     onDismiss: () -> Unit,
     onAction: (QueuePlacement) -> Unit,
+    onPlay: (() -> Unit)? = null,
 ) {
     DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
+        if (onPlay != null) {
+            DropdownMenuItem(
+                text = { Text(Strings.play) },
+                leadingIcon = { Icon(Icons.Filled.PlayArrow, contentDescription = null) },
+                onClick = {
+                    onDismiss()
+                    onPlay()
+                },
+            )
+            HorizontalDivider(
+                color = AppColors.Border,
+                modifier = Modifier.padding(vertical = 4.dp),
+            )
+        }
         Text(
             text = Strings.addToPlaybackQueue,
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),

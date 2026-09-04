@@ -292,6 +292,29 @@ class AlbumLocalStore(context: Context) {
         }
     }
 
+    fun saveAlbumTracks(sourceId: String, albumRatingKey: String, tracks: List<PlexTrackStream>) {
+        val database = helper.writableDatabase
+        database.beginTransaction()
+        try {
+            database.delete(
+                AlbumDatabaseHelper.TABLE_ALBUM_TRACKS,
+                "${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ? AND ${AlbumDatabaseHelper.COLUMN_TRACK_ALBUM_RATING_KEY} = ?",
+                arrayOf(sourceId, albumRatingKey),
+            )
+            tracks.forEach { track ->
+                database.insertWithOnConflict(
+                    AlbumDatabaseHelper.TABLE_ALBUM_TRACKS,
+                    null,
+                    track.toContentValues(),
+                    SQLiteDatabase.CONFLICT_REPLACE,
+                )
+            }
+            database.setTransactionSuccessful()
+        } finally {
+            database.endTransaction()
+        }
+    }
+
     fun recordTrackPlayback(
         sourceId: String,
         ratingKey: String,

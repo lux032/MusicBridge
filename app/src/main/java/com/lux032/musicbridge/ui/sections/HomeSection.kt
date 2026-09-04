@@ -66,6 +66,7 @@ internal fun HomeSection(
     onRefreshFavorites: () -> Unit,
     onAlbumClick: (PlexAlbum) -> Unit,
     onAlbumQueueAction: (PlexAlbum, QueuePlacement) -> Unit,
+    onPlayAlbum: (PlexAlbum) -> Unit = {},
     onOpenAllAlbums: () -> Unit,
     onOpenFavorites: () -> Unit,
     onOpenRecentAdded: () -> Unit,
@@ -159,6 +160,7 @@ internal fun HomeSection(
                         selectedAlbum = selectedAlbum,
                         onAlbumClick = onAlbumClick,
                         onAlbumQueueAction = onAlbumQueueAction,
+                        onPlayAlbum = onPlayAlbum,
                     )
                 }
             }
@@ -173,6 +175,7 @@ internal fun HomeSection(
                     onAction = onOpenFavorites,
                     onAlbumClick = onAlbumClick,
                     onAlbumQueueAction = onAlbumQueueAction,
+                    onPlayAlbum = onPlayAlbum,
                 )
             }
             if (recentAddedAlbums.isNotEmpty()) {
@@ -186,6 +189,7 @@ internal fun HomeSection(
                     onAction = onOpenRecentAdded,
                     onAlbumClick = onAlbumClick,
                     onAlbumQueueAction = onAlbumQueueAction,
+                    onPlayAlbum = onPlayAlbum,
                 )
             }
         }
@@ -211,6 +215,7 @@ private fun RecentPlayedShelfSection(
     selectedAlbum: PlexAlbum?,
     onAlbumClick: (PlexAlbum) -> Unit,
     onAlbumQueueAction: (PlexAlbum, QueuePlacement) -> Unit,
+    onPlayAlbum: ((PlexAlbum) -> Unit)? = null,
 ) {
     val layoutInfo = LocalAppLayoutInfo.current
 
@@ -288,6 +293,12 @@ private fun RecentPlayedShelfSection(
                             showQueueMenu = false
                             onAlbumQueueAction(album, placement)
                         },
+                        onPlay = onPlayAlbum?.let { playAction ->
+                            {
+                                showQueueMenu = false
+                                playAction(album)
+                            }
+                        },
                     )
                 }
             }
@@ -349,6 +360,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.albumPreviewGridItems
     onAction: () -> Unit,
     onAlbumClick: (PlexAlbum) -> Unit,
     onAlbumQueueAction: (PlexAlbum, QueuePlacement) -> Unit,
+    onPlayAlbum: ((PlexAlbum) -> Unit)? = null,
 ) {
     item(key = "$keyPrefix-header", contentType = "grid-header") {
         Row(
@@ -388,6 +400,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.albumPreviewGridItems
                             selected = selectedAlbum?.ratingKey == album.ratingKey,
                             onClick = { onAlbumClick(album) },
                             onQueueAction = { onAlbumQueueAction(album, it) },
+                            onPlay = onPlayAlbum?.let { playAction -> { playAction(album) } },
                             compact = true,
                         )
                     }
@@ -411,6 +424,7 @@ internal fun AlbumCollectionSection(
     onBack: () -> Unit,
     onAlbumClick: (PlexAlbum) -> Unit,
     onAlbumQueueAction: (PlexAlbum, QueuePlacement) -> Unit,
+    onPlayAlbum: (PlexAlbum) -> Unit = {},
 ) {
     val layoutInfo = LocalAppLayoutInfo.current
     if (albums.isEmpty()) {
@@ -474,6 +488,7 @@ internal fun AlbumCollectionSection(
                     selected = selectedAlbum?.ratingKey == album.ratingKey,
                     onClick = { onAlbumClick(album) },
                     onQueueAction = { onAlbumQueueAction(album, it) },
+                    onPlay = { onPlayAlbum(album) },
                     compact = false,
                 )
             }
@@ -496,6 +511,7 @@ internal fun AllAlbumsSection(
     onBack: () -> Unit,
     onAlbumClick: (PlexAlbum) -> Unit,
     onAlbumQueueAction: (PlexAlbum, QueuePlacement) -> Unit,
+    onPlayAlbum: (PlexAlbum) -> Unit = {},
     onSortOptionChange: (AlbumSortOption) -> Unit,
     onFavoritesOnlyChange: (Boolean) -> Unit,
     onDecadeFilterChange: (AlbumDecadeFilter) -> Unit,
@@ -670,6 +686,7 @@ internal fun AllAlbumsSection(
                                 selected = selectedAlbum?.ratingKey == album.ratingKey,
                                 onClick = { onAlbumClick(album) },
                                 onQueueAction = { onAlbumQueueAction(album, it) },
+                                onPlay = { onPlayAlbum(album) },
                                 compact = false,
                             )
                         }
@@ -687,6 +704,7 @@ internal fun AllAlbumsSection(
                             selected = selectedAlbum?.ratingKey == album.ratingKey,
                             onClick = { onAlbumClick(album) },
                             onQueueAction = { onAlbumQueueAction(album, it) },
+                            onPlay = { onPlayAlbum(album) },
                             compact = false,
                         )
                     }
