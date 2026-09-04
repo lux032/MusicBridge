@@ -66,6 +66,9 @@ import com.lux032.musicbridge.plex.PlexAlbumTracksResult
 import com.lux032.musicbridge.plex.PlexSection
 import com.lux032.musicbridge.plex.PlexTrackStream
 import com.lux032.musicbridge.service.PlaybackForegroundService.Companion.ACTION_OPEN_PLAYBACK_DETAIL
+import com.lux032.musicbridge.ui.settings.SettingsActions
+import com.lux032.musicbridge.ui.settings.SettingsScreen
+import com.lux032.musicbridge.ui.settings.SettingsViewState
 import com.lux032.musicbridge.ui.theme.PlexToSonosPlayerTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -284,17 +287,6 @@ fun PlexAlbumScreen(
     
     val isBottomBarVisible = activeSection != AppSection.PlaybackDetail
     val overlayRoom = state.selectedSonosRoom
-
-    fun shouldPersistVerticalScroll(section: AppSection): Boolean =
-        when (section) {
-            AppSection.AlbumDetail,
-            AppSection.ArtistAlbums,
-            AppSection.FavoriteCollection,
-            AppSection.RecentAdded,
-            AppSection.PlaylistDetail,
-            AppSection.Downloads -> false
-            else -> true
-        }
 
     // Only the player lays out edge-to-edge (it applies the system bar insets itself);
     // every other section sits inside the scaffold's safe padding while the root gradient
@@ -771,74 +763,55 @@ fun PlexAlbumScreen(
                         onOpenFavorites = { state.navigateTo(AppSection.FavoriteCollection) },
                         onOpenRecentAdded = { state.navigateTo(AppSection.RecentAdded) },
                     )
-                } else {
+                } else if (currentSection == AppSection.Settings) {
                     val scrollState = rememberScrollState(
-                        initial = if (shouldPersistVerticalScroll(currentSection)) {
-                            state.getSavedScrollValue(currentSection)
-                        } else {
-                            0
-                        }
+                        initial = state.getSavedScrollValue(AppSection.Settings),
                     )
                     DisposableEffect(Unit) {
                         onDispose {
-                            if (shouldPersistVerticalScroll(currentSection)) {
-                                state.saveScrollValue(currentSection, scrollState.value)
-                            }
+                            state.saveScrollValue(AppSection.Settings, scrollState.value)
                         }
                     }
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .verticalScroll(scrollState)
-                            .padding(start = layoutInfo.horizontalPadding, top = 16.dp, end = layoutInfo.horizontalPadding, bottom = contentBottomPadding),
-                        verticalArrangement = Arrangement.spacedBy(16.dp),
-                    ) {
-                        when (currentSection) {
-                            AppSection.Home -> Unit
-                            AppSection.AlbumDetail -> Unit
-                            AppSection.PlaybackDetail -> Unit
-                            AppSection.ArtistAlbums -> Unit
-                            AppSection.FavoriteCollection -> Unit
-                            AppSection.RecentAdded -> Unit
-                            AppSection.Settings -> SettingsSection(
-                                serverProfiles = state.serverProfiles,
-                                activeServerId = state.connectionPreferences.id,
-                                opusTranscodeMode = state.opusTranscodeMode,
-                                sonosHiResTranscodeMode = state.sonosHiResTranscodeMode,
-                                wifiQuality = state.wifiStreamingLimit,
-                                cellularQuality = state.cellularStreamingLimit,
-                                localOpusBitrate = state.localOpusBitrate,
-                                wifiPrecacheCount = state.wifiPrecacheCount,
-                                cellularPrecacheCount = state.cellularPrecacheCount,
-                                localCacheSize = state.localCacheSize,
-                                localCacheUsedBytes = state.localCacheUsedBytes(),
-                                offlineDownloadedBytes = state.totalDownloadedBytes(),
-                                onOpusTranscodeModeChange = state::updateOpusTranscodeMode,
-                                onSonosHiResTranscodeModeChange = state::updateSonosHiResTranscodeMode,
-                                onWifiQualityChange = { state.updateLocalStreamingLimit(wifi = true, limit = it) },
-                                onCellularQualityChange = { state.updateLocalStreamingLimit(wifi = false, limit = it) },
-                                onLocalOpusBitrateChange = state::updateLocalOpusBitrate,
-                                onWifiPrecacheCountChange = { state.updateLocalPrecacheCount(wifi = true, count = it) },
-                                onCellularPrecacheCountChange = { state.updateLocalPrecacheCount(wifi = false, count = it) },
-                                onLocalCacheSizeChange = state::updateLocalCacheSize,
-                                onClearLocalCache = state::clearLocalAudioCache,
-                                onClearAllDownloads = state::clearAllDownloads,
-                                onSaveServer = state::saveServerProfile,
-                                onSwitchServer = state::switchServer,
-                                onDeleteServer = state::deleteServer,
-                                onRefreshHome = { scope.launch { state.refreshAlbums() } },
-                                aiSettings = state.aiSettings,
-                                onSaveAiSettings = state::updateAiSettings,
-                            )
-                        AppSection.Artists -> Unit
-                        AppSection.Playlists -> Unit
-                        AppSection.AllAlbums -> Unit
-                        AppSection.PlaylistDetail -> Unit
-                        AppSection.Downloads -> Unit
-                    }
+                    SettingsScreen(
+                        state = SettingsViewState(
+                            serverProfiles = state.serverProfiles,
+                            activeServerId = state.connectionPreferences.id,
+                            opusTranscodeMode = state.opusTranscodeMode,
+                            sonosHiResTranscodeMode = state.sonosHiResTranscodeMode,
+                            wifiQuality = state.wifiStreamingLimit,
+                            cellularQuality = state.cellularStreamingLimit,
+                            localOpusBitrate = state.localOpusBitrate,
+                            wifiPrecacheCount = state.wifiPrecacheCount,
+                            cellularPrecacheCount = state.cellularPrecacheCount,
+                            localCacheSize = state.localCacheSize,
+                            aiSettings = state.aiSettings,
+                        ),
+                        actions = SettingsActions(
+                            onOpusTranscodeModeChange = state::updateOpusTranscodeMode,
+                            onSonosHiResTranscodeModeChange = state::updateSonosHiResTranscodeMode,
+                            onWifiQualityChange = { state.updateLocalStreamingLimit(wifi = true, limit = it) },
+                            onCellularQualityChange = { state.updateLocalStreamingLimit(wifi = false, limit = it) },
+                            onLocalOpusBitrateChange = state::updateLocalOpusBitrate,
+                            onWifiPrecacheCountChange = { state.updateLocalPrecacheCount(wifi = true, count = it) },
+                            onCellularPrecacheCountChange = { state.updateLocalPrecacheCount(wifi = false, count = it) },
+                            onLocalCacheSizeChange = state::updateLocalCacheSize,
+                            onClearLocalCache = state::clearLocalAudioCache,
+                            onClearAllDownloads = state::clearAllDownloads,
+                            onSaveServer = state::saveServerProfile,
+                            onSwitchServer = state::switchServer,
+                            onDeleteServer = state::deleteServer,
+                            onRefreshHome = { scope.launch { state.refreshAlbums() } },
+                            onSaveAiSettings = state::updateAiSettings,
+                            loadLocalCacheUsedBytes = { state.localCacheUsedBytes() },
+                            loadOfflineDownloadedBytes = { state.totalDownloadedBytes() },
+                        ),
+                        scrollState = scrollState,
+                        bottomContentPadding = contentBottomPadding,
+                    )
+                } else {
+                    Box(modifier = Modifier.fillMaxSize())
                 }
             }
-        }
         }
         }
         }
