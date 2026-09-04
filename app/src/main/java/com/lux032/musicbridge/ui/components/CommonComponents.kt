@@ -525,6 +525,9 @@ internal fun QueueActionMenu(
     onDismiss: () -> Unit,
     onAction: (QueuePlacement) -> Unit,
     onPlay: (() -> Unit)? = null,
+    isDownloaded: Boolean = false,
+    downloadLabel: String? = null,
+    onDownloadAction: (() -> Unit)? = null,
 ) {
     DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
         if (onPlay != null) {
@@ -534,6 +537,26 @@ internal fun QueueActionMenu(
                 onClick = {
                     onDismiss()
                     onPlay()
+                },
+            )
+            HorizontalDivider(
+                color = AppColors.Border,
+                modifier = Modifier.padding(vertical = 4.dp),
+            )
+        }
+        if (onDownloadAction != null) {
+            DropdownMenuItem(
+                text = { Text(downloadLabel ?: if (isDownloaded) Strings.deleteDownloaded else Strings.downloadOriginal) },
+                leadingIcon = {
+                    Icon(
+                        if (isDownloaded) Icons.Filled.Delete else Icons.Filled.Download,
+                        contentDescription = null,
+                        tint = if (isDownloaded) AppColors.TextSecondary else AppColors.TextPrimary,
+                    )
+                },
+                onClick = {
+                    onDismiss()
+                    onDownloadAction()
                 },
             )
             HorizontalDivider(
@@ -559,6 +582,7 @@ internal fun QueueActionMenu(
         )
     }
 }
+
 
 @Composable
 internal fun PlayerIconGraphic(

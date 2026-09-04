@@ -95,13 +95,24 @@ internal fun parseLyricKeyFromMetadata(body: String): String? {
 
 internal suspend fun fetchPlexLyrics(url: String): PlexLyrics = withContext(Dispatchers.IO) {
     Log.d("PlexLyrics", "Loading lyric stream")
-    val result = parseLrcLyrics(downloadText(url, "text/plain, application/octet-stream"))
+    val text = if (url.startsWith("file:")) {
+        val path = if (url.startsWith("file://")) url.removePrefix("file://") else url.removePrefix("file:")
+        java.io.File(path).readText(Charsets.UTF_8)
+    } else {
+        downloadText(url, "text/plain, application/octet-stream")
+    }
+    val result = parseLrcLyrics(text)
     Log.d("PlexLyrics", "Loaded ${result.lines.size} lyric lines; synced=${result.isSynced}")
     result
 }
 
 private fun downloadText(url: String, accept: String): String {
+    if (url.startsWith("file:")) {
+        val path = if (url.startsWith("file://")) url.removePrefix("file://") else url.removePrefix("file:")
+        return java.io.File(path).readText(Charsets.UTF_8)
+    }
     var connection: HttpURLConnection? = null
+
     try {
         connection = (URL(url).openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"

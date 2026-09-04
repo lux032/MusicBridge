@@ -54,11 +54,12 @@ class LocalCacheRoutingTest {
             listOf(false, true).forEach { isFullyCached ->
                 assertEquals(
                     PlaybackDataSourceRoute.CACHED_ORIGINAL,
-                    playbackDataSourceRoute(isTranscoded, isFullyCached, isCachedOriginal = true),
+                    playbackDataSourceRoute(isTranscoded = isTranscoded, isFullyCached = isFullyCached, isCachedOriginal = true),
                 )
             }
         }
     }
+
 
     @Test
     fun cacheOnlyUpstreamIsFailClosedAndNeverAnHttpDataSource() {
@@ -72,6 +73,10 @@ class LocalCacheRoutingTest {
     @Test
     fun normalRoutingRemainsUnchanged() {
         assertEquals(
+            PlaybackDataSourceRoute.OFFLINE_FILE,
+            playbackDataSourceRoute(url = "file:///data/track.audio", isTranscoded = false, isFullyCached = false),
+        )
+        assertEquals(
             PlaybackDataSourceRoute.DIRECT_CACHE,
             playbackDataSourceRoute(isTranscoded = false, isFullyCached = true),
         )
@@ -84,6 +89,7 @@ class LocalCacheRoutingTest {
             playbackDataSourceRoute(isTranscoded = true, isFullyCached = false),
         )
     }
+
 
     private fun item(
         key: String,

@@ -8,6 +8,51 @@ import com.lux032.musicbridge.plex.PlexAlbum
 import com.lux032.musicbridge.plex.PlexSection
 import com.lux032.musicbridge.plex.PlexTrackStream
 
+data class DownloadedAudioTrack(
+    val sourceId: String,
+    val ratingKey: String,
+    val partKey: String,
+    val title: String,
+    val artistName: String?,
+    val albumTitle: String?,
+    val albumRatingKey: String?,
+    val durationMillis: Long?,
+    val sourceAudioCodec: String?,
+    val sourceAudioBitrateKbps: Int?,
+    val sourceAudioSampleRate: Int?,
+    val bitDepth: Int?,
+    val localAudioPath: String,
+    val localThumbPath: String?,
+    val localLyricPath: String?,
+    val fileSize: Long,
+    val downloadedAtEpochSeconds: Long,
+    val discNumber: Int? = null,
+    val trackNumber: Int? = null,
+    val userRating: Float? = null,
+) {
+    fun toTrackStream(): PlexTrackStream = PlexTrackStream(
+        ratingKey = ratingKey,
+        title = title,
+        streamUrl = "file://$localAudioPath",
+        partKey = partKey,
+        durationMillis = durationMillis,
+        userRating = userRating,
+        albumRatingKey = albumRatingKey,
+        albumTitle = albumTitle,
+        artistName = artistName,
+        thumbUrl = localThumbPath?.let { "file://$it" },
+        sourceAudioCodec = sourceAudioCodec,
+        sourceAudioBitrateKbps = sourceAudioBitrateKbps,
+        sourceAudioSampleRate = sourceAudioSampleRate,
+        bitDepth = bitDepth,
+        playbackMimeType = null,
+        lyricUrl = localLyricPath?.let { "file://$it" },
+        sourceId = sourceId,
+        discNumber = discNumber,
+        trackNumber = trackNumber,
+    )
+}
+
 class AlbumLocalStore(context: Context) {
     private val helper = AlbumDatabaseHelper(context.applicationContext)
 
@@ -16,6 +61,185 @@ class AlbumLocalStore(context: Context) {
         val coverUrl: String?,
         val albumCount: Int,
     )
+
+    fun getDownloadedTrack(sourceId: String, ratingKey: String): DownloadedAudioTrack? {
+        val track = helper.readableDatabase.query(
+            AlbumDatabaseHelper.TABLE_DOWNLOADED_TRACKS,
+            null,
+            "${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ? AND ${AlbumDatabaseHelper.COLUMN_TRACK_RATING_KEY} = ?",
+            arrayOf(sourceId, ratingKey),
+            null,
+            null,
+            null,
+            "1",
+        ).use { cursor ->
+            if (cursor.moveToFirst()) cursor.toDownloadedTrack() else null
+        } ?: return null
+
+        if (track.userRating != null) return track
+
+        // Fallback for v13/v14 upgrade: check if track is recorded in TABLE_TRACKS with a favorite rating
+        val fallbackRating = runCatching {
+            helper.readableDatabase.query(
+                AlbumDatabaseHelper.TABLE_TRACKS,
+                arrayOf(AlbumDatabaseHelper.COLUMN_TRACK_USER_RATING),
+                "${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ? AND ${AlbumDatabaseHelper.COLUMN_TRACK_RATING_KEY} = ? AND ${AlbumDatabaseHelper.COLUMN_TRACK_USER_RATING} > 0",
+                arrayOf(sourceId, ratingKey),
+                null,
+                null,
+                null,
+                "1",
+            ).use { cursor ->
+                if (cursor.moveToFirst() && !cursor.isNull(0)) cursor.getFloat(0) else null
+            }
+        }.getOrNull()
+
+        return if (fallbackRating != null) track.copy(userRating = fallbackRating) else track
+    }
+
+    fun getAllDownloadedTracks(): List<DownloadedAudioTrack> {
+        val tracks = helper.readableDatabase.query(
+            AlbumDatabaseHelper.TABLE_DOWNLOADED_TRACKS,
+            null,
+            null,
+            null,
+            null,
+            null,
+            "${AlbumDatabaseHelper.COLUMN_DOWNLOADED_AT_EPOCH_SECONDS} DESC",
+        ).use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) {
+                    add(cursor.toDownloadedTrack())
+                }
+            }
+        }
+
+        if (tracks.isEmpty()) return emptyList()
+
+        // Fallback for v13/v14 upgrade: find tracks missing userRating that exist in TABLE_TRACKS
+        val missingRatingTracks = tracks.filter { it.userRating == null }
+        if (missingRatingTracks.isEmpty()) return tracks
+
+        val favoriteRatingMap = runCatching {
+            helper.readableDatabase.query(
+                AlbumDatabaseHelper.TABLE_TRACKS,
+                arrayOf(AlbumDatabaseHelper.COLUMN_SOURCE_ID, AlbumDatabaseHelper.COLUMN_TRACK_RATING_KEY, AlbumDatabaseHelper.COLUMN_TRACK_USER_RATING),
+                "${AlbumDatabaseHelper.COLUMN_TRACK_USER_RATING} > 0",
+                null,
+                null,
+                null,
+                null,
+            ).use { cursor ->
+                buildMap {
+                    while (cursor.moveToNext()) {
+                        val sId = cursor.getString(0)
+                        val rKey = cursor.getString(1)
+                        val rating = cursor.getFloat(2)
+                        put("$sId:$rKey", rating)
+                    }
+                }
+            }
+        }.getOrDefault(emptyMap())
+
+        if (favoriteRatingMap.isEmpty()) return tracks
+
+        return tracks.map { track ->
+            if (track.userRating == null) {
+                val rating = favoriteRatingMap["${track.sourceId}:${track.ratingKey}"]
+                if (rating != null) track.copy(userRating = rating) else track
+            } else {
+                track
+            }
+        }
+    }
+
+    fun getAllDownloadedTrackKeys(): Set<String> =
+        helper.readableDatabase.query(
+            AlbumDatabaseHelper.TABLE_DOWNLOADED_TRACKS,
+            arrayOf(AlbumDatabaseHelper.COLUMN_SOURCE_ID, AlbumDatabaseHelper.COLUMN_TRACK_RATING_KEY),
+            null,
+            null,
+            null,
+            null,
+            null,
+        ).use { cursor ->
+            buildSet {
+                while (cursor.moveToNext()) {
+                    val sId = cursor.getString(0)
+                    val rKey = cursor.getString(1)
+                    add("$sId:$rKey")
+                    add(rKey)
+                }
+            }
+        }
+
+    fun insertDownloadedTrack(track: DownloadedAudioTrack) {
+        helper.writableDatabase.insertWithOnConflict(
+            AlbumDatabaseHelper.TABLE_DOWNLOADED_TRACKS,
+            null,
+            track.toContentValues(),
+            SQLiteDatabase.CONFLICT_REPLACE,
+        )
+    }
+
+    fun deleteDownloadedTrack(sourceId: String, ratingKey: String) {
+        helper.writableDatabase.delete(
+            AlbumDatabaseHelper.TABLE_DOWNLOADED_TRACKS,
+            "${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ? AND ${AlbumDatabaseHelper.COLUMN_TRACK_RATING_KEY} = ?",
+            arrayOf(sourceId, ratingKey),
+        )
+    }
+
+    fun deleteDownloadedAlbum(sourceId: String, albumRatingKey: String): List<DownloadedAudioTrack> {
+        val db = helper.writableDatabase
+        db.beginTransaction()
+        return try {
+            val tracks = mutableListOf<DownloadedAudioTrack>()
+            val selection = if (sourceId.isNotBlank()) {
+                "${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ? AND (${AlbumDatabaseHelper.COLUMN_TRACK_ALBUM_RATING_KEY} = ? OR ${AlbumDatabaseHelper.COLUMN_TRACK_ALBUM_TITLE} = ?)"
+            } else {
+                "${AlbumDatabaseHelper.COLUMN_TRACK_ALBUM_RATING_KEY} = ? OR ${AlbumDatabaseHelper.COLUMN_TRACK_ALBUM_TITLE} = ?"
+            }
+            val selectionArgs = if (sourceId.isNotBlank()) {
+                arrayOf(sourceId, albumRatingKey, albumRatingKey)
+            } else {
+                arrayOf(albumRatingKey, albumRatingKey)
+            }
+
+            db.query(
+                AlbumDatabaseHelper.TABLE_DOWNLOADED_TRACKS,
+                null,
+                selection,
+                selectionArgs,
+                null,
+                null,
+                null,
+            ).use { cursor ->
+                while (cursor.moveToNext()) {
+                    tracks.add(cursor.toDownloadedTrack())
+                }
+            }
+
+            db.delete(AlbumDatabaseHelper.TABLE_DOWNLOADED_TRACKS, selection, selectionArgs)
+            db.setTransactionSuccessful()
+            tracks
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    fun clearAllDownloadedTracks() {
+        helper.writableDatabase.delete(AlbumDatabaseHelper.TABLE_DOWNLOADED_TRACKS, null, null)
+    }
+
+    fun totalDownloadedBytes(): Long =
+        helper.readableDatabase.rawQuery(
+            "SELECT COALESCE(SUM(${AlbumDatabaseHelper.COLUMN_DOWNLOAD_FILE_SIZE}), 0) FROM ${AlbumDatabaseHelper.TABLE_DOWNLOADED_TRACKS}",
+            null,
+        ).use { cursor ->
+            if (cursor.moveToFirst()) cursor.getLong(0) else 0L
+        }
+
 
     fun getFavoriteTracks(sourceId: String): List<PlexTrackStream> =
         helper.readableDatabase.query(
@@ -341,6 +565,19 @@ class AlbumLocalStore(context: Context) {
         }
     }
 
+    fun updateDownloadedTrackFavoriteStatus(sourceId: String, ratingKey: String, userRating: Float?) {
+        val values = ContentValues().apply {
+            if (userRating != null) put(AlbumDatabaseHelper.COLUMN_TRACK_USER_RATING, userRating)
+            else putNull(AlbumDatabaseHelper.COLUMN_TRACK_USER_RATING)
+        }
+        helper.writableDatabase.update(
+            AlbumDatabaseHelper.TABLE_DOWNLOADED_TRACKS,
+            values,
+            "${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ? AND ${AlbumDatabaseHelper.COLUMN_TRACK_RATING_KEY} = ?",
+            arrayOf(sourceId, ratingKey),
+        )
+    }
+
     fun updateAlbumTrackFavoriteStatus(sourceId: String, ratingKey: String, userRating: Float?) {
         val values = ContentValues().apply {
             if (userRating != null) put(AlbumDatabaseHelper.COLUMN_TRACK_USER_RATING, userRating)
@@ -423,6 +660,65 @@ class AlbumLocalStore(context: Context) {
             trackNumber = nullableInt(AlbumDatabaseHelper.COLUMN_TRACK_NUMBER),
         )
     }
+
+    private fun android.database.Cursor.toDownloadedTrack(): DownloadedAudioTrack {
+        fun string(name: String): String = getString(getColumnIndexOrThrow(name))
+        fun nullableString(name: String): String? = getString(getColumnIndexOrThrow(name))
+        fun nullableLong(name: String): Long? =
+            if (isNull(getColumnIndexOrThrow(name))) null else getLong(getColumnIndexOrThrow(name))
+        fun nullableFloat(name: String): Float? =
+            if (isNull(getColumnIndexOrThrow(name))) null else getFloat(getColumnIndexOrThrow(name))
+        fun nullableInt(name: String): Int? =
+            if (isNull(getColumnIndexOrThrow(name))) null else getInt(getColumnIndexOrThrow(name))
+
+        return DownloadedAudioTrack(
+            sourceId = string(AlbumDatabaseHelper.COLUMN_SOURCE_ID),
+            ratingKey = string(AlbumDatabaseHelper.COLUMN_TRACK_RATING_KEY),
+            partKey = string(AlbumDatabaseHelper.COLUMN_TRACK_PART_KEY),
+            title = string(AlbumDatabaseHelper.COLUMN_TRACK_TITLE),
+            artistName = nullableString(AlbumDatabaseHelper.COLUMN_TRACK_ARTIST_NAME),
+            albumTitle = nullableString(AlbumDatabaseHelper.COLUMN_TRACK_ALBUM_TITLE),
+            albumRatingKey = nullableString(AlbumDatabaseHelper.COLUMN_TRACK_ALBUM_RATING_KEY),
+            durationMillis = nullableLong(AlbumDatabaseHelper.COLUMN_TRACK_DURATION_MILLIS),
+            sourceAudioCodec = nullableString(AlbumDatabaseHelper.COLUMN_TRACK_SOURCE_AUDIO_CODEC),
+            sourceAudioBitrateKbps = nullableInt(AlbumDatabaseHelper.COLUMN_TRACK_BITRATE_KBPS),
+            sourceAudioSampleRate = nullableInt(AlbumDatabaseHelper.COLUMN_TRACK_SAMPLE_RATE),
+            bitDepth = nullableInt(AlbumDatabaseHelper.COLUMN_TRACK_BIT_DEPTH),
+            localAudioPath = string(AlbumDatabaseHelper.COLUMN_DOWNLOAD_LOCAL_AUDIO_PATH),
+            localThumbPath = nullableString(AlbumDatabaseHelper.COLUMN_DOWNLOAD_LOCAL_THUMB_PATH),
+            localLyricPath = nullableString(AlbumDatabaseHelper.COLUMN_DOWNLOAD_LOCAL_LYRIC_PATH),
+            fileSize = getLong(getColumnIndexOrThrow(AlbumDatabaseHelper.COLUMN_DOWNLOAD_FILE_SIZE)),
+            downloadedAtEpochSeconds = getLong(getColumnIndexOrThrow(AlbumDatabaseHelper.COLUMN_DOWNLOADED_AT_EPOCH_SECONDS)),
+            discNumber = nullableInt(AlbumDatabaseHelper.COLUMN_TRACK_DISC_NUMBER),
+            trackNumber = nullableInt(AlbumDatabaseHelper.COLUMN_TRACK_NUMBER),
+            userRating = nullableFloat(AlbumDatabaseHelper.COLUMN_TRACK_USER_RATING),
+        )
+    }
+
+    private fun DownloadedAudioTrack.toContentValues(): ContentValues =
+        ContentValues().apply {
+            put(AlbumDatabaseHelper.COLUMN_SOURCE_ID, sourceId)
+            put(AlbumDatabaseHelper.COLUMN_TRACK_RATING_KEY, ratingKey)
+            put(AlbumDatabaseHelper.COLUMN_TRACK_PART_KEY, partKey)
+            put(AlbumDatabaseHelper.COLUMN_TRACK_TITLE, title)
+            put(AlbumDatabaseHelper.COLUMN_TRACK_ARTIST_NAME, artistName)
+            put(AlbumDatabaseHelper.COLUMN_TRACK_ALBUM_TITLE, albumTitle)
+            put(AlbumDatabaseHelper.COLUMN_TRACK_ALBUM_RATING_KEY, albumRatingKey)
+            put(AlbumDatabaseHelper.COLUMN_TRACK_DURATION_MILLIS, durationMillis)
+            put(AlbumDatabaseHelper.COLUMN_TRACK_SOURCE_AUDIO_CODEC, sourceAudioCodec)
+            put(AlbumDatabaseHelper.COLUMN_TRACK_BITRATE_KBPS, sourceAudioBitrateKbps)
+            put(AlbumDatabaseHelper.COLUMN_TRACK_SAMPLE_RATE, sourceAudioSampleRate)
+            put(AlbumDatabaseHelper.COLUMN_TRACK_BIT_DEPTH, bitDepth)
+            put(AlbumDatabaseHelper.COLUMN_DOWNLOAD_LOCAL_AUDIO_PATH, localAudioPath)
+            put(AlbumDatabaseHelper.COLUMN_DOWNLOAD_LOCAL_THUMB_PATH, localThumbPath)
+            put(AlbumDatabaseHelper.COLUMN_DOWNLOAD_LOCAL_LYRIC_PATH, localLyricPath)
+            put(AlbumDatabaseHelper.COLUMN_DOWNLOAD_FILE_SIZE, fileSize)
+            put(AlbumDatabaseHelper.COLUMN_DOWNLOADED_AT_EPOCH_SECONDS, downloadedAtEpochSeconds)
+            put(AlbumDatabaseHelper.COLUMN_TRACK_DISC_NUMBER, discNumber)
+            put(AlbumDatabaseHelper.COLUMN_TRACK_NUMBER, trackNumber)
+            put(AlbumDatabaseHelper.COLUMN_TRACK_USER_RATING, userRating)
+        }
+
 
     private fun PlexAlbum.toContentValues(): ContentValues =
         ContentValues().apply {
@@ -524,6 +820,15 @@ internal fun ensureVersion12Columns(db: SQLiteDatabase) {
     }
 }
 
+internal fun ensureVersion14Columns(db: SQLiteDatabase) {
+    addColumnIfNotExists(db, "downloaded_tracks", "disc_number", "INTEGER")
+    addColumnIfNotExists(db, "downloaded_tracks", "track_number", "INTEGER")
+}
+
+internal fun ensureVersion15Columns(db: SQLiteDatabase) {
+    addColumnIfNotExists(db, "downloaded_tracks", AlbumDatabaseHelper.COLUMN_TRACK_USER_RATING, "REAL")
+}
+
 private class AlbumDatabaseHelper(context: Context) :
     SQLiteOpenHelper(context, DATABASE_NAME, null, DATABASE_VERSION) {
 
@@ -536,6 +841,7 @@ private class AlbumDatabaseHelper(context: Context) :
         createAlbumsTable(db)
         createTracksTable(db)
         createAlbumTracksTable(db)
+        createDownloadedTracksTable(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -573,15 +879,19 @@ private class AlbumDatabaseHelper(context: Context) :
         if (oldVersion < 10) ensureVersion10Columns(db)
         if (oldVersion < 11) ensureVersion11Columns(db)
         if (oldVersion < 12) ensureVersion12Columns(db)
+        if (oldVersion < 13) createDownloadedTracksTable(db)
+        if (oldVersion < 14) ensureVersion14Columns(db)
+        if (oldVersion < 15) ensureVersion15Columns(db)
     }
 
     companion object {
         private const val DATABASE_NAME = "plex_album_cache.db"
-        private const val DATABASE_VERSION = 12
+        private const val DATABASE_VERSION = 15
 
         const val TABLE_ALBUMS = "albums"
         const val TABLE_TRACKS = "tracks"
         const val TABLE_ALBUM_TRACKS = "album_tracks"
+        const val TABLE_DOWNLOADED_TRACKS = "downloaded_tracks"
         const val COLUMN_SOURCE_ID = "source_id"
         const val COLUMN_RATING_KEY = "rating_key"
         const val COLUMN_TITLE = "title"
@@ -618,7 +928,14 @@ private class AlbumDatabaseHelper(context: Context) :
         const val COLUMN_LEAF_COUNT = "leaf_count"
         const val COLUMN_FORMAT = "format"
         const val COLUMN_SUBFORMAT = "subformat"
+
+        const val COLUMN_DOWNLOAD_LOCAL_AUDIO_PATH = "local_audio_path"
+        const val COLUMN_DOWNLOAD_LOCAL_THUMB_PATH = "local_thumb_path"
+        const val COLUMN_DOWNLOAD_LOCAL_LYRIC_PATH = "local_lyric_path"
+        const val COLUMN_DOWNLOAD_FILE_SIZE = "file_size"
+        const val COLUMN_DOWNLOADED_AT_EPOCH_SECONDS = "downloaded_at_epoch_seconds"
     }
+
 
     private fun createAlbumsTable(db: SQLiteDatabase) {
         db.execSQL(
@@ -723,5 +1040,39 @@ private class AlbumDatabaseHelper(context: Context) :
             "CREATE INDEX IF NOT EXISTS index_album_tracks_album_key ON $TABLE_ALBUM_TRACKS($COLUMN_SOURCE_ID, $COLUMN_TRACK_ALBUM_RATING_KEY)"
         )
     }
+
+    private fun createDownloadedTracksTable(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS $TABLE_DOWNLOADED_TRACKS (
+                $COLUMN_SOURCE_ID TEXT NOT NULL,
+                $COLUMN_TRACK_RATING_KEY TEXT NOT NULL,
+                $COLUMN_TRACK_PART_KEY TEXT NOT NULL,
+                $COLUMN_TRACK_TITLE TEXT NOT NULL,
+                $COLUMN_TRACK_ARTIST_NAME TEXT,
+                $COLUMN_TRACK_ALBUM_TITLE TEXT,
+                $COLUMN_TRACK_ALBUM_RATING_KEY TEXT,
+                $COLUMN_TRACK_DURATION_MILLIS INTEGER,
+                $COLUMN_TRACK_SOURCE_AUDIO_CODEC TEXT,
+                $COLUMN_TRACK_BITRATE_KBPS INTEGER,
+                $COLUMN_TRACK_SAMPLE_RATE INTEGER,
+                $COLUMN_TRACK_BIT_DEPTH INTEGER,
+                $COLUMN_DOWNLOAD_LOCAL_AUDIO_PATH TEXT NOT NULL,
+                $COLUMN_DOWNLOAD_LOCAL_THUMB_PATH TEXT,
+                $COLUMN_DOWNLOAD_LOCAL_LYRIC_PATH TEXT,
+                $COLUMN_DOWNLOAD_FILE_SIZE INTEGER NOT NULL,
+                $COLUMN_DOWNLOADED_AT_EPOCH_SECONDS INTEGER NOT NULL,
+                $COLUMN_TRACK_DISC_NUMBER INTEGER,
+                $COLUMN_TRACK_NUMBER INTEGER,
+                $COLUMN_TRACK_USER_RATING REAL,
+                PRIMARY KEY ($COLUMN_SOURCE_ID, $COLUMN_TRACK_RATING_KEY)
+            )
+            """.trimIndent()
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS index_downloaded_tracks_time ON $TABLE_DOWNLOADED_TRACKS($COLUMN_DOWNLOADED_AT_EPOCH_SECONDS DESC)"
+        )
+    }
+
 
 }

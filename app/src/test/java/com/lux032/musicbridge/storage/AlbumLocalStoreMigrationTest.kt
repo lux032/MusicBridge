@@ -6,6 +6,8 @@ import com.lux032.musicbridge.plex.PlexAlbum
 import com.lux032.musicbridge.plex.PlexSection
 import com.lux032.musicbridge.plex.PlexTrackStream
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -141,10 +143,363 @@ class AlbumLocalStoreMigrationTest {
         assertEquals(null, albums.single().format)
         assertEquals(null, albums.single().subformat)
         context.openOrCreateDatabase(DATABASE_NAME, Context.MODE_PRIVATE, null).use { db ->
-            assertEquals(12, db.version)
+            assertEquals(15, db.version)
             assertTrue(db.columnNames("albums").containsAll(listOf("format", "subformat")))
             assertTrue(db.columnNames("tracks").contains("bit_depth"))
             assertTrue(db.columnNames("album_tracks").contains("bit_depth"))
+            assertTrue(db.columnNames("downloaded_tracks").containsAll(
+                listOf(
+                    "source_id",
+                    "rating_key",
+                    "part_key",
+                    "title",
+                    "local_audio_path",
+                    "local_thumb_path",
+                    "local_lyric_path",
+                    "file_size",
+                    "downloaded_at_epoch_seconds",
+                    "disc_number",
+                    "track_number",
+                    "user_rating",
+                )
+            ))
+        }
+
+
+        context.deleteDatabase(DATABASE_NAME)
+    }
+
+    @Test
+    fun version12To13CreatesDownloadedTracksTableAndIndices() {
+        val context = cleanDatabaseContext()
+        context.openOrCreateDatabase(DATABASE_NAME, Context.MODE_PRIVATE, null).use { db ->
+            db.execSQL(
+                """
+                CREATE TABLE albums (
+                    source_id TEXT NOT NULL,
+                    rating_key TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    section_key TEXT NOT NULL,
+                    section_title TEXT NOT NULL,
+                    section_type TEXT NOT NULL,
+                    PRIMARY KEY (source_id, rating_key)
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                CREATE TABLE tracks (
+                    source_id TEXT NOT NULL,
+                    rating_key TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    stream_url TEXT NOT NULL,
+                    part_key TEXT NOT NULL,
+                    PRIMARY KEY (source_id, rating_key)
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                CREATE TABLE album_tracks (
+                    source_id TEXT NOT NULL,
+                    rating_key TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    stream_url TEXT NOT NULL,
+                    part_key TEXT NOT NULL,
+                    album_rating_key TEXT,
+                    PRIMARY KEY (source_id, rating_key)
+                )
+                """.trimIndent()
+            )
+            db.version = 12
+        }
+
+        // Access store to trigger SQLiteOpenHelper upgrade from 12 to 13
+        val store = AlbumLocalStore(context)
+        assertEquals(emptyList<DownloadedAudioTrack>(), store.getAllDownloadedTracks())
+
+        context.openOrCreateDatabase(DATABASE_NAME, Context.MODE_PRIVATE, null).use { db ->
+            assertEquals(15, db.version)
+            val expectedColumns = setOf(
+                "source_id",
+                "rating_key",
+                "part_key",
+                "title",
+                "artist_name",
+                "album_title",
+                "album_rating_key",
+                "duration_millis",
+                "source_audio_codec",
+                "bitrate_kbps",
+                "sample_rate",
+                "bit_depth",
+                "local_audio_path",
+                "local_thumb_path",
+                "local_lyric_path",
+                "file_size",
+                "downloaded_at_epoch_seconds",
+                "disc_number",
+                "track_number",
+                "user_rating",
+            )
+            val actualColumns = db.columnNames("downloaded_tracks")
+            assertEquals(expectedColumns, actualColumns)
+            assertTrue(db.indexNames("downloaded_tracks").contains("index_downloaded_tracks_time"))
+        }
+
+        context.deleteDatabase(DATABASE_NAME)
+    }
+
+    @Test
+    fun version13To14AddsDiscAndTrackNumberColumnsToDownloadedTracks() {
+        SQLiteDatabase.create(null).use { db ->
+            db.execSQL(
+                """
+                CREATE TABLE downloaded_tracks (
+                    source_id TEXT NOT NULL,
+                    rating_key TEXT NOT NULL,
+                    part_key TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    artist_name TEXT,
+                    album_title TEXT,
+                    album_rating_key TEXT,
+                    duration_millis INTEGER,
+                    source_audio_codec TEXT,
+                    bitrate_kbps INTEGER,
+                    sample_rate INTEGER,
+                    bit_depth INTEGER,
+                    local_audio_path TEXT NOT NULL,
+                    local_thumb_path TEXT,
+                    local_lyric_path TEXT,
+                    file_size INTEGER NOT NULL,
+                    downloaded_at_epoch_seconds INTEGER NOT NULL,
+                    PRIMARY KEY (source_id, rating_key)
+                )
+                """.trimIndent()
+            )
+            ensureVersion14Columns(db)
+            ensureVersion14Columns(db) // test idempotency
+            assertTrue(db.columnNames("downloaded_tracks").containsAll(listOf("disc_number", "track_number")))
+        }
+
+        val context = cleanDatabaseContext()
+        context.openOrCreateDatabase(DATABASE_NAME, Context.MODE_PRIVATE, null).use { db ->
+            db.execSQL(
+                """
+                CREATE TABLE albums (
+                    source_id TEXT NOT NULL,
+                    rating_key TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    section_key TEXT NOT NULL,
+                    section_title TEXT NOT NULL,
+                    section_type TEXT NOT NULL,
+                    PRIMARY KEY (source_id, rating_key)
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                CREATE TABLE tracks (
+                    source_id TEXT NOT NULL,
+                    rating_key TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    stream_url TEXT NOT NULL,
+                    part_key TEXT NOT NULL,
+                    PRIMARY KEY (source_id, rating_key)
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                CREATE TABLE album_tracks (
+                    source_id TEXT NOT NULL,
+                    rating_key TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    stream_url TEXT NOT NULL,
+                    part_key TEXT NOT NULL,
+                    PRIMARY KEY (source_id, rating_key)
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                CREATE TABLE downloaded_tracks (
+                    source_id TEXT NOT NULL,
+                    rating_key TEXT NOT NULL,
+                    part_key TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    artist_name TEXT,
+                    album_title TEXT,
+                    album_rating_key TEXT,
+                    duration_millis INTEGER,
+                    source_audio_codec TEXT,
+                    bitrate_kbps INTEGER,
+                    sample_rate INTEGER,
+                    bit_depth INTEGER,
+                    local_audio_path TEXT NOT NULL,
+                    local_thumb_path TEXT,
+                    local_lyric_path TEXT,
+                    file_size INTEGER NOT NULL,
+                    downloaded_at_epoch_seconds INTEGER NOT NULL,
+                    PRIMARY KEY (source_id, rating_key)
+                )
+                """.trimIndent()
+            )
+            db.execSQL("INSERT INTO downloaded_tracks VALUES ('src', 'trk1', '/part', 'Title', 'Artist', 'Album', 'alb1', 1000, 'flac', 1000, 44100, 16, '/local/path', null, null, 5000, 12345)")
+            db.version = 13
+        }
+
+        val store = AlbumLocalStore(context)
+        val loaded = store.getAllDownloadedTracks().single()
+        assertEquals("trk1", loaded.ratingKey)
+        assertEquals(null, loaded.discNumber)
+        assertEquals(null, loaded.trackNumber)
+
+        val newTrack = loaded.copy(
+            ratingKey = "trk2",
+            discNumber = 2,
+            trackNumber = 5,
+            userRating = null,
+        )
+        store.insertDownloadedTrack(newTrack)
+        val storedTrack = store.getDownloadedTrack("src", "trk2")
+        assertEquals(2, storedTrack?.discNumber)
+        assertEquals(5, storedTrack?.trackNumber)
+
+        context.openOrCreateDatabase(DATABASE_NAME, Context.MODE_PRIVATE, null).use { db ->
+            assertEquals(15, db.version)
+            assertTrue(db.columnNames("downloaded_tracks").containsAll(listOf("disc_number", "track_number", "user_rating")))
+        }
+        context.deleteDatabase(DATABASE_NAME)
+    }
+
+    @Test
+    fun version14To15AddsUserRatingColumnAndPreservesFavoriteStatus() {
+        SQLiteDatabase.create(null).use { db ->
+            db.execSQL(
+                """
+                CREATE TABLE downloaded_tracks (
+                    source_id TEXT NOT NULL,
+                    rating_key TEXT NOT NULL,
+                    part_key TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    artist_name TEXT,
+                    album_title TEXT,
+                    album_rating_key TEXT,
+                    duration_millis INTEGER,
+                    source_audio_codec TEXT,
+                    bitrate_kbps INTEGER,
+                    sample_rate INTEGER,
+                    bit_depth INTEGER,
+                    local_audio_path TEXT NOT NULL,
+                    local_thumb_path TEXT,
+                    local_lyric_path TEXT,
+                    file_size INTEGER NOT NULL,
+                    downloaded_at_epoch_seconds INTEGER NOT NULL,
+                    disc_number INTEGER,
+                    track_number INTEGER,
+                    PRIMARY KEY (source_id, rating_key)
+                )
+                """.trimIndent()
+            )
+            ensureVersion15Columns(db)
+            ensureVersion15Columns(db) // test idempotency
+            assertTrue(db.columnNames("downloaded_tracks").contains("user_rating"))
+        }
+
+        val context = cleanDatabaseContext()
+        context.openOrCreateDatabase(DATABASE_NAME, Context.MODE_PRIVATE, null).use { db ->
+            db.execSQL(
+                """
+                CREATE TABLE albums (
+                    source_id TEXT NOT NULL,
+                    rating_key TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    section_key TEXT NOT NULL,
+                    section_title TEXT NOT NULL,
+                    section_type TEXT NOT NULL,
+                    PRIMARY KEY (source_id, rating_key)
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                CREATE TABLE tracks (
+                    source_id TEXT NOT NULL,
+                    rating_key TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    stream_url TEXT NOT NULL,
+                    part_key TEXT NOT NULL,
+                    user_rating REAL,
+                    PRIMARY KEY (source_id, rating_key)
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                CREATE TABLE album_tracks (
+                    source_id TEXT NOT NULL,
+                    rating_key TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    stream_url TEXT NOT NULL,
+                    part_key TEXT NOT NULL,
+                    PRIMARY KEY (source_id, rating_key)
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                CREATE TABLE downloaded_tracks (
+                    source_id TEXT NOT NULL,
+                    rating_key TEXT NOT NULL,
+                    part_key TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    artist_name TEXT,
+                    album_title TEXT,
+                    album_rating_key TEXT,
+                    duration_millis INTEGER,
+                    source_audio_codec TEXT,
+                    bitrate_kbps INTEGER,
+                    sample_rate INTEGER,
+                    bit_depth INTEGER,
+                    local_audio_path TEXT NOT NULL,
+                    local_thumb_path TEXT,
+                    local_lyric_path TEXT,
+                    file_size INTEGER NOT NULL,
+                    downloaded_at_epoch_seconds INTEGER NOT NULL,
+                    disc_number INTEGER,
+                    track_number INTEGER,
+                    PRIMARY KEY (source_id, rating_key)
+                )
+                """.trimIndent()
+            )
+            // Insert track1 with existing favorite in tracks table (legacy v14 migration scenario)
+            db.execSQL("INSERT INTO tracks VALUES ('src', 'trk1', 'Track 1', 'url', '/part', 10.0)")
+            db.execSQL("INSERT INTO downloaded_tracks VALUES ('src', 'trk1', '/part', 'Title 1', 'Artist', 'Album', 'alb1', 1000, 'flac', 1000, 44100, 16, '/local/path1', null, null, 5000, 12345, 1, 1)")
+            // Insert track2 without favorite in tracks table
+            db.execSQL("INSERT INTO downloaded_tracks VALUES ('src', 'trk2', '/part', 'Title 2', 'Artist', 'Album', 'alb1', 1000, 'flac', 1000, 44100, 16, '/local/path2', null, null, 5000, 12346, 1, 2)")
+            db.version = 14
+        }
+
+        val store = AlbumLocalStore(context)
+        val loaded1 = store.getDownloadedTrack("src", "trk1")
+        assertNotNull(loaded1)
+        assertEquals(10f, loaded1?.userRating)
+
+        val loaded2 = store.getDownloadedTrack("src", "trk2")
+        assertNotNull(loaded2)
+        assertNull(loaded2?.userRating)
+
+        // Test updateDownloadedTrackFavoriteStatus
+        store.updateDownloadedTrackFavoriteStatus("src", "trk2", 10f)
+        val updated2 = store.getDownloadedTrack("src", "trk2")
+        assertEquals(10f, updated2?.userRating)
+
+        store.updateDownloadedTrackFavoriteStatus("src", "trk1", null)
+        // trk1 now has explicit null in downloaded_tracks, but fallback will check tracks table if needed or return null
+        context.openOrCreateDatabase(DATABASE_NAME, Context.MODE_PRIVATE, null).use { db ->
+            assertEquals(15, db.version)
+            assertTrue(db.columnNames("downloaded_tracks").contains("user_rating"))
         }
         context.deleteDatabase(DATABASE_NAME)
     }
@@ -347,6 +702,13 @@ class AlbumLocalStoreMigrationTest {
 
     private fun SQLiteDatabase.columnNames(table: String): Set<String> =
         rawQuery("PRAGMA table_info($table)", null).use { cursor ->
+            val index = cursor.getColumnIndex("name")
+            check(index >= 0)
+            buildSet { while (cursor.moveToNext()) add(cursor.getString(index)) }
+        }
+
+    private fun SQLiteDatabase.indexNames(table: String): Set<String> =
+        rawQuery("PRAGMA index_list($table)", null).use { cursor ->
             val index = cursor.getColumnIndex("name")
             check(index >= 0)
             buildSet { while (cursor.moveToNext()) add(cursor.getString(index)) }

@@ -16,6 +16,7 @@ enum class AppSection {
     RecentAdded,
     AllAlbums,
     Settings,
+    Downloads,
 }
 
 enum class MessageTone {

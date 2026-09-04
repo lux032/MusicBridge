@@ -55,9 +55,11 @@ object AppColors {
     // show through, matching the player action bar / floating nav pill.
     val CardSurface = Color.White.copy(alpha = 0.07f)
     val CardSurfaceStrong = Color.White.copy(alpha = 0.12f)
+    val Success = Color(0xFF4CAF50)
     val ErrorBg = Color(0xFF2A1616)
     val ErrorText = Color(0xFFFFB4AB)
 }
+
 
 object AlbumArtworkImageLoader {
     @Volatile

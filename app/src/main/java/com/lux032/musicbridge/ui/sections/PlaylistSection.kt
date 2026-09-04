@@ -12,6 +12,7 @@ import androidx.compose.foundation.lazy.LazyItemScope
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -32,6 +33,7 @@ internal fun PlaylistsSection(
     onGoHome: () -> Unit,
     onPlaylistClick: (PlexPlaylist) -> Unit,
     onOpenFavorites: () -> Unit,
+    onOpenDownloadedTracks: () -> Unit,
     isAiGenerating: Boolean,
     onGenerateAiPlaylist: (String) -> Unit,
     onCancelAiGeneration: () -> Unit,
@@ -60,8 +62,12 @@ internal fun PlaylistsSection(
             }
         }
         item {
+            DownloadedTracksCard(onClick = onOpenDownloadedTracks)
+        }
+        item {
             FavoriteTracksCard(onClick = onOpenFavorites)
         }
+
         if (playlists.isEmpty()) {
             item {
                 EmptyStateCard(
@@ -79,6 +85,47 @@ internal fun PlaylistsSection(
                     PlaylistCard(playlist = playlist, onClick = { onPlaylistClick(playlist) })
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun DownloadedTracksCard(
+    onClick: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(20.dp),
+        color = AppColors.CardSurface,
+        border = BorderStroke(1.dp, AppColors.Border),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    text = Strings.downloadedTracksTitle,
+                    color = AppColors.TextPrimary,
+                    fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Text(
+                    text = Strings.downloadedTracksDesc,
+                    color = AppColors.TextSecondary,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            Icon(
+                imageVector = Icons.Filled.CheckCircle,
+                contentDescription = null,
+                tint = LocalArtworkPalette.current.accent,
+                modifier = Modifier.size(24.dp),
+            )
         }
     }
 }
@@ -181,6 +228,10 @@ internal fun PlaylistDetailSection(
     onBack: () -> Unit,
     onToggleTrackFavorite: (PlexTrackStream) -> Unit,
     onQueueTrack: (PlexTrackStream, QueuePlacement) -> Unit,
+    downloadedTrackKeys: Set<String> = emptySet(),
+    downloadProgress: Map<String, Float> = emptyMap(),
+    onDownloadTrack: (PlexTrackStream) -> Unit = {},
+    onDeleteDownloadedTrack: (PlexTrackStream) -> Unit = {},
     onPlayPlaylist: (PlexPlaylistTracksResult) -> Unit,
     onShufflePlaylist: (PlexPlaylistTracksResult) -> Unit,
     onPlayTrack: (PlexPlaylist, PlexTrackStream, Int) -> Unit,
@@ -297,6 +348,11 @@ internal fun PlaylistDetailSection(
             contentType = { _, _ -> "track" },
         ) { index, track ->
             var showQueueMenu by remember { mutableStateOf(false) }
+            val isDownloaded = remember(track.sourceId, track.ratingKey, downloadedTrackKeys) {
+                "${track.sourceId}:${track.ratingKey}" in downloadedTrackKeys || track.ratingKey in downloadedTrackKeys
+            }
+            val progress = downloadProgress["${track.sourceId}:${track.ratingKey}"]
+
             Box(modifier = Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)) {
             Surface(
                 modifier = Modifier
@@ -322,7 +378,27 @@ internal fun PlaylistDetailSection(
                         modifier = Modifier.weight(1f),
                         verticalArrangement = Arrangement.spacedBy(3.dp),
                     ) {
-                        Text("${index + 1}. ${track.title}", color = AppColors.TextPrimary, fontWeight = FontWeight.Medium)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            Text("${index + 1}. ${track.title}", color = AppColors.TextPrimary, fontWeight = FontWeight.Medium)
+                            if (isDownloaded) {
+                                Icon(
+                                    imageVector = Icons.Filled.CheckCircle,
+                                    contentDescription = null,
+                                    tint = AppColors.Success,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                            } else if (progress != null) {
+                                CircularProgressIndicator(
+                                    progress = { progress },
+                                    modifier = Modifier.size(14.dp),
+                                    strokeWidth = 2.dp,
+                                    color = LocalArtworkPalette.current.accent,
+                                )
+                            }
+                        }
                         track.durationMillis?.let {
                             Text(formatDuration(it), color = AppColors.TextTertiary)
                         }
@@ -364,8 +440,13 @@ internal fun PlaylistDetailSection(
                         showQueueMenu = false
                         onQueueTrack(track, placement)
                     },
+                    isDownloaded = isDownloaded,
+                    onDownloadAction = {
+                        if (isDownloaded) onDeleteDownloadedTrack(track) else onDownloadTrack(track)
+                    },
                 )
             }
         }
+
     }
 }

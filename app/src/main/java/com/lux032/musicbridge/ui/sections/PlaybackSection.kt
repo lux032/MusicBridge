@@ -1561,6 +1561,12 @@ internal fun AlbumDetailSection(
     onToggleTrackFavorite: (PlexTrackStream) -> Unit,
     onQueueAlbum: (PlexAlbum, QueuePlacement) -> Unit,
     onQueueTrack: (PlexTrackStream, QueuePlacement) -> Unit,
+    downloadedTrackKeys: Set<String> = emptySet(),
+    downloadProgress: Map<String, Float> = emptyMap(),
+    onDownloadTrack: (PlexTrackStream) -> Unit = {},
+    onDeleteDownloadedTrack: (PlexTrackStream) -> Unit = {},
+    onDownloadAlbum: (PlexAlbum, List<PlexTrackStream>) -> Unit = { _, _ -> },
+    onDeleteDownloadedAlbum: (PlexAlbum) -> Unit = {},
     onPlayAlbum: (PlexAlbumTracksResult) -> Unit,
     onPlayTrack: (PlexAlbum, PlexTrackStream) -> Unit,
 ) {
@@ -1618,6 +1624,10 @@ internal fun AlbumDetailSection(
                     onToggleAlbumFavorite = onToggleAlbumFavorite,
                     onQueueAlbum = onQueueAlbum,
                     onPlayAlbum = onPlayAlbum,
+                    downloadedTrackKeys = downloadedTrackKeys,
+                    downloadProgress = downloadProgress,
+                    onDownloadAlbum = onDownloadAlbum,
+                    onDeleteDownloadedAlbum = onDeleteDownloadedAlbum,
                 )
             }
             LazyColumn(
@@ -1640,12 +1650,17 @@ internal fun AlbumDetailSection(
                             track = track,
                             isPlaybackLoading = isPlaybackLoading,
                             isFavoriteLoading = isFavoriteLoading,
+                            downloadedTrackKeys = downloadedTrackKeys,
+                            downloadProgress = downloadProgress,
+                            onDownloadTrack = onDownloadTrack,
+                            onDeleteDownloadedTrack = onDeleteDownloadedTrack,
                             onToggleTrackFavorite = onToggleTrackFavorite,
                             onQueueTrack = onQueueTrack,
                             onPlayTrack = onPlayTrack,
                         )
                     }
                 }
+
             }
         }
     } else {
@@ -1670,6 +1685,10 @@ internal fun AlbumDetailSection(
                     onToggleAlbumFavorite = onToggleAlbumFavorite,
                     onQueueAlbum = onQueueAlbum,
                     onPlayAlbum = onPlayAlbum,
+                    downloadedTrackKeys = downloadedTrackKeys,
+                    downloadProgress = downloadProgress,
+                    onDownloadAlbum = onDownloadAlbum,
+                    onDeleteDownloadedAlbum = onDeleteDownloadedAlbum,
                 )
             }
             itemsIndexed(
@@ -1684,12 +1703,17 @@ internal fun AlbumDetailSection(
                         track = track,
                         isPlaybackLoading = isPlaybackLoading,
                         isFavoriteLoading = isFavoriteLoading,
+                        downloadedTrackKeys = downloadedTrackKeys,
+                        downloadProgress = downloadProgress,
+                        onDownloadTrack = onDownloadTrack,
+                        onDeleteDownloadedTrack = onDeleteDownloadedTrack,
                         onToggleTrackFavorite = onToggleTrackFavorite,
                         onQueueTrack = onQueueTrack,
                         onPlayTrack = onPlayTrack,
                     )
                 }
             }
+
         }
     }
     }
@@ -1708,10 +1732,23 @@ private fun AlbumDetailHeroWide(
     onToggleAlbumFavorite: (PlexAlbum) -> Unit,
     onQueueAlbum: (PlexAlbum, QueuePlacement) -> Unit,
     onPlayAlbum: (PlexAlbumTracksResult) -> Unit,
+    downloadedTrackKeys: Set<String> = emptySet(),
+    downloadProgress: Map<String, Float> = emptyMap(),
+    onDownloadAlbum: (PlexAlbum, List<PlexTrackStream>) -> Unit = { _, _ -> },
+    onDeleteDownloadedAlbum: (PlexAlbum) -> Unit = {},
 ) {
     val layoutInfo = LocalAppLayoutInfo.current
     val palette = LocalArtworkPalette.current
     val album = trackResult.album
+    val totalTracks = trackResult.tracks.size
+    val downloadedCount = trackResult.tracks.count { track ->
+        "${track.sourceId}:${track.ratingKey}" in downloadedTrackKeys || track.ratingKey in downloadedTrackKeys
+    }
+    val isAnyDownloading = trackResult.tracks.any { track ->
+        "${track.sourceId}:${track.ratingKey}" in downloadProgress
+    }
+    val isAllDownloaded = totalTracks > 0 && downloadedCount == totalTracks
+    var showDeleteAlbumDialog by remember { mutableStateOf(false) }
 
     Box(
         modifier = Modifier.fillMaxWidth(),
@@ -1744,6 +1781,15 @@ private fun AlbumDetailHeroWide(
             onPlay = {
                 onShowAlbumQueueMenuChange(false)
                 onPlayAlbum(trackResult)
+            },
+            isDownloaded = isAllDownloaded,
+            downloadLabel = if (isAllDownloaded) Strings.deleteAlbumDownload else Strings.downloadAlbumOriginal,
+            onDownloadAction = {
+                if (isAllDownloaded) {
+                    showDeleteAlbumDialog = true
+                } else {
+                    onDownloadAlbum(album, trackResult.tracks)
+                }
             },
         )
     }
@@ -1805,7 +1851,67 @@ private fun AlbumDetailHeroWide(
                     modifier = Modifier.size(22.dp),
                 )
             }
+            if (isAllDownloaded) {
+                IconCircleButton(
+                    onClick = { showDeleteAlbumDialog = true },
+                    modifier = Modifier.semantics { contentDescription = Strings.deleteAlbumDownload },
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.CheckCircle,
+                        contentDescription = Strings.deleteAlbumDownload,
+                        tint = palette.accent,
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
+            } else if (isAnyDownloading) {
+                Box(
+                    modifier = Modifier.size(44.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(22.dp),
+                        strokeWidth = 2.5.dp,
+                        color = palette.accent,
+                    )
+                }
+            } else {
+                IconCircleButton(
+                    onClick = { onDownloadAlbum(album, trackResult.tracks) },
+                    modifier = Modifier.semantics { contentDescription = Strings.downloadAlbumOriginal },
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Download,
+                        contentDescription = Strings.downloadAlbumOriginal,
+                        tint = AppColors.TextPrimary,
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
+            }
         }
+    }
+
+    if (showDeleteAlbumDialog) {
+        AlertDialog(
+            onDismissRequest = { showDeleteAlbumDialog = false },
+            title = { Text(Strings.deleteAlbumDownload) },
+            text = { Text(Strings.confirmDeleteAlbumDownload) },
+            confirmButton = {
+                TextButton(onClick = {
+                    showDeleteAlbumDialog = false
+                    onDeleteDownloadedAlbum(album)
+                }) {
+                    Text(Strings.confirmDelete, color = AppColors.ErrorText)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteAlbumDialog = false }) {
+                    Text(Strings.cancel, color = AppColors.TextSecondary)
+                }
+            },
+            containerColor = AppColors.CardSurface,
+            titleContentColor = AppColors.TextPrimary,
+            textContentColor = AppColors.TextSecondary,
+        )
     }
 }
 
@@ -1821,6 +1927,10 @@ private fun AlbumDetailHeroCompact(
     onToggleAlbumFavorite: (PlexAlbum) -> Unit,
     onQueueAlbum: (PlexAlbum, QueuePlacement) -> Unit,
     onPlayAlbum: (PlexAlbumTracksResult) -> Unit,
+    downloadedTrackKeys: Set<String> = emptySet(),
+    downloadProgress: Map<String, Float> = emptyMap(),
+    onDownloadAlbum: (PlexAlbum, List<PlexTrackStream>) -> Unit = { _, _ -> },
+    onDeleteDownloadedAlbum: (PlexAlbum) -> Unit = {},
 ) {
     val layoutInfo = LocalAppLayoutInfo.current
     val palette = LocalArtworkPalette.current
@@ -1831,6 +1941,15 @@ private fun AlbumDetailHeroCompact(
         ?.uppercase(Locale.ROOT)
     val playEnabled = !isPlaybackLoading && trackResult.tracks.isNotEmpty()
     var showActionQueueMenu by remember(album.ratingKey) { mutableStateOf(false) }
+    val totalTracks = trackResult.tracks.size
+    val downloadedCount = trackResult.tracks.count { track ->
+        "${track.sourceId}:${track.ratingKey}" in downloadedTrackKeys || track.ratingKey in downloadedTrackKeys
+    }
+    val isAnyDownloading = trackResult.tracks.any { track ->
+        "${track.sourceId}:${track.ratingKey}" in downloadProgress
+    }
+    val isAllDownloaded = totalTracks > 0 && downloadedCount == totalTracks
+    var showDeleteAlbumDialog by remember { mutableStateOf(false) }
 
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -1866,6 +1985,15 @@ private fun AlbumDetailHeroCompact(
                 onPlay = {
                     onShowAlbumQueueMenuChange(false)
                     onPlayAlbum(trackResult)
+                },
+                isDownloaded = isAllDownloaded,
+                downloadLabel = if (isAllDownloaded) Strings.deleteAlbumDownload else Strings.downloadAlbumOriginal,
+                onDownloadAction = {
+                    if (isAllDownloaded) {
+                        showDeleteAlbumDialog = true
+                    } else {
+                        onDownloadAlbum(album, trackResult.tracks)
+                    }
                 },
             )
         }
@@ -1923,6 +2051,42 @@ private fun AlbumDetailHeroCompact(
                     isLoading = isFavoriteLoading,
                     onClick = { onToggleAlbumFavorite(album) },
                 )
+                if (isAllDownloaded) {
+                    IconCircleButton(
+                        onClick = { showDeleteAlbumDialog = true },
+                        modifier = Modifier.semantics { contentDescription = Strings.deleteAlbumDownload },
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.CheckCircle,
+                            contentDescription = Strings.deleteAlbumDownload,
+                            tint = palette.accent,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                } else if (isAnyDownloading) {
+                    Box(
+                        modifier = Modifier.size(40.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            strokeWidth = 2.dp,
+                            color = palette.accent,
+                        )
+                    }
+                } else {
+                    IconCircleButton(
+                        onClick = { onDownloadAlbum(album, trackResult.tracks) },
+                        modifier = Modifier.semantics { contentDescription = Strings.downloadAlbumOriginal },
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Download,
+                            contentDescription = Strings.downloadAlbumOriginal,
+                            tint = AppColors.TextPrimary,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                }
                 Box {
                     IconCircleButton(
                         onClick = {
@@ -1951,7 +2115,32 @@ private fun AlbumDetailHeroCompact(
             }
         }
     }
+
+    if (showDeleteAlbumDialog) {
+        AlertDialog(
+            onDismissRequest = { showDeleteAlbumDialog = false },
+            title = { Text(Strings.deleteAlbumDownload) },
+            text = { Text(Strings.confirmDeleteAlbumDownload) },
+            confirmButton = {
+                TextButton(onClick = {
+                    showDeleteAlbumDialog = false
+                    onDeleteDownloadedAlbum(album)
+                }) {
+                    Text(Strings.confirmDelete, color = AppColors.ErrorText)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteAlbumDialog = false }) {
+                    Text(Strings.cancel, color = AppColors.TextSecondary)
+                }
+            },
+            containerColor = AppColors.CardSurface,
+            titleContentColor = AppColors.TextPrimary,
+            textContentColor = AppColors.TextSecondary,
+        )
+    }
 }
+
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -1961,11 +2150,20 @@ private fun AlbumTrackRow(
     track: PlexTrackStream,
     isPlaybackLoading: Boolean,
     isFavoriteLoading: Boolean,
+    downloadedTrackKeys: Set<String> = emptySet(),
+    downloadProgress: Map<String, Float> = emptyMap(),
+    onDownloadTrack: (PlexTrackStream) -> Unit = {},
+    onDeleteDownloadedTrack: (PlexTrackStream) -> Unit = {},
     onToggleTrackFavorite: (PlexTrackStream) -> Unit,
     onQueueTrack: (PlexTrackStream, QueuePlacement) -> Unit,
     onPlayTrack: (PlexAlbum, PlexTrackStream) -> Unit,
 ) {
     var showQueueMenu by remember { mutableStateOf(false) }
+    val isDownloaded = remember(track.sourceId, track.ratingKey, downloadedTrackKeys) {
+        "${track.sourceId}:${track.ratingKey}" in downloadedTrackKeys || track.ratingKey in downloadedTrackKeys
+    }
+    val progress = downloadProgress["${track.sourceId}:${track.ratingKey}"]
+
     Box {
     Surface(
         modifier = Modifier.combinedClickable(
@@ -1988,11 +2186,31 @@ private fun AlbumTrackRow(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(3.dp),
             ) {
-                Text(
-                    text = "${index + 1}. ${track.title}",
-                    color = AppColors.TextPrimary,
-                    fontWeight = FontWeight.Medium,
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Text(
+                        text = "${index + 1}. ${track.title}",
+                        color = AppColors.TextPrimary,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    if (isDownloaded) {
+                        Icon(
+                            imageVector = Icons.Filled.CheckCircle,
+                            contentDescription = null,
+                            tint = AppColors.Success,
+                            modifier = Modifier.size(16.dp),
+                        )
+                    } else if (progress != null) {
+                        CircularProgressIndicator(
+                            progress = { progress },
+                            modifier = Modifier.size(14.dp),
+                            strokeWidth = 2.dp,
+                            color = LocalArtworkPalette.current.accent,
+                        )
+                    }
+                }
                 track.durationMillis?.let { duration ->
                     Text(formatDuration(duration), color = AppColors.TextTertiary)
                 }
@@ -2026,9 +2244,14 @@ private fun AlbumTrackRow(
                 showQueueMenu = false
                 onQueueTrack(track, placement)
             },
+            isDownloaded = isDownloaded,
+            onDownloadAction = {
+                if (isDownloaded) onDeleteDownloadedTrack(track) else onDownloadTrack(track)
+            },
         )
     }
 }
+
 
 @Composable
 private fun WheelPickerField(
@@ -2334,6 +2557,7 @@ internal fun SettingsSection(
     cellularPrecacheCount: LocalPrecacheCount,
     localCacheSize: LocalCacheSize,
     localCacheUsedBytes: Long,
+    offlineDownloadedBytes: Long = 0L,
     onOpusTranscodeModeChange: (OpusTranscodeMode) -> Unit = {},
     onSonosHiResTranscodeModeChange: (SonosHiResTranscodeMode) -> Unit = {},
     onWifiQualityChange: (LocalStreamingLimit) -> Unit,
@@ -2343,6 +2567,7 @@ internal fun SettingsSection(
     onCellularPrecacheCountChange: (LocalPrecacheCount) -> Unit,
     onLocalCacheSizeChange: (LocalCacheSize) -> Unit,
     onClearLocalCache: () -> Unit,
+    onClearAllDownloads: () -> Unit = {},
     onSaveServer: (MusicServerProfile, Boolean) -> Unit,
     onSwitchServer: (String) -> Unit,
     onDeleteServer: (String) -> Unit,
@@ -2565,6 +2790,7 @@ internal fun SettingsSection(
             cellularPrecacheCount = cellularPrecacheCount,
             localCacheSize = localCacheSize,
             localCacheUsedBytes = localCacheUsedBytes,
+            offlineDownloadedBytes = offlineDownloadedBytes,
             onWifiQualityChange = onWifiQualityChange,
             onCellularQualityChange = onCellularQualityChange,
             onLocalOpusBitrateChange = onLocalOpusBitrateChange,
@@ -2572,6 +2798,7 @@ internal fun SettingsSection(
             onCellularPrecacheCountChange = onCellularPrecacheCountChange,
             onLocalCacheSizeChange = onLocalCacheSizeChange,
             onClearLocalCache = onClearLocalCache,
+            onClearAllDownloads = onClearAllDownloads,
         )
         PlaybackDiagnosticsCard()
         HorizontalDivider(color = AppColors.Border)
@@ -2695,6 +2922,7 @@ internal fun LocalPlaybackSettingsCard(
     cellularPrecacheCount: LocalPrecacheCount,
     localCacheSize: LocalCacheSize,
     localCacheUsedBytes: Long,
+    offlineDownloadedBytes: Long = 0L,
     onWifiQualityChange: (LocalStreamingLimit) -> Unit,
     onCellularQualityChange: (LocalStreamingLimit) -> Unit,
     onLocalOpusBitrateChange: (LocalOpusBitrate) -> Unit,
@@ -2702,6 +2930,7 @@ internal fun LocalPlaybackSettingsCard(
     onCellularPrecacheCountChange: (LocalPrecacheCount) -> Unit,
     onLocalCacheSizeChange: (LocalCacheSize) -> Unit,
     onClearLocalCache: () -> Unit,
+    onClearAllDownloads: () -> Unit = {},
 ) {
     // true = editing the WiFi quality, false = cellular.
     var qualityPickerTarget by remember { mutableStateOf<Boolean?>(null) }
@@ -2784,6 +3013,38 @@ internal fun LocalPlaybackSettingsCard(
                     Text(
                         text = Strings.clearCache,
                         color = if (localCacheUsedBytes > 0L) AppColors.TextSecondary else AppColors.TextTertiary,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+            HorizontalDivider(color = AppColors.Border, modifier = Modifier.padding(vertical = 4.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        text = Strings.offlineDownloadedSpaceTitle,
+                        color = AppColors.TextPrimary,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    Text(
+                        text = formatCacheSizeLabel(offlineDownloadedBytes),
+                        color = AppColors.TextTertiary,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                TextButton(
+                    onClick = onClearAllDownloads,
+                    enabled = offlineDownloadedBytes > 0L,
+                ) {
+                    Text(
+                        text = Strings.clearAllDownloads,
+                        color = if (offlineDownloadedBytes > 0L) AppColors.TextSecondary else AppColors.TextTertiary,
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }

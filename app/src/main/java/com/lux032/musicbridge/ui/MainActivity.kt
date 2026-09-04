@@ -276,6 +276,7 @@ fun PlexAlbumScreen(
             AppSection.AllAlbums,
             AppSection.Artists,
             AppSection.Playlists,
+            AppSection.Downloads,
             AppSection.Settings -> state.navigateBack()
             AppSection.Home -> Unit
         }
@@ -290,7 +291,8 @@ fun PlexAlbumScreen(
             AppSection.ArtistAlbums,
             AppSection.FavoriteCollection,
             AppSection.RecentAdded,
-            AppSection.PlaylistDetail -> false
+            AppSection.PlaylistDetail,
+            AppSection.Downloads -> false
             else -> true
         }
 
@@ -434,12 +436,15 @@ fun PlexAlbumScreen(
                             onGoHome = { state.switchPrimarySection(AppSection.Home) },
                             onPlaylistClick = state::openPlaylistDetail,
                             onOpenFavorites = state::openFavoriteTracks,
+                            onOpenDownloadedTracks = state::openDownloadedTracks,
                             isAiGenerating = state.isAiGenerating,
                             onGenerateAiPlaylist = state::generateAiPlaylist,
                             onCancelAiGeneration = state::cancelAiGeneration,
                         )
                     }
                 } else if (currentSection == AppSection.PlaylistDetail) {
+                    val downloadedTrackKeys by state.downloadedTrackKeys.collectAsState()
+                    val downloadProgress by state.activeDownloadProgress.collectAsState()
                     Box(
                         modifier = Modifier.fillMaxSize(),
                     ) {
@@ -449,6 +454,10 @@ fun PlexAlbumScreen(
                             isPlaybackLoading = state.isPlaybackCommandLoading,
                             isFavoriteLoading = state.isFavoriteMutationLoading,
                             bottomContentPadding = contentBottomPadding,
+                            downloadedTrackKeys = downloadedTrackKeys,
+                            downloadProgress = downloadProgress,
+                            onDownloadTrack = state::downloadTrack,
+                            onDeleteDownloadedTrack = state::deleteDownloadedTrack,
                             onBack = state::navigateBack,
                             onToggleTrackFavorite = state::toggleTrackFavorite,
                             onQueueTrack = state::enqueueTrack,
@@ -482,6 +491,7 @@ fun PlexAlbumScreen(
                             },
                         )
                     }
+
                 } else if (currentSection == AppSection.PlaybackDetail) {
                     val sleepTimerState by state.sleepTimerState.collectAsState()
                     // No outer padding: the player draws its own full-bleed artwork-tinted
@@ -541,6 +551,8 @@ fun PlexAlbumScreen(
                             state.loadArtistAlbums(it)
                         }
                     }
+                    val downloadedTrackKeys by state.downloadedTrackKeys.collectAsState()
+                    val downloadProgress by state.activeDownloadProgress.collectAsState()
                     Box(
                         modifier = Modifier.fillMaxSize(),
                     ) {
@@ -554,6 +566,10 @@ fun PlexAlbumScreen(
                             isArtistTracksLoading = state.isArtistTracksLoading,
                             bottomContentPadding = contentBottomPadding,
                             listState = artistAlbumsListState,
+                            downloadedTrackKeys = downloadedTrackKeys,
+                            downloadProgress = downloadProgress,
+                            onDownloadTrack = state::downloadTrack,
+                            onDeleteDownloadedTrack = state::deleteDownloadedTrack,
                             onBack = state::navigateBack,
                             onAlbumClick = state::openAlbumDetail,
                             onAlbumQueueAction = state::enqueueAlbum,
@@ -645,6 +661,8 @@ fun PlexAlbumScreen(
                     }
                 } else if (currentSection == AppSection.AlbumDetail) {
                     val albumTrackListState = rememberLazyListState()
+                    val downloadedTrackKeys by state.downloadedTrackKeys.collectAsState()
+                    val downloadProgress by state.activeDownloadProgress.collectAsState()
                     Box(
                         modifier = Modifier.fillMaxSize(),
                     ) {
@@ -655,6 +673,12 @@ fun PlexAlbumScreen(
                             isFavoriteLoading = state.isFavoriteMutationLoading,
                             bottomContentPadding = contentBottomPadding,
                             trackListState = albumTrackListState,
+                            downloadedTrackKeys = downloadedTrackKeys,
+                            downloadProgress = downloadProgress,
+                            onDownloadTrack = state::downloadTrack,
+                            onDeleteDownloadedTrack = state::deleteDownloadedTrack,
+                            onDownloadAlbum = state::downloadAlbum,
+                            onDeleteDownloadedAlbum = state::deleteDownloadedAlbum,
                             onReturnHome = state::navigateBack,
                             onArtistClick = state::openArtistAlbumsByName,
                             onToggleAlbumFavorite = state::toggleAlbumFavorite,
@@ -682,6 +706,26 @@ fun PlexAlbumScreen(
                                     state.startSingleTrackPlayback(album, listOf(track), 0)
                                 }
                             },
+                        )
+                    }
+                } else if (currentSection == AppSection.Downloads) {
+                    val downloadedAlbums by state.downloadedAlbums.collectAsState()
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                    ) {
+                        DownloadsSection(
+                            albums = downloadedAlbums,
+                            bottomContentPadding = contentBottomPadding,
+                            onBack = state::navigateBack,
+                            onPlayAlbum = state::playDownloadedAlbum,
+                            onPlayTrack = { group, _, index ->
+                                state.playDownloadedAlbum(group, startIndex = index)
+                            },
+                            onDeleteAlbum = state::deleteDownloadedAlbum,
+                            onDeleteTrack = { track ->
+                                state.deleteDownloadedTrack(track.toTrackStream())
+                            },
+                            onShuffleAll = state::shuffleAllDownloadedTracks,
                         )
                     }
                 } else if (currentSection == AppSection.Home) {
@@ -768,6 +812,7 @@ fun PlexAlbumScreen(
                                 cellularPrecacheCount = state.cellularPrecacheCount,
                                 localCacheSize = state.localCacheSize,
                                 localCacheUsedBytes = state.localCacheUsedBytes(),
+                                offlineDownloadedBytes = state.totalDownloadedBytes(),
                                 onOpusTranscodeModeChange = state::updateOpusTranscodeMode,
                                 onSonosHiResTranscodeModeChange = state::updateSonosHiResTranscodeMode,
                                 onWifiQualityChange = { state.updateLocalStreamingLimit(wifi = true, limit = it) },
@@ -777,6 +822,7 @@ fun PlexAlbumScreen(
                                 onCellularPrecacheCountChange = { state.updateLocalPrecacheCount(wifi = false, count = it) },
                                 onLocalCacheSizeChange = state::updateLocalCacheSize,
                                 onClearLocalCache = state::clearLocalAudioCache,
+                                onClearAllDownloads = state::clearAllDownloads,
                                 onSaveServer = state::saveServerProfile,
                                 onSwitchServer = state::switchServer,
                                 onDeleteServer = state::deleteServer,
@@ -788,6 +834,7 @@ fun PlexAlbumScreen(
                         AppSection.Playlists -> Unit
                         AppSection.AllAlbums -> Unit
                         AppSection.PlaylistDetail -> Unit
+                        AppSection.Downloads -> Unit
                     }
                 }
             }

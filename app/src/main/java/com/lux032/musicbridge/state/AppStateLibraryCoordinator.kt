@@ -8,6 +8,7 @@ import com.lux032.musicbridge.plex.PlexPlaylistTracksResult
 import com.lux032.musicbridge.plex.PlexSection
 import com.lux032.musicbridge.plex.PlexTrackStream
 import com.lux032.musicbridge.plex.isFavorite
+import com.lux032.musicbridge.storage.DownloadedAlbumGroup
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -241,6 +242,84 @@ internal class AppStateLibraryCoordinator(
         }
     }
 
+    fun openDownloadedTracks() {
+        state.navigateTo(AppSection.Downloads)
+    }
+
+    fun downloadAlbum(album: PlexAlbum, tracks: List<PlexTrackStream>) {
+        val unDownloaded = tracks.filterNot {
+            state.offlineDownloadManager.isTrackDownloaded(it.sourceId, it.ratingKey)
+        }
+        if (unDownloaded.isEmpty()) {
+            state.actionMessage = "整张专辑已在本地"
+            return
+        }
+        unDownloaded.forEach { state.offlineDownloadManager.enqueueDownload(it) }
+        state.actionMessage = Strings.albumDownloadQueued(unDownloaded.size)
+    }
+
+    fun deleteDownloadedAlbum(group: DownloadedAlbumGroup) {
+        state.offlineDownloadManager.deleteAlbumDownload(group.sourceId, group.albumRatingKey)
+        state.actionMessage = "已删除专辑离线原档: ${group.albumTitle}"
+    }
+
+    fun deleteDownloadedAlbum(album: PlexAlbum) {
+        state.offlineDownloadManager.deleteAlbumDownload(album.sourceId, album.ratingKey)
+        state.actionMessage = "已删除专辑离线原档: ${album.title}"
+    }
+
+    fun playDownloadedAlbum(group: DownloadedAlbumGroup, startIndex: Int = 0) {
+        val tracks = group.tracks.map { it.toTrackStream() }
+        if (tracks.isEmpty()) return
+        val fakeAlbum = PlexAlbum(
+            ratingKey = group.albumRatingKey.ifBlank { "downloaded:${group.albumTitle}" },
+            title = group.albumTitle,
+            artistName = group.artistName,
+            year = null,
+            thumbUrl = group.thumbPath?.let { "file://$it" },
+            userRating = null,
+            addedAtEpochSeconds = null,
+            lastViewedAtEpochSeconds = null,
+            section = PlexSection("", "", ""),
+            sourceId = group.sourceId,
+        )
+        state.selectedPlaybackTarget = PlaybackTarget.LocalDevice
+        state.localPlaybackCoordinator.startLocalPlayback(
+            album = fakeAlbum,
+            tracks = tracks,
+            startIndex = startIndex.coerceIn(0, tracks.lastIndex),
+            initialPositionMillis = 0L,
+        )
+    }
+
+    fun shuffleAllDownloadedTracks() {
+        val allDownloaded = state.offlineDownloadManager.downloadedAlbums.value
+            .flatMap { it.tracks }
+            .map { it.toTrackStream() }
+            .shuffled()
+        if (allDownloaded.isEmpty()) return
+        val fakeAlbum = PlexAlbum(
+            ratingKey = "downloaded:all",
+            title = Strings.allDownloadedTracks,
+            artistName = Strings.offlineMusic,
+            year = null,
+            thumbUrl = allDownloaded.firstNotNullOfOrNull { it.thumbUrl },
+            userRating = null,
+            addedAtEpochSeconds = null,
+            lastViewedAtEpochSeconds = null,
+            section = PlexSection("", "", ""),
+            sourceId = allDownloaded.firstOrNull()?.sourceId.orEmpty(),
+        )
+        state.selectedPlaybackTarget = PlaybackTarget.LocalDevice
+        state.localPlaybackCoordinator.startLocalPlayback(
+            album = fakeAlbum,
+            tracks = allDownloaded,
+            startIndex = 0,
+            initialPositionMillis = 0L,
+        )
+    }
+
+
     fun openFavoriteTracks() {
         val profile = state.connectionPreferences
         state.isLoading = true
@@ -349,6 +428,11 @@ internal class AppStateLibraryCoordinator(
                 state.albumLocalStore.deleteFavoriteTrack(updatedTrack.sourceId, updatedTrack.ratingKey)
             }
             state.albumLocalStore.updateAlbumTrackFavoriteStatus(
+                updatedTrack.sourceId,
+                updatedTrack.ratingKey,
+                updatedTrack.userRating,
+            )
+            state.albumLocalStore.updateDownloadedTrackFavoriteStatus(
                 updatedTrack.sourceId,
                 updatedTrack.ratingKey,
                 updatedTrack.userRating,
@@ -479,6 +563,19 @@ internal class AppStateLibraryCoordinator(
         }
     }
 
+    private fun Throwable.isNetworkOfflineError(): Boolean {
+        var cause: Throwable? = this
+        while (cause != null) {
+            if (cause is java.net.UnknownHostException ||
+                cause is java.net.ConnectException ||
+                cause is java.net.SocketTimeoutException ||
+                cause is java.net.SocketException
+            ) return true
+            cause = cause.cause
+        }
+        return false
+    }
+
     fun toggleTrackFavorite(track: PlexTrackStream) {
         if (state.isFavoriteMutationLoading) return
 
@@ -486,18 +583,30 @@ internal class AppStateLibraryCoordinator(
         state.isFavoriteMutationLoading = true
         state.errorMessage = null
         state.actionMessage = null
+
+        // Update local memory and local database immediately (optimistic update)
+        val updatedTrack = track.copy(userRating = if (targetFavorite) 10f else null)
+        replaceTrackInState(updatedTrack)
+
         state.scope.launch {
             runCatching {
                 state.clientFor(track.sourceId).setTrackFavorite(track.ratingKey, targetFavorite)
             }.onSuccess {
-                replaceTrackInState(track.copy(userRating = if (targetFavorite) 10f else null))
                 state.actionMessage = if (targetFavorite) {
                     "已收藏单曲：${track.title}"
                 } else {
                     "已取消收藏单曲：${track.title}"
                 }
-            }.onFailure {
-                state.errorMessage = it.message ?: "未知错误"
+            }.onFailure { error ->
+                if (error.isNetworkOfflineError()) {
+                    state.actionMessage = if (targetFavorite) {
+                        "已在本地收藏单曲（离线）"
+                    } else {
+                        "已在本地取消收藏（离线）"
+                    }
+                } else {
+                    state.errorMessage = error.message ?: "未知错误"
+                }
             }
             state.isFavoriteMutationLoading = false
         }

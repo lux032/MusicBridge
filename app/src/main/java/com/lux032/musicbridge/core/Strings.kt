@@ -230,4 +230,35 @@ object Strings {
     val decadeEarlier get() = if (isZhCN) "更早" else "Earlier"
     val noFilteredAlbums get() = if (isZhCN) "没有符合当前筛选的专辑" else "No Albums Match the Filters"
     val noFilteredAlbumsDesc get() = if (isZhCN) "试试调整筛选条件，或清除搜索关键词。" else "Try adjusting the filters or clearing the search query."
+    val downloadOriginal get() = if (isZhCN) "下载原档" else "Download Original"
+    val deleteDownloaded get() = if (isZhCN) "删除离线原档" else "Delete Offline Track"
+    val downloadAlbumOriginal get() = if (isZhCN) "下载整张专辑" else "Download Whole Album"
+    val deleteAlbumDownload get() = if (isZhCN) "删除已下载专辑" else "Delete Downloaded Album"
+    val albumDownloadInProgress get() = if (isZhCN) "整张专辑正在下载中" else "Album download in progress"
+    val albumDownloadQueued get() = if (isZhCN) { count: Int -> "已将 $count 首歌曲加入下载队列" } else { count: Int -> "Added $count tracks to download queue" }
+    val confirmDeleteAlbumDownload get() = if (isZhCN) "确定要删除整张专辑的已下载原档吗？" else "Are you sure you want to delete all offline tracks for this album?"
+    val confirmDelete get() = if (isZhCN) "确定删除" else "Delete"
+    val offlineDownloadsTitle get() = if (isZhCN) "离线下载" else "Offline Downloads"
+    val offlineMusic get() = if (isZhCN) "离线音乐" else "Offline Music"
+    val allDownloadedTracks get() = if (isZhCN) "所有已下载歌曲" else "All Downloaded Tracks"
+    val shuffleAllOffline get() = if (isZhCN) "随机播放全部" else "Shuffle All"
+    val sortRecentDownloaded get() = if (isZhCN) "最新下载" else "Recently Downloaded"
+    val sortAlbumName get() = if (isZhCN) "专辑名称 A→Z" else "Album Name A–Z"
+    val sortStorageSize get() = if (isZhCN) "占用空间 大→小" else "Size, Largest First"
+    val noOfflineMusic get() = if (isZhCN) "暂无离线下载音乐" else "No Offline Music"
+    val noOfflineMusicDesc get() = if (isZhCN) "进入专辑或长按歌曲选择「下载原档」，下载后即可在断网环境下离线播放。" else "Download tracks or albums to listen offline without internet."
+    val downloadedTracksTitle get() = if (isZhCN) "已下载单曲" else "Downloaded Tracks"
+    val downloadedTracksDesc get() = if (isZhCN) "保存在本机的原档，支持断网完全离线播放" else "Original tracks saved on this device for offline playback"
+    val offlineDownloadedSpaceTitle get() = if (isZhCN) "离线原档占用" else "Offline Downloads Space"
+    val clearAllDownloads get() = if (isZhCN) "清空已下载原档" else "Clear All Downloads"
+    val downloadingProgress get() = if (isZhCN) { percent: Int -> "正在下载 $percent%" } else { percent: Int -> "Downloading $percent%" }
+    val downloadStarted get() = if (isZhCN) { title: String -> "已加入下载队列: $title" } else { title: String -> "Added to download queue: $title" }
+    val downloadSuccess get() = if (isZhCN) { title: String -> "下载完成: $title" } else { title: String -> "Download complete: $title" }
+    val downloadFailed get() = if (isZhCN) { title: String -> "下载失败: $title" } else { title: String -> "Download failed: $title" }
+    val deleteDownloadedSuccess get() = if (isZhCN) { title: String -> "已删除离线文件: $title" } else { title: String -> "Deleted offline file: $title" }
+    val clearAllDownloadsSuccess get() = if (isZhCN) "已清空所有离线原档" else "Cleared all offline downloads"
+    val insufficientStorageSpace get() = if (isZhCN) "存储空间不足，无法下载" else "Insufficient storage space to download"
+    val noDownloadedTracks get() = if (isZhCN) "暂无已下载歌曲" else "No Downloaded Tracks"
+    val noDownloadedTracksDesc get() = if (isZhCN) "长按任意歌曲选择「下载原档」，即可在此离线播放。" else "Long press any track and choose 'Download Original' to play offline here."
 }
+

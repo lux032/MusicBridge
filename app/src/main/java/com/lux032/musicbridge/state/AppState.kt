@@ -33,6 +33,8 @@ import com.lux032.musicbridge.service.PlaybackForegroundService
 import com.lux032.musicbridge.sonos.SonosController
 import com.lux032.musicbridge.sonos.SonosRoom
 import com.lux032.musicbridge.storage.AlbumLocalStore
+import com.lux032.musicbridge.storage.DownloadedAlbumGroup
+import com.lux032.musicbridge.storage.OfflineDownloadManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -78,7 +80,7 @@ class AppState(
 
     // Output selection is intentionally session-only: every new app process starts locally.
     var selectedPlaybackTarget by mutableStateOf<PlaybackTarget>(PlaybackTarget.LocalDevice)
-        private set
+        internal set
 
     /** The Sonos room currently targeted, if any — convenience for Sonos-only UI/logic. */
     val selectedSonosRoom: SonosRoom?
@@ -111,6 +113,10 @@ class AppState(
     private val initialProfiles = appPreferences.loadServerProfiles()
     private val initialActiveServerId = appPreferences.loadActiveServerId(initialProfiles)
     private val initialPreferences = initialProfiles.firstOrNull { it.id == initialActiveServerId } ?: MusicServerProfile()
+    val offlineDownloadManager = OfflineDownloadManager(context, albumLocalStore, scope)
+    val downloadedTrackKeys = offlineDownloadManager.downloadedKeys
+    val downloadedAlbums = offlineDownloadManager.downloadedAlbums
+    val activeDownloadProgress = offlineDownloadManager.downloadProgress
     private val libraryCoordinator = AppStateLibraryCoordinator(this)
     private val playbackCoordinator = AppStatePlaybackCoordinator(this)
     private val musicSourceClients = java.util.concurrent.ConcurrentHashMap<String, CachedMusicSourceClient>()
@@ -372,6 +378,35 @@ class AppState(
     }
 
     fun localCacheUsedBytes(): Long = LocalAudioCache.usedBytes()
+
+    fun totalDownloadedBytes(): Long = albumLocalStore.totalDownloadedBytes()
+
+    fun isTrackDownloaded(track: PlexTrackStream): Boolean =
+        offlineDownloadManager.isTrackDownloaded(track.sourceId, track.ratingKey)
+
+    fun downloadTrack(track: PlexTrackStream) {
+        actionMessage = Strings.downloadStarted(track.title)
+        offlineDownloadManager.enqueueDownload(track) { success ->
+            actionMessage = if (success) Strings.downloadSuccess(track.title) else Strings.downloadFailed(track.title)
+        }
+    }
+
+    fun deleteDownloadedTrack(track: PlexTrackStream) {
+        offlineDownloadManager.deleteDownload(track.sourceId, track.ratingKey)
+        actionMessage = Strings.deleteDownloadedSuccess(track.title)
+    }
+
+    fun clearAllDownloads() {
+        offlineDownloadManager.clearAllDownloads()
+        actionMessage = Strings.clearAllDownloadsSuccess
+    }
+
+    fun openDownloadedTracks() = libraryCoordinator.openDownloadedTracks()
+    fun downloadAlbum(album: PlexAlbum, tracks: List<PlexTrackStream>) = libraryCoordinator.downloadAlbum(album, tracks)
+    fun deleteDownloadedAlbum(album: PlexAlbum) = libraryCoordinator.deleteDownloadedAlbum(album)
+    fun deleteDownloadedAlbum(group: DownloadedAlbumGroup) = libraryCoordinator.deleteDownloadedAlbum(group)
+    fun playDownloadedAlbum(group: DownloadedAlbumGroup, startIndex: Int = 0) = libraryCoordinator.playDownloadedAlbum(group, startIndex)
+    fun shuffleAllDownloadedTracks() = libraryCoordinator.shuffleAllDownloadedTracks()
 
     fun updateAlbumSortOption(option: AlbumSortOption) {
         albumSortOption = option

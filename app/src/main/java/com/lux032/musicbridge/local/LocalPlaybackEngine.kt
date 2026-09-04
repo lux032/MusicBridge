@@ -94,13 +94,14 @@ internal fun cachedOriginalFallback(item: LocalQueueItem): CachedOriginalFallbac
     item.fallbackItem?.takeIf { item.isCachedOriginal }?.let(::CachedOriginalFallback)
 
 internal fun filterPrecacheItems(items: List<LocalQueueItem>): List<LocalQueueItem> =
-    items.filterNot(LocalQueueItem::isCachedOriginal)
+    items.filterNot { it.isCachedOriginal || it.url.startsWith("file:") }
+
 
 internal fun shouldEnqueueCompletionPrecache(
     isWifi: Boolean,
     item: LocalQueueItem,
     isFullyCached: Boolean,
-): Boolean = isWifi && !item.isCachedOriginal && !item.isTranscoded && !isFullyCached
+): Boolean = isWifi && !item.isCachedOriginal && !item.isTranscoded && !item.url.startsWith("file:") && !isFullyCached
 
 internal fun resolvePrecacheBatch(
     completionItems: List<LocalQueueItem>,
@@ -113,11 +114,12 @@ internal fun resolvePrecacheBatch(
     val released = if (isWifi) completionItems else emptyList()
     return (released + upcomingItems)
         .asSequence()
-        .filterNot(LocalQueueItem::isCachedOriginal)
+        .filterNot { it.isCachedOriginal || it.url.startsWith("file:") }
         .filterNot { it.cacheKey in protectedKeys }
         .distinctBy(LocalQueueItem::cacheKey)
         .toList()
 }
+
 
 internal fun pcmBitDepth(pcmEncoding: Int): Int? = when (pcmEncoding) {
     C.ENCODING_PCM_16BIT -> 16
@@ -294,6 +296,59 @@ object LocalAudioCache {
         val simpleCache = cache ?: return false
         val length = ContentMetadata.getContentLength(simpleCache.getContentMetadata(key))
         return length > 0L && simpleCache.isCached(key, 0L, length)
+    }
+
+    /**
+     * Cache Promotion: streams the fully cached original from SimpleCache into a destination file.
+     * Returns true on success, false if the key is missing/evicted/corrupted.
+     */
+    fun exportCachedToFile(key: String, uri: String, destinationFile: File): Boolean {
+        val simpleCache = synchronized(this) { cache } ?: return false
+        if (!isFullyCached(key)) return false
+
+        val cacheDataSource = CacheDataSource(
+            simpleCache,
+            FailingDataSource(),
+            FileDataSource(),
+            null,
+            CacheDataSource.FLAG_BLOCK_ON_CACHE,
+            null,
+        )
+        val tempDest = File(destinationFile.parentFile, "${destinationFile.name}.tmp")
+        return try {
+            val length = ContentMetadata.getContentLength(simpleCache.getContentMetadata(key))
+            val dataSpec = DataSpec.Builder()
+                .setUri(uri)
+                .setKey(key)
+                .setPosition(0L)
+                .setLength(if (length > 0L) length else C.LENGTH_UNSET.toLong())
+                .build()
+
+            cacheDataSource.open(dataSpec)
+            tempDest.outputStream().buffered().use { output ->
+                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                while (true) {
+                    val read = cacheDataSource.read(buffer, 0, buffer.size)
+                    if (read == C.RESULT_END_OF_INPUT) break
+                    if (read > 0) {
+                        output.write(buffer, 0, read)
+                    }
+                }
+            }
+            cacheDataSource.close()
+            if (length > 0L && tempDest.length() != length) {
+                tempDest.delete()
+                false
+            } else {
+                if (destinationFile.exists()) destinationFile.delete()
+                tempDest.renameTo(destinationFile)
+            }
+        } catch (e: Exception) {
+            runCatching { cacheDataSource.close() }
+            tempDest.delete()
+            Log.w("LocalAudioCache", "Failed to export cached key=$key to file", e)
+            false
+        }
     }
 
     /** Downloads queue resources sequentially. Cached-original items are cache-only by contract. */
@@ -493,18 +548,22 @@ internal fun parsePlexTranscodeEndpoint(url: String): PlexTranscodeEndpoint? = r
     if (serverUri.isBlank() || token.isBlank()) null else PlexTranscodeEndpoint(serverUri, token)
 }.getOrNull()
 
-internal enum class PlaybackDataSourceRoute { DIRECT_CACHE, TRANSCODE_CACHE, TRANSCODE_UPSTREAM, CACHED_ORIGINAL }
+internal enum class PlaybackDataSourceRoute { DIRECT_CACHE, TRANSCODE_CACHE, TRANSCODE_UPSTREAM, CACHED_ORIGINAL, OFFLINE_FILE }
 
 internal fun playbackDataSourceRoute(
+    url: String = "",
     isTranscoded: Boolean,
     isFullyCached: Boolean,
     isCachedOriginal: Boolean = false,
 ): PlaybackDataSourceRoute = when {
+    url.startsWith("file:") -> PlaybackDataSourceRoute.OFFLINE_FILE
     isCachedOriginal -> PlaybackDataSourceRoute.CACHED_ORIGINAL
     !isTranscoded -> PlaybackDataSourceRoute.DIRECT_CACHE
     isFullyCached -> PlaybackDataSourceRoute.TRANSCODE_CACHE
     else -> PlaybackDataSourceRoute.TRANSCODE_UPSTREAM
 }
+
+
 
 internal fun transcodeCacheInvariantHolds(
     fullyCached: Boolean,
@@ -584,12 +643,15 @@ private class RoutingDataSource(
             close()
         }
         val cacheKey = dataSpec.key
+        val url = dataSpec.uri.toString()
         val route = playbackDataSourceRoute(
-            isTranscoded = dataSpec.uri.toString().isPlexLiveTranscodeUrl(),
+            url = url,
+            isTranscoded = url.isPlexLiveTranscodeUrl(),
             isFullyCached = cacheKey != null && LocalAudioCache.isFullyCached(cacheKey),
             isCachedOriginal = isCachedOriginalKey(cacheKey),
         )
         val nextDelegate = when (route) {
+            PlaybackDataSourceRoute.OFFLINE_FILE -> FileDataSource()
             PlaybackDataSourceRoute.DIRECT_CACHE -> directCacheFactory.createDataSource()
             PlaybackDataSourceRoute.TRANSCODE_UPSTREAM -> httpFactory.createDataSource()
             PlaybackDataSourceRoute.TRANSCODE_CACHE,
@@ -602,6 +664,7 @@ private class RoutingDataSource(
                 null,
             )
         }
+
         val upstreamSpec = if (route == PlaybackDataSourceRoute.TRANSCODE_UPSTREAM) {
             val endpoint = priorSessionEndpoint ?: parsePlexTranscodeEndpoint(dataSpec.uri.toString())
             if (endpoint == null) {

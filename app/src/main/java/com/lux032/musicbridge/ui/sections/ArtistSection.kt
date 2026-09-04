@@ -468,6 +468,10 @@ internal fun ArtistAlbumsSection(
     onPlayAlbum: (PlexAlbum) -> Unit = {},
     onShuffleArtist: (ArtistSummary) -> Unit,
     onToggleArtistFavorite: (ArtistSummary) -> Unit,
+    downloadedTrackKeys: Set<String> = emptySet(),
+    downloadProgress: Map<String, Float> = emptyMap(),
+    onDownloadTrack: (PlexTrackStream) -> Unit = {},
+    onDeleteDownloadedTrack: (PlexTrackStream) -> Unit = {},
     onPlayTrack: (ArtistSummary, PlexTrackStream, Int) -> Unit,
     onQueueTrack: (PlexTrackStream, QueuePlacement) -> Unit,
 ) {
@@ -693,10 +697,15 @@ internal fun ArtistAlbumsSection(
                     track = track,
                     index = index,
                     isPlaybackLoading = isPlaybackLoading,
+                    downloadedTrackKeys = downloadedTrackKeys,
+                    downloadProgress = downloadProgress,
+                    onDownloadTrack = onDownloadTrack,
+                    onDeleteDownloadedTrack = onDeleteDownloadedTrack,
                     onPlayTrack = onPlayTrack,
                     onQueueTrack = onQueueTrack,
                 )
             }
+
         }
     }
 }
@@ -724,10 +733,19 @@ private fun ArtistTrackRow(
     track: PlexTrackStream,
     index: Int,
     isPlaybackLoading: Boolean,
+    downloadedTrackKeys: Set<String> = emptySet(),
+    downloadProgress: Map<String, Float> = emptyMap(),
+    onDownloadTrack: (PlexTrackStream) -> Unit = {},
+    onDeleteDownloadedTrack: (PlexTrackStream) -> Unit = {},
     onPlayTrack: (ArtistSummary, PlexTrackStream, Int) -> Unit,
     onQueueTrack: (PlexTrackStream, QueuePlacement) -> Unit,
 ) {
     var showQueueMenu by remember { mutableStateOf(false) }
+    val isDownloaded = remember(track.sourceId, track.ratingKey, downloadedTrackKeys) {
+        "${track.sourceId}:${track.ratingKey}" in downloadedTrackKeys || track.ratingKey in downloadedTrackKeys
+    }
+    val progress = downloadProgress["${track.sourceId}:${track.ratingKey}"]
+
     Box {
         Row(
             modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
@@ -743,7 +761,27 @@ private fun ArtistTrackRow(
                 thumbnailSize = 48.dp,
             )
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                Text(track.title, color = AppColors.TextPrimary, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Text(track.title, color = AppColors.TextPrimary, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if (isDownloaded) {
+                        Icon(
+                            imageVector = Icons.Filled.CheckCircle,
+                            contentDescription = null,
+                            tint = AppColors.Success,
+                            modifier = Modifier.size(14.dp),
+                        )
+                    } else if (progress != null) {
+                        CircularProgressIndicator(
+                            progress = { progress },
+                            modifier = Modifier.size(12.dp),
+                            strokeWidth = 2.dp,
+                            color = LocalArtworkPalette.current.accent,
+                        )
+                    }
+                }
                 Text(track.artistName ?: track.albumTitle.orEmpty(), color = AppColors.TextTertiary, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             track.durationMillis?.let {
@@ -760,9 +798,14 @@ private fun ArtistTrackRow(
                 showQueueMenu = false
                 onQueueTrack(track, it)
             },
+            isDownloaded = isDownloaded,
+            onDownloadAction = {
+                if (isDownloaded) onDeleteDownloadedTrack(track) else onDownloadTrack(track)
+            },
         )
     }
 }
+
 
 @Composable
 internal fun ArtistPresentationToggle(
