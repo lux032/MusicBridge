@@ -95,13 +95,19 @@ internal object PlaybackDiagnostics {
         buffer.add(type, redact(detail))
     }
 
+    internal fun clearInMemoryForTest() = buffer.clear()
+
+    internal fun entriesForTest(): List<DiagnosticEntry> = buffer.snapshot()
+
     fun recordPrecacheBytes(bytes: Int) {
         if (bytes > 0) precacheBytes.addAndGet(bytes.toLong())
     }
 
     fun recordHeartbeat(
+        currentIndex: Int,
         positionMs: Long,
         bufferedPositionMs: Long,
+        durationMs: Long?,
         playbackState: String,
     ) {
         val nowElapsed = SystemClock.elapsedRealtime()
@@ -111,7 +117,8 @@ internal object PlaybackDiagnostics {
         val pc = throughputKbps(precacheBytes.getAndSet(0L), intervalMillis)
         record(
             "HEARTBEAT",
-            "intervalMs=$intervalMillis positionMs=$positionMs bufferedPositionMs=$bufferedPositionMs " +
+            "intervalMs=$intervalMillis index=$currentIndex positionMs=$positionMs " +
+                "bufferedPositionMs=$bufferedPositionMs durationMs=${durationMs ?: 0L} " +
                 "headroomMs=${(bufferedPositionMs - positionMs).coerceAtLeast(0L)} " +
                 "playbackState=$playbackState networkTransports=$networkTransports " +
                 "fgKbps=${"%.1f".format(Locale.US, fg)} precacheKbps=${"%.1f".format(Locale.US, pc)}",

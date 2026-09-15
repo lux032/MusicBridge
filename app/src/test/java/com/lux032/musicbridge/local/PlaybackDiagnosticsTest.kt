@@ -62,6 +62,22 @@ class PlaybackDiagnosticsTest {
     }
 
     @Test
+    fun heartbeatContainsTrackIndexAndDuration() {
+        PlaybackDiagnostics.clearInMemoryForTest()
+        PlaybackDiagnostics.recordHeartbeat(
+            currentIndex = 3,
+            positionMs = 12_000L,
+            bufferedPositionMs = 25_000L,
+            durationMs = 180_000L,
+            playbackState = "playing",
+        )
+
+        val heartbeat = PlaybackDiagnostics.entriesForTest().single { it.type == "HEARTBEAT" }.detail
+        assertTrue(heartbeat.contains("index=3"))
+        assertTrue(heartbeat.contains("durationMs=180000"))
+    }
+
+    @Test
     fun throughputUsesActualHeartbeatInterval() {
         assertEquals(8.0, PlaybackDiagnostics.throughputKbps(bytes = 2_000L, intervalMillis = 2_000L), 0.001)
         assertEquals(0.0, PlaybackDiagnostics.throughputKbps(bytes = 2_000L, intervalMillis = 0L), 0.001)

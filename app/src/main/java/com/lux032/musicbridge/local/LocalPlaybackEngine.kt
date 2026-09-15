@@ -201,7 +201,7 @@ object LocalAudioCache {
         ) = delegate.onSpanTouched(cache, oldSpan, newSpan)
     }
 
-    private var cache: SimpleCache? = null
+    @Volatile private var cache: SimpleCache? = null
     private var evictor: ResizableCacheEvictor? = null
     private var tempDirectory: File? = null
     private val currentGeneration = AtomicInteger(0)
@@ -291,8 +291,9 @@ object LocalAudioCache {
             .onFailure { Log.w("LocalAudioCache", "Failed to evict cache key=$key", it) }
     }
 
-    @Synchronized
     fun isFullyCached(key: String): Boolean {
+        // SimpleCache serializes its own metadata/span access. Avoid also taking the
+        // LocalAudioCache monitor on the main-thread heartbeat and transition paths.
         val simpleCache = cache ?: return false
         val length = ContentMetadata.getContentLength(simpleCache.getContentMetadata(key))
         return length > 0L && simpleCache.isCached(key, 0L, length)
@@ -765,6 +766,27 @@ private class TranscodeLoadErrorHandlingPolicy : DefaultLoadErrorHandlingPolicy(
     }
 }
 
+internal fun mediaItemTransitionReasonName(reason: Int): String = when (reason) {
+    Player.MEDIA_ITEM_TRANSITION_REASON_REPEAT -> "REPEAT"
+    Player.MEDIA_ITEM_TRANSITION_REASON_AUTO -> "AUTO"
+    Player.MEDIA_ITEM_TRANSITION_REASON_SEEK -> "SEEK"
+    Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED -> "PLAYLIST_CHANGED"
+    else -> "UNKNOWN($reason)"
+}
+
+internal enum class LiveTranscodeRetryAction { RESTART_AT_POSITION, SKIP_NEAR_END, RETRY_FROM_START }
+
+internal fun liveTranscodeRetryAction(
+    isLiveTranscode: Boolean,
+    durationMillis: Long?,
+    currentPositionMillis: Long,
+): LiveTranscodeRetryAction = when {
+    !isLiveTranscode -> LiveTranscodeRetryAction.RETRY_FROM_START
+    durationMillis == null || durationMillis <= 0L -> LiveTranscodeRetryAction.RESTART_AT_POSITION
+    durationMillis - currentPositionMillis > 3_000L -> LiveTranscodeRetryAction.RESTART_AT_POSITION
+    else -> LiveTranscodeRetryAction.SKIP_NEAR_END
+}
+
 internal sealed interface PlaybackRecoveryDecision {
     data object RetryCurrent : PlaybackRecoveryDecision
     data object SkipCurrent : PlaybackRecoveryDecision
@@ -1076,6 +1098,10 @@ class LocalPlaybackEngine(
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
             val newIndex = player.currentMediaItemIndex
             val previousIndex = lastCurrentIndex
+            PlaybackDiagnostics.record(
+                "TRACK_TRANSITION",
+                "index=$newIndex from=$previousIndex reason=${mediaItemTransitionReasonName(reason)}",
+            )
             if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_REPEAT && newIndex in queueItems.indices) {
                 resetRepeatedTranscode(newIndex)
                 listener?.onTrackChanged(newIndex)
@@ -1199,6 +1225,20 @@ class LocalPlaybackEngine(
     }
 
     private val analyticsListener = object : AnalyticsListener {
+        override fun onAudioUnderrun(
+            eventTime: AnalyticsListener.EventTime,
+            bufferSize: Int,
+            bufferSizeMs: Long,
+            elapsedSinceLastFeedMs: Long,
+        ) {
+            PlaybackDiagnostics.record(
+                "AUDIO_UNDERRUN",
+                "bufferSize=$bufferSize bufferSizeMs=$bufferSizeMs " +
+                    "elapsedSinceLastFeedMs=$elapsedSinceLastFeedMs index=$currentIndex " +
+                    "positionMs=$currentPositionMillis",
+            )
+        }
+
         override fun onLoadError(
             eventTime: AnalyticsListener.EventTime,
             loadEventInfo: LoadEventInfo,
@@ -1245,9 +1285,33 @@ class LocalPlaybackEngine(
         }
         when (recoveryBudget.onFailure(failedIndex)) {
             PlaybackRecoveryDecision.RetryCurrent -> {
-                Log.w(LOG_TAG, "Retrying failed media item index=$failedIndex")
-                player.seekTo(failedIndex, 0L)
-                ensurePrepared(wasPlayRequested)
+                val failedItem = queueItems.getOrNull(failedIndex)
+                val failedPositionMillis = currentPositionMillis
+                when (liveTranscodeRetryAction(
+                    isLiveTranscode = failedItem?.url?.isPlexLiveTranscodeUrl() == true,
+                    durationMillis = failedItem?.durationMillis,
+                    currentPositionMillis = failedPositionMillis,
+                )) {
+                    LiveTranscodeRetryAction.RESTART_AT_POSITION -> {
+                        PlaybackDiagnostics.record(
+                            "TRANSCODE_RETRY_AT_POSITION",
+                            "index=$failedIndex positionMs=$failedPositionMillis",
+                        )
+                        restartLiveTranscode(failedIndex, failedPositionMillis, wasPlayRequested)
+                    }
+                    LiveTranscodeRetryAction.SKIP_NEAR_END -> {
+                        PlaybackDiagnostics.record(
+                            "TRANSCODE_RETRY_SKIPPED_NEAR_END",
+                            "index=$failedIndex positionMs=$failedPositionMillis durationMs=${failedItem?.durationMillis ?: 0L}",
+                        )
+                        skipFailedMediaItem(failedIndex, error, wasPlayRequested)
+                    }
+                    LiveTranscodeRetryAction.RETRY_FROM_START -> {
+                        Log.w(LOG_TAG, "Retrying failed media item index=$failedIndex")
+                        player.seekTo(failedIndex, 0L)
+                        ensurePrepared(wasPlayRequested)
+                    }
+                }
             }
             PlaybackRecoveryDecision.Stop -> stopAfterPlaybackFailures(error)
             PlaybackRecoveryDecision.SkipCurrent -> skipFailedMediaItem(failedIndex, error, wasPlayRequested)
@@ -1416,15 +1480,29 @@ class LocalPlaybackEngine(
     }
 
     fun recordDiagnosticHeartbeat(playbackState: String) {
-        updatePrecacheGate()
+        updatePrecacheGate("heartbeat")
         PlaybackDiagnostics.recordHeartbeat(
+            currentIndex = currentIndex,
             positionMs = currentPositionMillis,
             bufferedPositionMs = bufferedPositionMillis,
+            durationMs = durationMillis,
             playbackState = playbackState,
         )
     }
 
-    private fun updatePrecacheGate() {
+    private fun updatePrecacheGate(action: String = "player_callback") {
+        val startedAtNanos = SystemClock.elapsedRealtimeNanos()
+        try {
+            updatePrecacheGateState()
+        } finally {
+            val elapsedMs = (SystemClock.elapsedRealtimeNanos() - startedAtNanos) / 1_000_000L
+            if (elapsedMs > 50L) {
+                PlaybackDiagnostics.record("MAIN_THREAD_SLOW", "action=$action elapsedMs=$elapsedMs")
+            }
+        }
+    }
+
+    private fun updatePrecacheGateState() {
         val index = currentIndex
         val item = queueItems.getOrNull(index)
         val position = currentPositionMillis
@@ -1740,6 +1818,7 @@ class LocalPlaybackEngine(
         playWhenReady: Boolean = player.playWhenReady,
     ): Long {
         val item = queueItems.getOrNull(index) ?: return 0L
+        if (index !in positionBaseMillis.indices || index !in 0 until player.mediaItemCount) return 0L
         val plan = buildLocalSeekPlan(item.url, positionMillis)
         positionBaseMillis[index] = plan.logicalBaseMillis
         player.replaceMediaItem(index, buildMediaItem(item, plan.url))

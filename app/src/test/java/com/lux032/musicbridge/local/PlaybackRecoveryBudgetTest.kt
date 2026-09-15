@@ -46,6 +46,62 @@ class PlaybackRecoveryBudgetTest {
     }
 
     @Test
+    fun liveTranscodeRetriesAtCurrentPositionOutsideTrackEndWindow() {
+        assertEquals(
+            LiveTranscodeRetryAction.RESTART_AT_POSITION,
+            liveTranscodeRetryAction(
+                isLiveTranscode = true,
+                durationMillis = 180_000L,
+                currentPositionMillis = 90_000L,
+            ),
+        )
+    }
+
+    @Test
+    fun liveTranscodeSkipsRecoveryInsideTrackEndWindow() {
+        assertEquals(
+            LiveTranscodeRetryAction.SKIP_NEAR_END,
+            liveTranscodeRetryAction(
+                isLiveTranscode = true,
+                durationMillis = 180_000L,
+                currentPositionMillis = 177_500L,
+            ),
+        )
+    }
+
+    @Test
+    fun liveTranscodeWithUnknownDurationRetriesAtCurrentPosition() {
+        assertEquals(
+            LiveTranscodeRetryAction.RESTART_AT_POSITION,
+            liveTranscodeRetryAction(
+                isLiveTranscode = true,
+                durationMillis = null,
+                currentPositionMillis = 90_000L,
+            ),
+        )
+        assertEquals(
+            LiveTranscodeRetryAction.RESTART_AT_POSITION,
+            liveTranscodeRetryAction(
+                isLiveTranscode = true,
+                durationMillis = 0L,
+                currentPositionMillis = 90_000L,
+            ),
+        )
+    }
+
+    @Test
+    fun nonTranscodeKeepsExistingRestartBehavior() {
+        assertEquals(
+            LiveTranscodeRetryAction.RETRY_FROM_START,
+            liveTranscodeRetryAction(
+                isLiveTranscode = false,
+                durationMillis = 180_000L,
+                currentPositionMillis = 90_000L,
+            ),
+        )
+    }
+
+    @Test
     fun repeatOneNeverSelectsSameFailedItem() {
         assertEquals(
             C.INDEX_UNSET,
