@@ -13,6 +13,7 @@ import com.lux032.musicbridge.storage.DownloadedAlbumGroup
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -22,6 +23,10 @@ internal class AppStateLibraryCoordinator(
 ) {
     private var artistAlbumsJob: Job? = null
     private var offlineHydrationJob: Job? = null
+    private var playlistDetailJob: Job? = null
+    private var playlistDetailGeneration = 0L
+    private var playlistSyncJob: Job? = null
+    private var playlistSyncGeneration = 0L
 
     suspend fun loadAlbumsFromLocalStore() {
         val sourceId = state.connectionPreferences.id
@@ -32,8 +37,12 @@ internal class AppStateLibraryCoordinator(
             state.albumLocalStore.getFavoriteTracks(sourceId)
         }
         if (state.connectionPreferences.id != sourceId) return
+        val playlists = withContext(Dispatchers.IO) {
+            state.albumLocalStore.getAllPlaylists(sourceId)
+        }
         state.allAlbums = albums
         state.favoriteTracks = favorites
+        state.playlists = playlists.distinctBy(PlexPlaylist::ratingKey)
         state.hasLoadedLocalAlbums = true
     }
 
@@ -213,19 +222,64 @@ internal class AppStateLibraryCoordinator(
 
     fun loadPlaylists() {
         val profile = state.connectionPreferences
-        if (!profile.hasCredentials()) {
-            state.playlists = emptyList()
-            return
-        }
+        val sourceId = profile.id
         state.scope.launch {
-            runCatching {
-                withContext(Dispatchers.IO) { state.client(profile).fetchPlaylists() }
-            }.onSuccess { result ->
-                if (state.connectionPreferences.id == profile.id) state.playlists = result.playlists
-            }.onFailure {
-                if (state.connectionPreferences.id == profile.id) {
-                    state.errorMessage = it.message ?: "加载歌单失败"
+            val cached = withContext(Dispatchers.IO) { state.albumLocalStore.getAllPlaylists(sourceId) }
+                .distinctBy(PlexPlaylist::ratingKey)
+            if (state.connectionPreferences.id != sourceId) return@launch
+            if (cached.isNotEmpty()) state.playlists = cached
+            if (!profile.hasCredentials()) {
+                if (cached.isEmpty()) state.playlists = emptyList()
+                return@launch
+            }
+            runCatching { withContext(Dispatchers.IO) { state.client(profile).fetchPlaylists() } }
+                .onSuccess { result ->
+                    val playlists = result.playlists.filter { it.ratingKey.isNotBlank() }.distinctBy(PlexPlaylist::ratingKey)
+                    withContext(Dispatchers.IO) { state.albumLocalStore.replaceAllPlaylists(sourceId, playlists) }
+                    if (state.connectionPreferences.id == sourceId) state.playlists = playlists
                 }
+                .onFailure {
+                    if (cached.isEmpty() && state.connectionPreferences.id == sourceId) {
+                        state.errorMessage = it.message ?: "加载歌单失败"
+                    }
+                }
+        }
+    }
+
+    fun syncAllPlaylistsTracks(onProgress: (Int, Int) -> Unit = { _, _ -> }) {
+        val profile = state.connectionPreferences
+        if (!profile.hasCredentials() || state.playlists.isEmpty()) return
+        playlistSyncJob?.cancel()
+        val syncGeneration = ++playlistSyncGeneration
+        playlistSyncJob = state.scope.launch {
+            val playlists = state.playlists.filter { it.ratingKey.isNotBlank() }
+            state.isPlaylistSyncing = true
+            state.playlistSyncProgress = 0 to playlists.size
+            state.errorMessage = null
+            var failures = 0
+            try {
+                playlists.forEachIndexed { index, playlist ->
+                    coroutineContext.ensureActive()
+                    val sourceId = playlist.sourceId.ifBlank { profile.id }
+                    try {
+                        val result = withContext(Dispatchers.IO) {
+                            state.clientFor(sourceId).fetchPlaylistTracks(playlist)
+                        }
+                        coroutineContext.ensureActive()
+                        withContext(Dispatchers.IO) {
+                            state.albumLocalStore.savePlaylistTracks(sourceId, playlist.ratingKey, result.tracks)
+                        }
+                    } catch (error: Throwable) {
+                        if (error is CancellationException) throw error
+                        failures++
+                    }
+                    val completed = index + 1
+                    state.playlistSyncProgress = completed to playlists.size
+                    onProgress(completed, playlists.size)
+                }
+                state.actionMessage = if (failures == 0) "已同步 ${playlists.size} 个歌单" else "歌单同步完成，${failures} 个失败"
+            } finally {
+                if (playlistSyncGeneration == syncGeneration) state.isPlaylistSyncing = false
             }
         }
     }
@@ -514,19 +568,53 @@ internal class AppStateLibraryCoordinator(
     }
 
     fun openPlaylistDetail(playlist: PlexPlaylist) {
+        playlistDetailJob?.cancel()
+        val detailGeneration = ++playlistDetailGeneration
         state.aiPlaylistDescription = null
         state.selectedPlaylist = playlist
-        state.scope.launch {
-            runCatching {
-                state.playlistTrackResult = withContext(Dispatchers.IO) {
-                    state.clientFor(playlist.sourceId).fetchPlaylistTracks(playlist)
+        state.errorMessage = null
+        val sourceId = playlist.sourceId.ifBlank { state.connectionPreferences.id }
+        val playlistKey = playlist.ratingKey
+        playlistDetailJob = state.scope.launch {
+            var hasCachedTracks = false
+            try {
+                val cachedTracks = withContext(Dispatchers.IO) {
+                    state.albumLocalStore.getPlaylistTracks(sourceId, playlistKey)
                 }
-                state.navigateTo(AppSection.PlaylistDetail)
-            }.onFailure {
-                state.errorMessage = it.message ?: "加载歌单详情失败"
+                hasCachedTracks = cachedTracks.isNotEmpty()
+                if (!isPlaylistDetailCurrent(sourceId, playlistKey, detailGeneration)) return@launch
+                if (hasCachedTracks) {
+                    state.playlistTrackResult = PlexPlaylistTracksResult("", playlist, cachedTracks)
+                    state.navigateTo(AppSection.PlaylistDetail)
+                } else {
+                    state.playlistTrackResult = null
+                    state.isLoading = true
+                }
+
+                val result = withContext(Dispatchers.IO) {
+                    state.clientFor(sourceId).fetchPlaylistTracks(playlist)
+                }
+                if (!isPlaylistDetailCurrent(sourceId, playlistKey, detailGeneration)) return@launch
+                withContext(Dispatchers.IO) {
+                    state.albumLocalStore.savePlaylistTracks(sourceId, playlistKey, result.tracks)
+                }
+                if (!isPlaylistDetailCurrent(sourceId, playlistKey, detailGeneration)) return@launch
+                state.playlistTrackResult = result
+                if (!hasCachedTracks) state.navigateTo(AppSection.PlaylistDetail)
+            } catch (error: Throwable) {
+                if (error is CancellationException) throw error
+                if (!hasCachedTracks && isPlaylistDetailCurrent(sourceId, playlistKey, detailGeneration)) {
+                    state.errorMessage = error.message ?: "加载歌单详情失败"
+                }
+            } finally {
+                if (isPlaylistDetailCurrent(sourceId, playlistKey, detailGeneration)) state.isLoading = false
             }
         }
     }
+
+    private fun isPlaylistDetailCurrent(sourceId: String, playlistKey: String, generation: Long): Boolean =
+        playlistDetailGeneration == generation && state.connectionPreferences.id == sourceId &&
+            state.selectedPlaylist?.ratingKey == playlistKey
 
     fun replaceAlbumInState(updatedAlbum: PlexAlbum) {
         state.allAlbums = state.allAlbums.map { album ->
@@ -591,6 +679,11 @@ internal class AppStateLibraryCoordinator(
                 state.albumLocalStore.deleteFavoriteTrack(updatedTrack.sourceId, updatedTrack.ratingKey)
             }
             state.albumLocalStore.updateAlbumTrackFavoriteStatus(
+                updatedTrack.sourceId,
+                updatedTrack.ratingKey,
+                updatedTrack.userRating,
+            )
+            state.albumLocalStore.updatePlaylistTrackFavoriteStatus(
                 updatedTrack.sourceId,
                 updatedTrack.ratingKey,
                 updatedTrack.userRating,

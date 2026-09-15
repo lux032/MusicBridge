@@ -878,6 +878,10 @@ class NetworkQualityMonitor(context: Context) {
 
     fun currentIsWifi(): Boolean = _isWifi.value
 
+    fun currentIsConnected(): Boolean = runCatching {
+        connectivityManager.activeNetwork != null && readCapabilities() != null
+    }.getOrDefault(false)
+
     private fun readCapabilities(): NetworkCapabilities? = runCatching {
         connectivityManager.getNetworkCapabilities(connectivityManager.activeNetwork)
     }.getOrNull()

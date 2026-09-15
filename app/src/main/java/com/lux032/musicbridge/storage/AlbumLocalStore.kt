@@ -5,6 +5,7 @@ import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import com.lux032.musicbridge.plex.PlexAlbum
+import com.lux032.musicbridge.plex.PlexPlaylist
 import com.lux032.musicbridge.plex.PlexSection
 import com.lux032.musicbridge.plex.PlexTrackStream
 
@@ -240,6 +241,116 @@ class AlbumLocalStore(context: Context) {
             if (cursor.moveToFirst()) cursor.getLong(0) else 0L
         }
 
+    fun getAllPlaylists(sourceId: String): List<PlexPlaylist> =
+        helper.readableDatabase.query(
+            AlbumDatabaseHelper.TABLE_PLAYLISTS,
+            null,
+            "${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ?",
+            arrayOf(sourceId),
+            null,
+            null,
+            "${AlbumDatabaseHelper.COLUMN_SORT_ORDER} ASC",
+        ).use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) add(cursor.toPlaylist())
+            }
+        }
+
+    fun replaceAllPlaylists(sourceId: String, playlists: List<PlexPlaylist>) {
+        val persistedPlaylists = playlists.asSequence()
+            .filter { it.ratingKey.isNotBlank() && it.isPersistable() }
+            .distinctBy(PlexPlaylist::ratingKey)
+            .toList()
+        val database = helper.writableDatabase
+        database.beginTransaction()
+        try {
+            database.delete(AlbumDatabaseHelper.TABLE_PLAYLISTS, "${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ?", arrayOf(sourceId))
+            persistedPlaylists.forEachIndexed { index, playlist ->
+                database.insertWithOnConflict(
+                    AlbumDatabaseHelper.TABLE_PLAYLISTS,
+                    null,
+                    playlist.toContentValues(sourceId, index),
+                    SQLiteDatabase.CONFLICT_REPLACE,
+                )
+            }
+            if (persistedPlaylists.isEmpty()) {
+                database.delete(
+                    AlbumDatabaseHelper.TABLE_PLAYLIST_TRACKS,
+                    "${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ?",
+                    arrayOf(sourceId),
+                )
+            } else {
+                val placeholders = persistedPlaylists.joinToString(",") { "?" }
+                database.delete(
+                    AlbumDatabaseHelper.TABLE_PLAYLIST_TRACKS,
+                    "${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ? AND ${AlbumDatabaseHelper.COLUMN_PLAYLIST_RATING_KEY} NOT IN ($placeholders)",
+                    arrayOf(sourceId, *persistedPlaylists.map(PlexPlaylist::ratingKey).toTypedArray()),
+                )
+            }
+            database.setTransactionSuccessful()
+        } finally {
+            database.endTransaction()
+        }
+    }
+
+    fun getPlaylistTracks(sourceId: String, playlistRatingKey: String): List<PlexTrackStream> =
+        helper.readableDatabase.query(
+            AlbumDatabaseHelper.TABLE_PLAYLIST_TRACKS,
+            null,
+            "${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ? AND ${AlbumDatabaseHelper.COLUMN_PLAYLIST_RATING_KEY} = ?",
+            arrayOf(sourceId, playlistRatingKey),
+            null,
+            null,
+            "${AlbumDatabaseHelper.COLUMN_PLAYLIST_ORDER} ASC",
+        ).use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) add(cursor.toTrack())
+            }
+        }
+
+    fun savePlaylistTracks(sourceId: String, playlistRatingKey: String, tracks: List<PlexTrackStream>) {
+        if (sourceId.isBlank() || playlistRatingKey.isBlank() || !isPersistablePlaylistKey(playlistRatingKey)) return
+        val database = helper.writableDatabase
+        database.beginTransaction()
+        try {
+            database.delete(
+                AlbumDatabaseHelper.TABLE_PLAYLIST_TRACKS,
+                "${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ? AND ${AlbumDatabaseHelper.COLUMN_PLAYLIST_RATING_KEY} = ?",
+                arrayOf(sourceId, playlistRatingKey),
+            )
+            tracks.asSequence().filter { it.ratingKey.isNotBlank() }.forEachIndexed { index, track ->
+                database.insertWithOnConflict(
+                    AlbumDatabaseHelper.TABLE_PLAYLIST_TRACKS,
+                    null,
+                    track.toContentValues().apply {
+                        put(AlbumDatabaseHelper.COLUMN_SOURCE_ID, sourceId)
+                        put(AlbumDatabaseHelper.COLUMN_PLAYLIST_RATING_KEY, playlistRatingKey)
+                        put(AlbumDatabaseHelper.COLUMN_PLAYLIST_ORDER, index)
+                    },
+                    SQLiteDatabase.CONFLICT_REPLACE,
+                )
+            }
+            database.setTransactionSuccessful()
+        } finally {
+            database.endTransaction()
+        }
+    }
+
+    fun updatePlaylistTrackFavoriteStatus(sourceId: String, ratingKey: String, userRating: Float?) {
+        val values = ContentValues().apply {
+            if (userRating != null) put(AlbumDatabaseHelper.COLUMN_TRACK_USER_RATING, userRating)
+            else putNull(AlbumDatabaseHelper.COLUMN_TRACK_USER_RATING)
+        }
+        helper.writableDatabase.update(
+            AlbumDatabaseHelper.TABLE_PLAYLIST_TRACKS,
+            values,
+            "${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ? AND ${AlbumDatabaseHelper.COLUMN_TRACK_RATING_KEY} = ?",
+            arrayOf(sourceId, ratingKey),
+        )
+    }
+
+    fun isTrackAvailableLocally(sourceId: String, ratingKey: String): Boolean =
+        getDownloadedTrack(sourceId, ratingKey)?.let { java.io.File(it.localAudioPath).exists() } == true
 
     fun getFavoriteTracks(sourceId: String): List<PlexTrackStream> =
         helper.readableDatabase.query(
@@ -437,6 +548,8 @@ class AlbumLocalStore(context: Context) {
             database.delete(AlbumDatabaseHelper.TABLE_ALBUMS, where, args)
             database.delete(AlbumDatabaseHelper.TABLE_TRACKS, where, args)
             database.delete(AlbumDatabaseHelper.TABLE_ALBUM_TRACKS, where, args)
+            database.delete(AlbumDatabaseHelper.TABLE_PLAYLISTS, where, args)
+            database.delete(AlbumDatabaseHelper.TABLE_PLAYLIST_TRACKS, where, args)
             database.setTransactionSuccessful()
         } finally {
             database.endTransaction()
@@ -547,7 +660,7 @@ class AlbumLocalStore(context: Context) {
         val database = helper.writableDatabase
         database.beginTransaction()
         try {
-            for (table in listOf(AlbumDatabaseHelper.TABLE_TRACKS, AlbumDatabaseHelper.TABLE_ALBUM_TRACKS)) {
+            for (table in listOf(AlbumDatabaseHelper.TABLE_TRACKS, AlbumDatabaseHelper.TABLE_ALBUM_TRACKS, AlbumDatabaseHelper.TABLE_PLAYLIST_TRACKS)) {
                 database.execSQL(
                     """
                     UPDATE $table
@@ -625,6 +738,14 @@ class AlbumLocalStore(context: Context) {
         )
     }
 
+    private fun android.database.Cursor.toPlaylist(): PlexPlaylist = PlexPlaylist(
+        ratingKey = getString(getColumnIndexOrThrow(AlbumDatabaseHelper.COLUMN_RATING_KEY)),
+        title = getString(getColumnIndexOrThrow(AlbumDatabaseHelper.COLUMN_TITLE)),
+        thumbUrl = getString(getColumnIndexOrThrow(AlbumDatabaseHelper.COLUMN_THUMB_URL)),
+        leafCount = getInt(getColumnIndexOrThrow(AlbumDatabaseHelper.COLUMN_LEAF_COUNT)),
+        sourceId = getString(getColumnIndexOrThrow(AlbumDatabaseHelper.COLUMN_SOURCE_ID)),
+    )
+
     private fun android.database.Cursor.toTrack(): PlexTrackStream {
         fun string(name: String): String = getString(getColumnIndexOrThrow(name))
         fun nullableString(name: String): String? = getString(getColumnIndexOrThrow(name))
@@ -651,6 +772,7 @@ class AlbumLocalStore(context: Context) {
             sourceAudioSampleRate = nullableInt(AlbumDatabaseHelper.COLUMN_TRACK_SAMPLE_RATE),
             bitDepth = nullableInt(AlbumDatabaseHelper.COLUMN_TRACK_BIT_DEPTH),
             playbackMimeType = nullableString(AlbumDatabaseHelper.COLUMN_TRACK_PLAYBACK_MIME_TYPE),
+            lyricUrl = nullableString(AlbumDatabaseHelper.COLUMN_TRACK_LYRIC_URL),
             sourceId = string(AlbumDatabaseHelper.COLUMN_SOURCE_ID),
             musicAnalysisVersion = nullableString(AlbumDatabaseHelper.COLUMN_TRACK_MUSIC_ANALYSIS_VERSION),
             viewCount = nullableLong(AlbumDatabaseHelper.COLUMN_TRACK_VIEW_COUNT),
@@ -739,6 +861,21 @@ class AlbumLocalStore(context: Context) {
             put(AlbumDatabaseHelper.COLUMN_SUBFORMAT, subformat)
         }
 
+    private fun PlexPlaylist.toContentValues(sourceId: String, sortOrder: Int): ContentValues = ContentValues().apply {
+        put(AlbumDatabaseHelper.COLUMN_SOURCE_ID, sourceId)
+        put(AlbumDatabaseHelper.COLUMN_RATING_KEY, ratingKey)
+        put(AlbumDatabaseHelper.COLUMN_TITLE, title)
+        put(AlbumDatabaseHelper.COLUMN_THUMB_URL, thumbUrl)
+        put(AlbumDatabaseHelper.COLUMN_LEAF_COUNT, leafCount)
+        put(AlbumDatabaseHelper.COLUMN_SORT_ORDER, sortOrder)
+    }
+
+    private fun PlexPlaylist.isPersistable(): Boolean = isPersistablePlaylistKey(ratingKey)
+
+    private fun isPersistablePlaylistKey(ratingKey: String): Boolean =
+        !ratingKey.startsWith("ai:") && ratingKey != "favorites" &&
+            !ratingKey.startsWith("artist:") && !ratingKey.startsWith("downloaded:")
+
     private fun PlexTrackStream.toContentValues(): ContentValues =
         ContentValues().apply {
             put(AlbumDatabaseHelper.COLUMN_SOURCE_ID, sourceId)
@@ -757,6 +894,7 @@ class AlbumLocalStore(context: Context) {
             put(AlbumDatabaseHelper.COLUMN_TRACK_SAMPLE_RATE, sourceAudioSampleRate)
             put(AlbumDatabaseHelper.COLUMN_TRACK_BIT_DEPTH, bitDepth)
             put(AlbumDatabaseHelper.COLUMN_TRACK_PLAYBACK_MIME_TYPE, playbackMimeType)
+            put(AlbumDatabaseHelper.COLUMN_TRACK_LYRIC_URL, lyricUrl)
             put(AlbumDatabaseHelper.COLUMN_TRACK_MUSIC_ANALYSIS_VERSION, musicAnalysisVersion)
             put(AlbumDatabaseHelper.COLUMN_TRACK_VIEW_COUNT, viewCount)
             put(AlbumDatabaseHelper.COLUMN_TRACK_LAST_VIEWED_AT_EPOCH_SECONDS, lastViewedAtEpochSeconds)
@@ -829,6 +967,12 @@ internal fun ensureVersion15Columns(db: SQLiteDatabase) {
     addColumnIfNotExists(db, "downloaded_tracks", AlbumDatabaseHelper.COLUMN_TRACK_USER_RATING, "REAL")
 }
 
+internal fun ensureVersion16Columns(db: SQLiteDatabase) {
+    for (table in listOf(AlbumDatabaseHelper.TABLE_TRACKS, AlbumDatabaseHelper.TABLE_ALBUM_TRACKS)) {
+        addColumnIfNotExists(db, table, AlbumDatabaseHelper.COLUMN_TRACK_LYRIC_URL, "TEXT")
+    }
+}
+
 private class AlbumDatabaseHelper(context: Context) :
     SQLiteOpenHelper(context, DATABASE_NAME, null, DATABASE_VERSION) {
 
@@ -842,6 +986,7 @@ private class AlbumDatabaseHelper(context: Context) :
         createTracksTable(db)
         createAlbumTracksTable(db)
         createDownloadedTracksTable(db)
+        createPlaylistTables(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -882,16 +1027,22 @@ private class AlbumDatabaseHelper(context: Context) :
         if (oldVersion < 13) createDownloadedTracksTable(db)
         if (oldVersion < 14) ensureVersion14Columns(db)
         if (oldVersion < 15) ensureVersion15Columns(db)
+        if (oldVersion < 16) {
+            ensureVersion16Columns(db)
+            createPlaylistTables(db)
+        }
     }
 
     companion object {
         private const val DATABASE_NAME = "plex_album_cache.db"
-        private const val DATABASE_VERSION = 15
+        private const val DATABASE_VERSION = 16
 
         const val TABLE_ALBUMS = "albums"
         const val TABLE_TRACKS = "tracks"
         const val TABLE_ALBUM_TRACKS = "album_tracks"
         const val TABLE_DOWNLOADED_TRACKS = "downloaded_tracks"
+        const val TABLE_PLAYLISTS = "playlists"
+        const val TABLE_PLAYLIST_TRACKS = "playlist_tracks"
         const val COLUMN_SOURCE_ID = "source_id"
         const val COLUMN_RATING_KEY = "rating_key"
         const val COLUMN_TITLE = "title"
@@ -919,6 +1070,7 @@ private class AlbumDatabaseHelper(context: Context) :
         const val COLUMN_TRACK_BIT_DEPTH = "bit_depth"
         const val COLUMN_TRACK_BITRATE_KBPS = "bitrate_kbps"
         const val COLUMN_TRACK_PLAYBACK_MIME_TYPE = "playback_mime_type"
+        const val COLUMN_TRACK_LYRIC_URL = "lyric_url"
         const val COLUMN_TRACK_VIEW_COUNT = "view_count"
         const val COLUMN_TRACK_LAST_VIEWED_AT_EPOCH_SECONDS = "last_viewed_at_epoch_seconds"
         const val COLUMN_TRACK_SKIP_COUNT = "skip_count"
@@ -928,6 +1080,9 @@ private class AlbumDatabaseHelper(context: Context) :
         const val COLUMN_LEAF_COUNT = "leaf_count"
         const val COLUMN_FORMAT = "format"
         const val COLUMN_SUBFORMAT = "subformat"
+        const val COLUMN_SORT_ORDER = "sort_order"
+        const val COLUMN_PLAYLIST_RATING_KEY = "playlist_rating_key"
+        const val COLUMN_PLAYLIST_ORDER = "playlist_order"
 
         const val COLUMN_DOWNLOAD_LOCAL_AUDIO_PATH = "local_audio_path"
         const val COLUMN_DOWNLOAD_LOCAL_THUMB_PATH = "local_thumb_path"
@@ -988,6 +1143,7 @@ private class AlbumDatabaseHelper(context: Context) :
                 $COLUMN_TRACK_BIT_DEPTH INTEGER,
                 $COLUMN_TRACK_BITRATE_KBPS INTEGER,
                 $COLUMN_TRACK_PLAYBACK_MIME_TYPE TEXT,
+                $COLUMN_TRACK_LYRIC_URL TEXT,
                 $COLUMN_TRACK_VIEW_COUNT INTEGER,
                 $COLUMN_TRACK_LAST_VIEWED_AT_EPOCH_SECONDS INTEGER,
                 $COLUMN_TRACK_SKIP_COUNT INTEGER,
@@ -1026,6 +1182,7 @@ private class AlbumDatabaseHelper(context: Context) :
                 $COLUMN_TRACK_BIT_DEPTH INTEGER,
                 $COLUMN_TRACK_BITRATE_KBPS INTEGER,
                 $COLUMN_TRACK_PLAYBACK_MIME_TYPE TEXT,
+                $COLUMN_TRACK_LYRIC_URL TEXT,
                 $COLUMN_TRACK_VIEW_COUNT INTEGER,
                 $COLUMN_TRACK_LAST_VIEWED_AT_EPOCH_SECONDS INTEGER,
                 $COLUMN_TRACK_SKIP_COUNT INTEGER,
@@ -1038,6 +1195,57 @@ private class AlbumDatabaseHelper(context: Context) :
         )
         db.execSQL(
             "CREATE INDEX IF NOT EXISTS index_album_tracks_album_key ON $TABLE_ALBUM_TRACKS($COLUMN_SOURCE_ID, $COLUMN_TRACK_ALBUM_RATING_KEY)"
+        )
+    }
+
+    private fun createPlaylistTables(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS $TABLE_PLAYLISTS (
+                $COLUMN_SOURCE_ID TEXT NOT NULL,
+                $COLUMN_RATING_KEY TEXT NOT NULL,
+                $COLUMN_TITLE TEXT NOT NULL,
+                $COLUMN_THUMB_URL TEXT,
+                $COLUMN_LEAF_COUNT INTEGER NOT NULL,
+                $COLUMN_SORT_ORDER INTEGER NOT NULL,
+                PRIMARY KEY ($COLUMN_SOURCE_ID, $COLUMN_RATING_KEY)
+            )
+            """.trimIndent()
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS $TABLE_PLAYLIST_TRACKS (
+                $COLUMN_SOURCE_ID TEXT NOT NULL,
+                $COLUMN_PLAYLIST_RATING_KEY TEXT NOT NULL,
+                $COLUMN_PLAYLIST_ORDER INTEGER NOT NULL,
+                $COLUMN_TRACK_RATING_KEY TEXT NOT NULL,
+                $COLUMN_TRACK_TITLE TEXT NOT NULL,
+                $COLUMN_TRACK_STREAM_URL TEXT NOT NULL,
+                $COLUMN_TRACK_PART_KEY TEXT NOT NULL,
+                $COLUMN_TRACK_DURATION_MILLIS INTEGER,
+                $COLUMN_TRACK_USER_RATING REAL,
+                $COLUMN_TRACK_ALBUM_RATING_KEY TEXT,
+                $COLUMN_TRACK_ALBUM_TITLE TEXT,
+                $COLUMN_TRACK_ARTIST_NAME TEXT,
+                $COLUMN_TRACK_THUMB_URL TEXT,
+                $COLUMN_TRACK_SOURCE_AUDIO_CODEC TEXT,
+                $COLUMN_TRACK_SAMPLE_RATE INTEGER,
+                $COLUMN_TRACK_BIT_DEPTH INTEGER,
+                $COLUMN_TRACK_BITRATE_KBPS INTEGER,
+                $COLUMN_TRACK_PLAYBACK_MIME_TYPE TEXT,
+                $COLUMN_TRACK_LYRIC_URL TEXT,
+                $COLUMN_TRACK_VIEW_COUNT INTEGER,
+                $COLUMN_TRACK_LAST_VIEWED_AT_EPOCH_SECONDS INTEGER,
+                $COLUMN_TRACK_SKIP_COUNT INTEGER,
+                $COLUMN_TRACK_MUSIC_ANALYSIS_VERSION TEXT,
+                $COLUMN_TRACK_DISC_NUMBER INTEGER,
+                $COLUMN_TRACK_NUMBER INTEGER,
+                PRIMARY KEY ($COLUMN_SOURCE_ID, $COLUMN_PLAYLIST_RATING_KEY, $COLUMN_PLAYLIST_ORDER)
+            )
+            """.trimIndent()
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS index_playlist_tracks_ref ON $TABLE_PLAYLIST_TRACKS($COLUMN_SOURCE_ID, $COLUMN_TRACK_RATING_KEY)"
         )
     }
 

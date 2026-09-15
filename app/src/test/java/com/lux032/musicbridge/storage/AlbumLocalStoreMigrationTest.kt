@@ -3,6 +3,7 @@ package com.lux032.musicbridge.storage
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import com.lux032.musicbridge.plex.PlexAlbum
+import com.lux032.musicbridge.plex.PlexPlaylist
 import com.lux032.musicbridge.plex.PlexSection
 import com.lux032.musicbridge.plex.PlexTrackStream
 import org.junit.Assert.assertEquals
@@ -143,7 +144,7 @@ class AlbumLocalStoreMigrationTest {
         assertEquals(null, albums.single().format)
         assertEquals(null, albums.single().subformat)
         context.openOrCreateDatabase(DATABASE_NAME, Context.MODE_PRIVATE, null).use { db ->
-            assertEquals(15, db.version)
+            assertEquals(16, db.version)
             assertTrue(db.columnNames("albums").containsAll(listOf("format", "subformat")))
             assertTrue(db.columnNames("tracks").contains("bit_depth"))
             assertTrue(db.columnNames("album_tracks").contains("bit_depth"))
@@ -219,7 +220,7 @@ class AlbumLocalStoreMigrationTest {
         assertEquals(emptyList<DownloadedAudioTrack>(), store.getAllDownloadedTracks())
 
         context.openOrCreateDatabase(DATABASE_NAME, Context.MODE_PRIVATE, null).use { db ->
-            assertEquals(15, db.version)
+            assertEquals(16, db.version)
             val expectedColumns = setOf(
                 "source_id",
                 "rating_key",
@@ -367,7 +368,7 @@ class AlbumLocalStoreMigrationTest {
         assertEquals(5, storedTrack?.trackNumber)
 
         context.openOrCreateDatabase(DATABASE_NAME, Context.MODE_PRIVATE, null).use { db ->
-            assertEquals(15, db.version)
+            assertEquals(16, db.version)
             assertTrue(db.columnNames("downloaded_tracks").containsAll(listOf("disc_number", "track_number", "user_rating")))
         }
         context.deleteDatabase(DATABASE_NAME)
@@ -498,9 +499,97 @@ class AlbumLocalStoreMigrationTest {
         store.updateDownloadedTrackFavoriteStatus("src", "trk1", null)
         // trk1 now has explicit null in downloaded_tracks, but fallback will check tracks table if needed or return null
         context.openOrCreateDatabase(DATABASE_NAME, Context.MODE_PRIVATE, null).use { db ->
-            assertEquals(15, db.version)
+            assertEquals(16, db.version)
             assertTrue(db.columnNames("downloaded_tracks").contains("user_rating"))
         }
+        context.deleteDatabase(DATABASE_NAME)
+    }
+
+    @Test
+    fun version15To16AddsPlaylistTablesAndLyricColumns() {
+        val context = cleanDatabaseContext()
+        context.openOrCreateDatabase(DATABASE_NAME, Context.MODE_PRIVATE, null).use { db ->
+            db.execSQL("CREATE TABLE tracks (source_id TEXT NOT NULL, rating_key TEXT NOT NULL, title TEXT NOT NULL, stream_url TEXT NOT NULL, part_key TEXT NOT NULL, PRIMARY KEY (source_id, rating_key))")
+            db.execSQL("CREATE TABLE album_tracks (source_id TEXT NOT NULL, rating_key TEXT NOT NULL, title TEXT NOT NULL, stream_url TEXT NOT NULL, part_key TEXT NOT NULL, PRIMARY KEY (source_id, rating_key))")
+            db.version = 15
+        }
+
+        AlbumLocalStore(context).getAllPlaylists("source")
+
+        context.openOrCreateDatabase(DATABASE_NAME, Context.MODE_PRIVATE, null).use { db ->
+            assertEquals(16, db.version)
+            assertTrue(db.columnNames("tracks").contains("lyric_url"))
+            assertTrue(db.columnNames("album_tracks").contains("lyric_url"))
+            assertTrue(db.columnNames("playlists").containsAll(listOf("sort_order", "rating_key", "source_id")))
+            assertTrue(db.columnNames("playlist_tracks").containsAll(listOf("playlist_rating_key", "playlist_order", "lyric_url")))
+            assertEquals(1, db.columnNotNull("playlist_tracks", "playlist_order"))
+            assertTrue(db.indexNames("playlist_tracks").contains("index_playlist_tracks_ref"))
+        }
+        context.deleteDatabase(DATABASE_NAME)
+    }
+
+    @Test
+    fun playlistCachePreservesOrderDuplicatesLyricsAndFiltersInternalPlaylists() {
+        val context = cleanDatabaseContext()
+        val store = AlbumLocalStore(context)
+        store.replaceAllPlaylists(
+            "source",
+            listOf(
+                PlexPlaylist("playlist-2", "Second", null, 2, "source"),
+                PlexPlaylist("ai:temp", "AI", null, 1, "source"),
+                PlexPlaylist("playlist-1", "First", null, 1, "source"),
+            ),
+        )
+        assertEquals(listOf("playlist-2", "playlist-1"), store.getAllPlaylists("source").map { it.ratingKey })
+
+        val first = track("source", "track-1", 0, 0).copy(lyricUrl = "https://lyrics/1")
+        val second = track("source", "track-2", 0, 0)
+        store.savePlaylistTracks("source", "playlist-2", listOf(first, second, first))
+        val stored = store.getPlaylistTracks("source", "playlist-2")
+        assertEquals(listOf("track-1", "track-2", "track-1"), stored.map { it.ratingKey })
+        assertEquals("https://lyrics/1", stored.first().lyricUrl)
+
+        store.savePlaylistTracks("source", "favorites", listOf(first))
+        assertTrue(store.getPlaylistTracks("source", "favorites").isEmpty())
+        context.deleteDatabase(DATABASE_NAME)
+    }
+
+    @Test
+    fun replacingPlaylistListRemovesOrphanedPlaylistTracks() {
+        val context = cleanDatabaseContext()
+        val store = AlbumLocalStore(context)
+        val first = PlexPlaylist("playlist-1", "First", null, 1, "source")
+        val second = PlexPlaylist("playlist-2", "Second", null, 1, "source")
+        val cachedTrack = track("source", "track-1", 0, 0)
+        store.replaceAllPlaylists("source", listOf(first, second))
+        store.savePlaylistTracks("source", first.ratingKey, listOf(cachedTrack))
+        store.savePlaylistTracks("source", second.ratingKey, listOf(cachedTrack))
+
+        store.replaceAllPlaylists("source", listOf(second))
+
+        assertTrue(store.getPlaylistTracks("source", first.ratingKey).isEmpty())
+        assertEquals(1, store.getPlaylistTracks("source", second.ratingKey).size)
+        context.deleteDatabase(DATABASE_NAME)
+    }
+
+    @Test
+    fun upgradedAndFreshDatabasesHaveMatchingPlaylistSchemas() {
+        val context = cleanDatabaseContext()
+        context.openOrCreateDatabase(DATABASE_NAME, Context.MODE_PRIVATE, null).use { db ->
+            db.execSQL("CREATE TABLE tracks (source_id TEXT NOT NULL, rating_key TEXT NOT NULL, title TEXT NOT NULL, stream_url TEXT NOT NULL, part_key TEXT NOT NULL, PRIMARY KEY (source_id, rating_key))")
+            db.execSQL("CREATE TABLE album_tracks (source_id TEXT NOT NULL, rating_key TEXT NOT NULL, title TEXT NOT NULL, stream_url TEXT NOT NULL, part_key TEXT NOT NULL, PRIMARY KEY (source_id, rating_key))")
+            db.version = 15
+        }
+        AlbumLocalStore(context).getAllPlaylists("source")
+        val upgraded = context.openOrCreateDatabase(DATABASE_NAME, Context.MODE_PRIVATE, null).use { db ->
+            mapOf("playlists" to db.columnNames("playlists"), "playlist_tracks" to db.columnNames("playlist_tracks"))
+        }
+        context.deleteDatabase(DATABASE_NAME)
+        AlbumLocalStore(context).getAllPlaylists("source")
+        val fresh = context.openOrCreateDatabase(DATABASE_NAME, Context.MODE_PRIVATE, null).use { db ->
+            mapOf("playlists" to db.columnNames("playlists"), "playlist_tracks" to db.columnNames("playlist_tracks"))
+        }
+        assertEquals(fresh, upgraded)
         context.deleteDatabase(DATABASE_NAME)
     }
 
@@ -705,6 +794,14 @@ class AlbumLocalStoreMigrationTest {
             val index = cursor.getColumnIndex("name")
             check(index >= 0)
             buildSet { while (cursor.moveToNext()) add(cursor.getString(index)) }
+        }
+
+    private fun SQLiteDatabase.columnNotNull(table: String, column: String): Int =
+        rawQuery("PRAGMA table_info($table)", null).use { cursor ->
+            val nameIndex = cursor.getColumnIndex("name")
+            val notNullIndex = cursor.getColumnIndex("notnull")
+            while (cursor.moveToNext()) if (cursor.getString(nameIndex) == column) return@use cursor.getInt(notNullIndex)
+            error("Column $column not found in $table")
         }
 
     private fun SQLiteDatabase.indexNames(table: String): Set<String> =

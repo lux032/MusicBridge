@@ -164,6 +164,10 @@ class AppState(
     var playlists by mutableStateOf<List<PlexPlaylist>>(emptyList())
     var selectedPlaylist by mutableStateOf<PlexPlaylist?>(null)
     var playlistTrackResult by mutableStateOf<PlexPlaylistTracksResult?>(null)
+    var isPlaylistSyncing by mutableStateOf(false)
+        internal set
+    var playlistSyncProgress by mutableStateOf(0 to 0)
+        internal set
     var favoriteTracks by mutableStateOf<List<PlexTrackStream>>(emptyList())
     var aiSettings by mutableStateOf(appPreferences.loadAiSettings())
         private set
@@ -539,6 +543,8 @@ class AppState(
     fun shuffleArtist(artist: ArtistSummary) = libraryCoordinator.shuffleArtist(artist)
 
     fun loadPlaylists() = libraryCoordinator.loadPlaylists()
+
+    fun syncAllPlaylistsTracks() = libraryCoordinator.syncAllPlaylistsTracks()
 
     fun loadFavoriteTracks() = libraryCoordinator.loadFavoriteTracks()
 

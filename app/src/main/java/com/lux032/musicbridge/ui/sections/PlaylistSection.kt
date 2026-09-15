@@ -14,6 +14,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Shuffle
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -37,6 +38,9 @@ internal fun PlaylistsSection(
     isAiGenerating: Boolean,
     onGenerateAiPlaylist: (String) -> Unit,
     onCancelAiGeneration: () -> Unit,
+    isSyncing: Boolean = false,
+    syncProgress: Pair<Int, Int> = 0 to 0,
+    onSyncAllPlaylists: () -> Unit = {},
 ) {
     var showAiDialog by remember { mutableStateOf(false) }
     if (showAiDialog) AiPlaylistDialog(isAiGenerating, onCancelAiGeneration, { prompt -> onGenerateAiPlaylist(prompt) }) { showAiDialog = false }
@@ -46,12 +50,29 @@ internal fun PlaylistsSection(
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item {
-            Text(
-                text = Strings.playlists,
-                style = MaterialTheme.typography.headlineMedium,
-                color = AppColors.TextPrimary,
-                fontWeight = FontWeight.Bold,
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = Strings.playlists,
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = AppColors.TextPrimary,
+                    fontWeight = FontWeight.Bold,
+                )
+                IconButton(onClick = onSyncAllPlaylists, enabled = playlists.isNotEmpty() && !isSyncing) {
+                    if (isSyncing) {
+                        CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
+                    } else {
+                        Icon(Icons.Filled.Sync, contentDescription = "同步所有歌单")
+                    }
+                }
+            }
+            if (isSyncing) {
+                val (current, total) = syncProgress
+                Text("正在同步歌单 $current/$total", color = AppColors.TextSecondary, style = MaterialTheme.typography.bodySmall)
+            }
         }
         item {
             Surface(modifier = Modifier.fillMaxWidth().clickable { showAiDialog = true }, shape = RoundedCornerShape(20.dp), color = LocalArtworkPalette.current.accent.copy(alpha = .15f), border = BorderStroke(1.dp, LocalArtworkPalette.current.accent)) {

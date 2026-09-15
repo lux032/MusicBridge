@@ -432,6 +432,9 @@ fun PlexAlbumScreen(
                             isAiGenerating = state.isAiGenerating,
                             onGenerateAiPlaylist = state::generateAiPlaylist,
                             onCancelAiGeneration = state::cancelAiGeneration,
+                            isSyncing = state.isPlaylistSyncing,
+                            syncProgress = state.playlistSyncProgress,
+                            onSyncAllPlaylists = state::syncAllPlaylistsTracks,
                         )
                     }
                 } else if (currentSection == AppSection.PlaylistDetail) {

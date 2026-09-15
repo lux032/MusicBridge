@@ -1,6 +1,8 @@
 package com.lux032.musicbridge
 
 import android.util.Log
+import com.lux032.musicbridge.local.LocalAudioCache
+import com.lux032.musicbridge.local.originalCacheKey
 import com.lux032.musicbridge.plex.PlexAlbum
 import com.lux032.musicbridge.plex.PlexAlbumTracksResult
 import com.lux032.musicbridge.plex.PlexPlaylistTracksResult
@@ -414,7 +416,27 @@ internal class AppStatePlaybackCoordinator(
         shuffle: Boolean,
     ) {
         if (playlistResult.tracks.isEmpty()) return
-        val tracks = if (shuffle) playlistResult.tracks.shuffled() else playlistResult.tracks
+        val requestedTracks = if (shuffle) playlistResult.tracks.shuffled() else playlistResult.tracks
+        if (state.selectedPlaybackTarget == PlaybackTarget.LocalDevice && !state.networkQualityMonitor.currentIsConnected()) {
+            state.scope.launch {
+                val localTracks = withContext(Dispatchers.IO) {
+                    requestedTracks.filter { track ->
+                        state.albumLocalStore.isTrackAvailableLocally(track.sourceId, track.ratingKey) ||
+                            LocalAudioCache.isFullyCached(originalCacheKey(track.sourceId, track.ratingKey, track.partKey))
+                    }
+                }
+                when {
+                    localTracks.isEmpty() -> state.errorMessage = "当前离线且歌单曲目均未在本地缓存"
+                    localTracks.size < requestedTracks.size -> {
+                        state.actionMessage = "离线模式：已为你播放本地可用的 ${localTracks.size}/${requestedTracks.size} 首歌曲"
+                        startLocalPlaylistTracks(playlistResult, localTracks)
+                    }
+                    else -> startLocalPlaylistTracks(playlistResult, requestedTracks)
+                }
+            }
+            return
+        }
+        val tracks = requestedTracks
         val fakeAlbum = PlexAlbum(
             ratingKey = playlistResult.playlist.ratingKey,
             title = playlistResult.playlist.title,
@@ -443,6 +465,32 @@ internal class AppStatePlaybackCoordinator(
                 shuffle = shuffle,
             )
         }
+    }
+
+    private fun startLocalPlaylistTracks(
+        playlistResult: PlexPlaylistTracksResult,
+        tracks: List<PlexTrackStream>,
+    ) {
+        if (tracks.isEmpty() || state.selectedPlaybackTarget != PlaybackTarget.LocalDevice) return
+        val fakeAlbum = PlexAlbum(
+            ratingKey = playlistResult.playlist.ratingKey,
+            title = playlistResult.playlist.title,
+            artistName = null,
+            year = null,
+            thumbUrl = playlistResult.playlist.thumbUrl,
+            userRating = null,
+            addedAtEpochSeconds = null,
+            lastViewedAtEpochSeconds = null,
+            section = PlexSection("", "", ""),
+            sourceId = playlistResult.playlist.sourceId.ifBlank { tracks.firstOrNull()?.sourceId.orEmpty() },
+        )
+        val initialAlbum = tracks.firstOrNull()?.let { resolveAlbumForTrack(it, fakeAlbum) } ?: fakeAlbum
+        state.localPlaybackCoordinator.startLocalPlayback(
+            album = initialAlbum,
+            tracks = tracks,
+            startIndex = 0,
+            initialPositionMillis = 0L,
+        )
     }
 
     private fun startPlaylistPlaybackOnSonos(
