@@ -66,12 +66,16 @@ import com.lux032.musicbridge.plex.PlexAlbumTracksResult
 import com.lux032.musicbridge.plex.PlexSection
 import com.lux032.musicbridge.plex.PlexTrackStream
 import com.lux032.musicbridge.service.PlaybackForegroundService.Companion.ACTION_OPEN_PLAYBACK_DETAIL
+import com.lux032.musicbridge.local.PlaybackDiagnostics
+import com.lux032.musicbridge.local.isPlexLiveTranscodeUrl
 import com.lux032.musicbridge.ui.settings.SettingsActions
 import com.lux032.musicbridge.ui.settings.SettingsScreen
 import com.lux032.musicbridge.ui.settings.SettingsViewState
 import com.lux032.musicbridge.ui.theme.PlexToSonosPlayerTheme
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 
 class MainActivity : ComponentActivity() {
@@ -813,6 +817,32 @@ fun PlexAlbumScreen(
                             onSaveAiSettings = state::updateAiSettings,
                             loadLocalCacheUsedBytes = { state.localCacheUsedBytes() },
                             loadOfflineDownloadedBytes = { state.totalDownloadedBytes() },
+                            runPlexOffsetProbe = probe@{
+                                val playerState = state.miniPlayerState
+                                    ?: return@probe Result.failure(
+                                        IllegalStateException("请先播放一首 Plex 转码曲目"),
+                                    )
+                                if (playerState.target != PlaybackTarget.LocalDevice) {
+                                    return@probe Result.failure(
+                                        IllegalStateException("请先使用本机播放一首 Plex 转码曲目"),
+                                    )
+                                }
+                                val liveUrl = state.localPlaybackEngine.currentLiveTranscodeUrl
+                                if (liveUrl?.isPlexLiveTranscodeUrl() != true) {
+                                    return@probe Result.failure(
+                                        IllegalStateException("请先播放一首 Plex 转码曲目"),
+                                    )
+                                }
+                                if (state.localPlaybackEngine.isPlayRequested) {
+                                    state.togglePause(playerState)
+                                }
+                                withContext(Dispatchers.IO) {
+                                    PlaybackDiagnostics.testPlexOffsetCompatibility(
+                                        context = state.context,
+                                        liveTranscodeUrl = liveUrl,
+                                    )
+                                }
+                            },
                         ),
                         scrollState = scrollState,
                         bottomContentPadding = contentBottomPadding,

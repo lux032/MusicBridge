@@ -28,8 +28,19 @@ class LocalTranscodeSeekTest {
 
         assertTrue(plan.restartsLiveTranscode)
         assertTrue(plan.url.contains("offset=137"))
+        assertTrue(plan.url.contains("fastSeek=1"))
         assertEquals(0L, plan.playerPositionMillis)
         assertEquals(137_000L, plan.logicalBaseMillis)
         assertEquals(137_000L, plan.effectiveTargetMillis)
+    }
+
+    @Test
+    fun liveTranscodeAtZeroOffsetDoesNotAddFastSeek() {
+        val url = "https://plex.example/music/:/transcode/universal/start.ogg?offset=30&path=%2Flibrary%2Fmetadata%2F42"
+
+        val plan = buildLocalSeekPlan(url, 0L)
+
+        assertTrue(plan.url.contains("offset=0"))
+        assertFalse(plan.url.contains("fastSeek="))
     }
 }

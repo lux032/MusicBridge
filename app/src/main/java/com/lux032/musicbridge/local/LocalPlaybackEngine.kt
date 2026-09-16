@@ -573,13 +573,24 @@ internal fun transcodeCacheInvariantHolds(
 ): Boolean = fullyCached && expectedLength > 0L && spans == listOf(0L to expectedLength)
 
 private const val MISSING_CACHE_SPAN_MESSAGE = "Cache span evicted or missing for transcode stream"
+private const val LIVE_TRANSCODE_RANGE_REJECTION_MESSAGE =
+    "Live transcode stream cannot be resumed with HTTP Range request"
 
 internal fun missingTranscodeCacheSpanException(): IOException = IOException(MISSING_CACHE_SPAN_MESSAGE)
 
-internal fun isMissingCacheSpanError(error: IOException): Boolean {
-    var cause: Throwable? = error
+internal fun liveTranscodeRangeRejectionException(): IOException =
+    IOException(LIVE_TRANSCODE_RANGE_REJECTION_MESSAGE)
+
+internal fun isMissingCacheSpanError(error: IOException): Boolean =
+    error.hasCauseMessage(MISSING_CACHE_SPAN_MESSAGE)
+
+internal fun isLiveTranscodeRangeRejection(error: IOException): Boolean =
+    error.hasCauseMessage(LIVE_TRANSCODE_RANGE_REJECTION_MESSAGE)
+
+private fun Throwable.hasCauseMessage(message: String): Boolean {
+    var cause: Throwable? = this
     while (cause != null) {
-        if (cause.message == MISSING_CACHE_SPAN_MESSAGE) return true
+        if (cause.message == message) return true
         cause = cause.cause
     }
     return false
@@ -614,6 +625,25 @@ internal fun foregroundTranscodeSessionId(
     activeSessionId: String?,
     newSessionId: () -> String,
 ): String = if (position > 0L && activeSessionId != null) activeSessionId else newSessionId()
+
+// Mark only failures from the live HTTP route, not reads of a completed transcode cache.
+// ProgressiveMediaPeriod otherwise treats an unknown-length Ogg stream as live and can
+// defer retry until its sample queue is empty, then silently reset playback to zero.
+internal class LiveTranscodeUpstreamException(cause: IOException) : IOException(cause)
+
+internal class LiveTranscodeDataSource(private val upstream: DataSource) : DataSource by upstream {
+    override fun open(dataSpec: DataSpec): Long = try {
+        upstream.open(dataSpec)
+    } catch (error: IOException) {
+        throw LiveTranscodeUpstreamException(error)
+    }
+
+    override fun read(buffer: ByteArray, offset: Int, length: Int): Int = try {
+        upstream.read(buffer, offset, length)
+    } catch (error: IOException) {
+        throw LiveTranscodeUpstreamException(error)
+    }
+}
 
 private class RoutingDataSource(
     private val directCacheFactory: DataSource.Factory,
@@ -651,10 +681,13 @@ private class RoutingDataSource(
             isFullyCached = cacheKey != null && LocalAudioCache.isFullyCached(cacheKey),
             isCachedOriginal = isCachedOriginalKey(cacheKey),
         )
+        if (route == PlaybackDataSourceRoute.TRANSCODE_UPSTREAM && dataSpec.position > 0L) {
+            throw liveTranscodeRangeRejectionException()
+        }
         val nextDelegate = when (route) {
             PlaybackDataSourceRoute.OFFLINE_FILE -> FileDataSource()
             PlaybackDataSourceRoute.DIRECT_CACHE -> directCacheFactory.createDataSource()
-            PlaybackDataSourceRoute.TRANSCODE_UPSTREAM -> httpFactory.createDataSource()
+            PlaybackDataSourceRoute.TRANSCODE_UPSTREAM -> LiveTranscodeDataSource(httpFactory.createDataSource())
             PlaybackDataSourceRoute.TRANSCODE_CACHE,
             PlaybackDataSourceRoute.CACHED_ORIGINAL -> CacheDataSource(
                 cache,
@@ -748,21 +781,13 @@ private inline fun <reified T : Throwable> Throwable.findCause(): T? {
 
 private inline fun <reified T : Throwable> Throwable.hasCause(): Boolean = findCause<T>() != null
 
-private class TranscodeLoadErrorHandlingPolicy : DefaultLoadErrorHandlingPolicy() {
+internal class TranscodeLoadErrorHandlingPolicy : DefaultLoadErrorHandlingPolicy() {
     override fun getRetryDelayMsFor(loadErrorInfo: LoadErrorHandlingPolicy.LoadErrorInfo): Long {
-        if (isMissingCacheSpanError(loadErrorInfo.exception)) return C.TIME_UNSET
-        val fatalZeroByteLoad = isFatalZeroByteTranscodeLoad(
-            url = loadErrorInfo.loadEventInfo.uri.toString(),
-            bytesLoaded = loadErrorInfo.loadEventInfo.bytesLoaded,
-            error = loadErrorInfo.exception,
-        )
-        return if (fatalZeroByteLoad && loadErrorInfo.errorCount > 1) {
-            C.TIME_UNSET
-        } else if (fatalZeroByteLoad) {
-            0L
-        } else {
-            super.getRetryDelayMsFor(loadErrorInfo)
-        }
+        if (isMissingCacheSpanError(loadErrorInfo.exception) ||
+            isLiveTranscodeRangeRejection(loadErrorInfo.exception) ||
+            loadErrorInfo.exception.hasCause<LiveTranscodeUpstreamException>()
+        ) return C.TIME_UNSET
+        return super.getRetryDelayMsFor(loadErrorInfo)
     }
 }
 
@@ -774,14 +799,38 @@ internal fun mediaItemTransitionReasonName(reason: Int): String = when (reason) 
     else -> "UNKNOWN($reason)"
 }
 
+internal fun positionDiscontinuityReasonName(reason: Int): String = when (reason) {
+    Player.DISCONTINUITY_REASON_SEEK -> "SEEK"
+    Player.DISCONTINUITY_REASON_AUTO_TRANSITION -> "AUTO_TRANSITION"
+    Player.DISCONTINUITY_REASON_SEEK_ADJUSTMENT -> "SEEK_ADJUSTMENT"
+    Player.DISCONTINUITY_REASON_SKIP -> "SKIP"
+    Player.DISCONTINUITY_REASON_REMOVE -> "REMOVE"
+    Player.DISCONTINUITY_REASON_INTERNAL -> "INTERNAL"
+    else -> "UNKNOWN($reason)"
+}
+
 internal enum class LiveTranscodeRetryAction { RESTART_AT_POSITION, SKIP_NEAR_END, RETRY_FROM_START }
 
-internal fun liveTranscodeRetryAction(
+internal fun isPrematureTranscodeEnd(
     isLiveTranscode: Boolean,
+    isFullyCached: Boolean,
+    currentPositionMillis: Long,
+    durationMillis: Long?,
+): Boolean = isLiveTranscode &&
+    !isFullyCached &&
+    durationMillis != null &&
+    durationMillis > 0L &&
+    currentPositionMillis < durationMillis - 5_000L
+
+internal fun supportsPlexOffsetRetry(url: String?): Boolean =
+    url?.isPlexLiveTranscodeUrl() == true
+
+internal fun liveTranscodeRetryAction(
+    streamUrl: String?,
     durationMillis: Long?,
     currentPositionMillis: Long,
 ): LiveTranscodeRetryAction = when {
-    !isLiveTranscode -> LiveTranscodeRetryAction.RETRY_FROM_START
+    streamUrl?.isPlexLiveTranscodeUrl() != true -> LiveTranscodeRetryAction.RETRY_FROM_START
     durationMillis == null || durationMillis <= 0L -> LiveTranscodeRetryAction.RESTART_AT_POSITION
     durationMillis - currentPositionMillis > 3_000L -> LiveTranscodeRetryAction.RESTART_AT_POSITION
     else -> LiveTranscodeRetryAction.SKIP_NEAR_END
@@ -923,6 +972,8 @@ class LocalPlaybackEngine(
         private const val BUFFERING_WATCHDOG_TICK_MILLIS = 1_000L
         private const val MAX_CONSECUTIVE_PLAYBACK_FAILURES = 3
         private const val MAX_COMPLETION_PRECACHE_ATTEMPTS = 2
+        private const val MAX_TRUNCATED_RESTARTS = 3
+        private const val MIN_TRUNCATED_RESTART_PROGRESS_MILLIS = 1_000L
 
         /**
          * The engine instance owned by AppState. Registered here so [LocalPlaybackService]
@@ -991,6 +1042,8 @@ class LocalPlaybackEngine(
     private var bufferingStallPositionMillis = C.TIME_UNSET
     private var bufferingStallBufferedPositionMillis = C.TIME_UNSET
     private var bufferingStartedAtMillis = C.TIME_UNSET
+    private var truncatedRestartCount = 0
+    private var lastTruncatedRestartPositionMillis = C.TIME_UNSET
     private var released = false
 
     private val bufferingWatchdog = object : Runnable {
@@ -1055,22 +1108,32 @@ class LocalPlaybackEngine(
         override fun isCommandAvailable(command: Int): Boolean = availableCommands.contains(command)
 
         override fun seekBack() {
-            this@LocalPlaybackEngine.seekTo(currentPositionMillis - seekBackIncrement)
+            this@LocalPlaybackEngine.seekToInternal(
+                currentPositionMillis - seekBackIncrement,
+                source = "MediaSession",
+            )
         }
 
         override fun seekForward() {
-            this@LocalPlaybackEngine.seekTo(currentPositionMillis + seekForwardIncrement)
+            this@LocalPlaybackEngine.seekToInternal(
+                currentPositionMillis + seekForwardIncrement,
+                source = "MediaSession",
+            )
         }
 
         override fun seekToDefaultPosition() {
-            this@LocalPlaybackEngine.seekTo(0L)
+            this@LocalPlaybackEngine.seekToInternal(0L, source = "MediaSession")
         }
 
         override fun seekTo(positionMs: Long) {
-            this@LocalPlaybackEngine.seekTo(positionMs)
+            this@LocalPlaybackEngine.seekToInternal(positionMs, source = "MediaSession")
         }
 
         override fun seekTo(mediaItemIndex: Int, positionMs: Long) {
+            PlaybackDiagnostics.record(
+                "SEEK_REQUEST",
+                "action=seekToItem source=MediaSession targetIndex=$mediaItemIndex targetMs=$positionMs currentMs=$currentPositionMillis",
+            )
             val shouldPlay = player.playWhenReady
             this@LocalPlaybackEngine.seekToItem(mediaItemIndex, positionMs)
             ensurePrepared(shouldPlay)
@@ -1081,19 +1144,19 @@ class LocalPlaybackEngine(
             player.play()
         }
 
-        override fun seekToNext() = advanceFromMediaSession()
+        override fun seekToNext() = seekToNextInternal(source = "MediaSession")
 
-        override fun seekToNextMediaItem() = advanceFromMediaSession()
+        override fun seekToNextMediaItem() = seekToNextInternal(source = "MediaSession")
 
         override fun seekToPrevious() {
             val shouldPlay = player.playWhenReady
-            this@LocalPlaybackEngine.seekToPrevious()
+            this@LocalPlaybackEngine.seekToPreviousInternal(source = "MediaSession")
             ensurePrepared(shouldPlay)
         }
 
         override fun seekToPreviousMediaItem() {
             val shouldPlay = player.playWhenReady
-            this@LocalPlaybackEngine.seekToPrevious()
+            this@LocalPlaybackEngine.seekToPreviousInternal(source = "MediaSession")
             ensurePrepared(shouldPlay)
         }
     }
@@ -1121,6 +1184,7 @@ class LocalPlaybackEngine(
             }
             if (previousIndex != C.INDEX_UNSET && previousIndex != newIndex) {
                 resetBufferingWatchdog()
+                resetTruncatedRestartGuard()
                 pendingCachedTranscodeSeek = null
                 restoreOriginalQueueItem(previousIndex)
                 queueItems.getOrNull(previousIndex)?.let(::enqueueCompletionPrecache)
@@ -1131,6 +1195,18 @@ class LocalPlaybackEngine(
                 schedulePrecacheFrom(newIndex)
                 listener?.onTrackChanged(newIndex)
             }
+        }
+
+        override fun onPositionDiscontinuity(
+            oldPosition: Player.PositionInfo,
+            newPosition: Player.PositionInfo,
+            reason: Int,
+        ) {
+            PlaybackDiagnostics.record(
+                "POSITION_DISCONTINUITY",
+                "reason=${positionDiscontinuityReasonName(reason)} oldIndex=${oldPosition.mediaItemIndex} " +
+                    "oldPosMs=${oldPosition.positionMs} newIndex=${newPosition.mediaItemIndex} newPosMs=${newPosition.positionMs}",
+            )
         }
 
         override fun onIsPlayingChanged(isPlaying: Boolean) {
@@ -1179,6 +1255,7 @@ class LocalPlaybackEngine(
                 playbackState == Player.STATE_BUFFERING && player.playWhenReady,
             )
             if (playbackState == Player.STATE_ENDED) {
+                if (recoverPrematureTranscodeEnd()) return
                 queueItems.getOrNull(currentIndex)?.let(::enqueueCompletionPrecache)
                 listener?.onQueueEnded()
             }
@@ -1202,9 +1279,18 @@ class LocalPlaybackEngine(
                 error.errorCode == PlaybackException.ERROR_CODE_DECODING_FAILED &&
                 SystemClock.elapsedRealtime() - failedSeek.startedAtMillis <= CACHED_SEEK_FALLBACK_WINDOW_MILLIS
             ) {
-                Log.w(LOG_TAG, "Cached Opus seek failed at ${failedSeek.targetMillis}ms; retrying with Plex offset", error)
+                val retryPosition = if (supportsPlexOffsetRetry(failedItem?.url)) failedSeek.targetMillis else 0L
+                Log.w(
+                    LOG_TAG,
+                    "Cached Opus seek failed at ${failedSeek.targetMillis}ms; retrying at ${retryPosition}ms",
+                    error,
+                )
+                PlaybackDiagnostics.record(
+                    "TRANSCODE_SEEK_FALLBACK",
+                    "index=$failedIndex requestedMs=${failedSeek.targetMillis} retryMs=$retryPosition",
+                )
                 recoveryBudget.markRetryConsumed(failedIndex)
-                restartLiveTranscode(failedSeek.index, failedSeek.targetMillis, wasPlayRequested)
+                restartLiveTranscode(failedSeek.index, retryPosition, wasPlayRequested)
                 return
             }
             val cachedFallback = failedItem?.let(::cachedOriginalFallback)
@@ -1243,6 +1329,26 @@ class LocalPlaybackEngine(
             )
         }
 
+        override fun onLoadCompleted(
+            eventTime: AnalyticsListener.EventTime,
+            loadEventInfo: LoadEventInfo,
+            mediaLoadData: MediaLoadData,
+        ) {
+            val headers = loadEventInfo.responseHeaders
+            val contentLength = headers.entries.firstOrNull { it.key.equals("Content-Length", ignoreCase = true) }
+                ?.value?.joinToString(",").orEmpty()
+            val contentType = headers.entries.firstOrNull { it.key.equals("Content-Type", ignoreCase = true) }
+                ?.value?.joinToString(",").orEmpty()
+            val acceptRanges = headers.entries.firstOrNull { it.key.equals("Accept-Ranges", ignoreCase = true) }
+                ?.value?.joinToString(",").orEmpty()
+            PlaybackDiagnostics.record(
+                "LOAD_COMPLETED",
+                "uri=${loadEventInfo.uri} bytes=${loadEventInfo.bytesLoaded} " +
+                    "durationMs=${loadEventInfo.loadDurationMs} dataType=${mediaLoadData.dataType} " +
+                    "contentLength=$contentLength contentType=$contentType acceptRanges=$acceptRanges",
+            )
+        }
+
         override fun onLoadError(
             eventTime: AnalyticsListener.EventTime,
             loadEventInfo: LoadEventInfo,
@@ -1252,7 +1358,9 @@ class LocalPlaybackEngine(
         ) {
             val detail = "index=${eventTime.mediaPeriodId?.periodUid} uri=${loadEventInfo.uri} " +
                 "bytes=${loadEventInfo.bytesLoaded} durationMs=${loadEventInfo.loadDurationMs} " +
-                "canceled=$wasCanceled dataType=${mediaLoadData.dataType}"
+                "canceled=$wasCanceled dataType=${mediaLoadData.dataType} " +
+                "appManagedRecovery=${error.hasCause<LiveTranscodeUpstreamException>()} " +
+                "positionMs=$currentPositionMillis bufferedPositionMs=$bufferedPositionMillis"
             PlaybackDiagnostics.record("LOAD_ERROR", "$detail error=${error.javaClass.simpleName}:${error.message}")
             Log.w(LOG_TAG, detail, error)
         }
@@ -1292,7 +1400,7 @@ class LocalPlaybackEngine(
                 val failedItem = queueItems.getOrNull(failedIndex)
                 val failedPositionMillis = currentPositionMillis
                 when (liveTranscodeRetryAction(
-                    isLiveTranscode = failedItem?.url?.isPlexLiveTranscodeUrl() == true,
+                    streamUrl = failedItem?.url,
                     durationMillis = failedItem?.durationMillis,
                     currentPositionMillis = failedPositionMillis,
                 )) {
@@ -1311,9 +1419,17 @@ class LocalPlaybackEngine(
                         skipFailedMediaItem(failedIndex, error, wasPlayRequested)
                     }
                     LiveTranscodeRetryAction.RETRY_FROM_START -> {
-                        Log.w(LOG_TAG, "Retrying failed media item index=$failedIndex")
-                        player.seekTo(failedIndex, 0L)
-                        ensurePrepared(wasPlayRequested)
+                        Log.w(LOG_TAG, "Retrying failed media item index=$failedIndex from start")
+                        if (failedItem?.url?.isPlexLiveTranscodeUrl() == true) {
+                            PlaybackDiagnostics.record(
+                                "TRANSCODE_RETRY_FROM_START",
+                                "index=$failedIndex previousPositionMs=$failedPositionMillis offsetUnsupported=true",
+                            )
+                            restartLiveTranscode(failedIndex, 0L, wasPlayRequested)
+                        } else {
+                            player.seekTo(failedIndex, 0L)
+                            ensurePrepared(wasPlayRequested)
+                        }
                     }
                 }
             }
@@ -1411,6 +1527,8 @@ class LocalPlaybackEngine(
     }
 
     val currentIndex: Int get() = player.currentMediaItemIndex
+    val currentLiveTranscodeUrl: String?
+        get() = queueItems.getOrNull(currentIndex)?.url?.takeIf(String::isPlexLiveTranscodeUrl)
     val currentPositionMillis: Long
         get() = logicalPositionMillis(currentIndex, player.currentPosition)
     private val bufferedPositionMillis: Long
@@ -1581,6 +1699,53 @@ class LocalPlaybackEngine(
         PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
     )
 
+    private fun recoverPrematureTranscodeEnd(): Boolean {
+        val index = currentIndex
+        val item = queueItems.getOrNull(index) ?: return false
+        val position = currentPositionMillis
+        val duration = durationMillis
+        if (!isPrematureTranscodeEnd(
+                isLiveTranscode = item.url.isPlexLiveTranscodeUrl(),
+                isFullyCached = LocalAudioCache.isFullyCached(item.cacheKey),
+                currentPositionMillis = position,
+                durationMillis = duration,
+            )
+        ) return false
+
+        val progressedEnough = lastTruncatedRestartPositionMillis == C.TIME_UNSET ||
+            position >= lastTruncatedRestartPositionMillis + MIN_TRUNCATED_RESTART_PROGRESS_MILLIS
+        if (truncatedRestartCount < MAX_TRUNCATED_RESTARTS && progressedEnough) {
+            PlaybackDiagnostics.record(
+                "TRANSCODE_TRUNCATED",
+                "index=$index posMs=$position durMs=$duration retryingAtPosMs=$position",
+            )
+            truncatedRestartCount += 1
+            lastTruncatedRestartPositionMillis = position
+            restartLiveTranscode(index, position, playWhenReady = true)
+            return true
+        }
+
+        PlaybackDiagnostics.record(
+            "TRANSCODE_TRUNCATED_GIVE_UP",
+            "index=$index posMs=$position durMs=$duration restartCount=$truncatedRestartCount progressedEnough=$progressedEnough",
+        )
+        skipFailedMediaItem(
+            failedIndex = index,
+            error = PlaybackException(
+                "Plex transcode ended before the source track",
+                null,
+                PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
+            ),
+            wasPlayRequested = true,
+        )
+        return true
+    }
+
+    private fun resetTruncatedRestartGuard() {
+        truncatedRestartCount = 0
+        lastTruncatedRestartPositionMillis = C.TIME_UNSET
+    }
+
     private fun resetBufferingWatchdog() {
         watchdogHandler.removeCallbacks(bufferingWatchdog)
         bufferingStallStartedAtMillis = C.TIME_UNSET
@@ -1615,6 +1780,7 @@ class LocalPlaybackEngine(
         precacheCount: Int = 0,
     ) {
         PlaybackDiagnostics.beginPlaybackSession()
+        resetTruncatedRestartGuard()
         synchronized(completionPrecacheLock) { completionPrecacheItems.clear() }
         pendingCachedTranscodeSeek = null
         hasUnrecoveredPlaybackError = false
@@ -1686,7 +1852,12 @@ class LocalPlaybackEngine(
     }
 
     fun playAt(index: Int, positionMillis: Long = 0L) {
+        PlaybackDiagnostics.record(
+            "SEEK_REQUEST",
+            "action=playAt source=App targetIndex=$index targetMs=$positionMillis currentMs=$currentPositionMillis",
+        )
         if (index !in 0 until player.mediaItemCount) return
+        resetTruncatedRestartGuard()
         recoveryBudget.resetForUserAction()
         recoveryTargetIndex = C.INDEX_UNSET
         seekToItem(index, positionMillis)
@@ -1728,16 +1899,34 @@ class LocalPlaybackEngine(
      * previous queue item below that (shuffle-aware). Matches the media notification's
      * previous button, which drives the same command.
      */
-    fun seekToPrevious() {
+    fun seekToPrevious() = seekToPreviousInternal(source = "App")
+
+    private fun seekToPreviousInternal(source: String) {
+        PlaybackDiagnostics.record(
+            "SEEK_REQUEST",
+            "action=seekToPrevious source=$source positionMs=$currentPositionMillis",
+        )
         val item = queueItems.getOrNull(currentIndex)
         if (currentPositionMillis > player.maxSeekToPreviousPosition) {
-            if (item?.url?.isPlexLiveTranscodeUrl() == true) seekTo(0L) else player.seekTo(0L)
+            if (item?.url?.isPlexLiveTranscodeUrl() == true) {
+                seekToInternal(0L, source)
+            } else {
+                player.seekTo(0L)
+            }
         } else {
             advanceToPreviousMediaItem()
         }
     }
 
-    fun seekToNext() = advanceFromMediaSession()
+    fun seekToNext() = seekToNextInternal(source = "App")
+
+    private fun seekToNextInternal(source: String) {
+        PlaybackDiagnostics.record(
+            "SEEK_REQUEST",
+            "action=seekToNext source=$source positionMs=$currentPositionMillis",
+        )
+        advanceFromMediaSession()
+    }
 
     /**
      * Parks a finished queue: rewinds the final track and stays paused at 0:00 instead of
@@ -1759,7 +1948,14 @@ class LocalPlaybackEngine(
      * they are restarted with Plex's source-time `offset` and a logical position base.
      * Returns the effective logical target (Plex offsets have whole-second precision).
      */
-    fun seekTo(positionMillis: Long): Long {
+    fun seekTo(positionMillis: Long): Long = seekToInternal(positionMillis, source = "App")
+
+    private fun seekToInternal(positionMillis: Long, source: String): Long {
+        PlaybackDiagnostics.record(
+            "SEEK_REQUEST",
+            "action=seekTo source=$source targetMs=$positionMillis currentMs=$currentPositionMillis",
+        )
+        resetTruncatedRestartGuard()
         val shouldPlay = player.playWhenReady
         val effectivePosition = seekToItem(currentIndex, positionMillis)
         ensurePrepared(shouldPlay)
@@ -1902,6 +2098,7 @@ class LocalPlaybackEngine(
 
     fun stopPlayback() {
         PrecacheGate.open()
+        resetTruncatedRestartGuard()
         resetBufferingWatchdog()
         pendingCachedTranscodeSeek = null
         val item = queueItems.getOrNull(currentIndex)
@@ -1913,6 +2110,7 @@ class LocalPlaybackEngine(
         if (released) return
         released = true
         PrecacheGate.open()
+        resetTruncatedRestartGuard()
         watchdogHandler.removeCallbacks(bufferingWatchdog)
         resetBufferingWatchdog()
         pendingCachedTranscodeSeek = null

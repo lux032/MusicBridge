@@ -28,12 +28,40 @@ internal fun buildLocalSeekPlan(url: String, positionMillis: Long): LocalSeekPla
     // its own zero-based Media3 timeline, so retain the source-track second as a logical base.
     val offsetSeconds = (safePositionMillis / 1_000L).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
     val logicalBaseMillis = offsetSeconds * 1_000L
+    val offsetUrl = url.withPlexTranscodeOffsetSeconds(offsetSeconds)
     return LocalSeekPlan(
-        url = url.withPlexTranscodeOffsetSeconds(offsetSeconds),
+        url = if (offsetSeconds > 0) offsetUrl.withPlexFastSeek() else offsetUrl,
         playerPositionMillis = 0L,
         logicalBaseMillis = logicalBaseMillis,
         restartsLiveTranscode = true,
     )
+}
+
+private fun String.withPlexFastSeek(): String {
+    val fragment = substringAfter('#', "").takeIf { contains('#') }
+    val withoutFragment = substringBefore('#')
+    val baseUrl = withoutFragment.substringBefore('?')
+    val query = withoutFragment.substringAfter('?', "")
+    var replaced = false
+    val updatedQuery = query
+        .split('&')
+        .filter(String::isNotBlank)
+        .map { parameter ->
+            if (parameter.substringBefore('=').equals("fastSeek", ignoreCase = true)) {
+                replaced = true
+                "fastSeek=1"
+            } else {
+                parameter
+            }
+        }
+        .toMutableList()
+        .apply { if (!replaced) add("fastSeek=1") }
+        .joinToString("&")
+    return buildString {
+        append(baseUrl)
+        if (updatedQuery.isNotEmpty()) append('?').append(updatedQuery)
+        fragment?.let { append('#').append(it) }
+    }
 }
 
 internal fun String.isPlexLiveTranscodeUrl(): Boolean =

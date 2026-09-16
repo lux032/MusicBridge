@@ -71,6 +71,17 @@ class LocalCacheRoutingTest {
     }
 
     @Test
+    fun liveTranscodeRangeRejectionIsDistinguishedFromOrdinaryNetworkErrors() {
+        val direct = liveTranscodeRangeRejectionException()
+        val wrapped = java.io.IOException(direct)
+
+        assertTrue(isLiveTranscodeRangeRejection(direct))
+        assertTrue(isLiveTranscodeRangeRejection(wrapped))
+        assertFalse(isLiveTranscodeRangeRejection(java.io.IOException("connection reset")))
+        assertFalse(isLiveTranscodeRangeRejection(java.io.IOException("HTTP 503")))
+    }
+
+    @Test
     fun normalRoutingRemainsUnchanged() {
         assertEquals(
             PlaybackDataSourceRoute.OFFLINE_FILE,

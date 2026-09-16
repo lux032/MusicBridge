@@ -140,7 +140,9 @@ fun SettingsScreen(
             )
 
             // 6. About & Diagnostics
-            AboutAndDiagnosticsSection()
+            AboutAndDiagnosticsSection(
+                onRunPlexOffsetProbe = actions.runPlexOffsetProbe,
+            )
         }
     }
 }

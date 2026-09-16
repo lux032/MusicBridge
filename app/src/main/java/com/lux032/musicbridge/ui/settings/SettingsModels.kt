@@ -47,4 +47,5 @@ data class SettingsActions(
     val onSaveAiSettings: (AiSettings) -> Unit,
     val loadLocalCacheUsedBytes: suspend () -> Long,
     val loadOfflineDownloadedBytes: suspend () -> Long,
+    val runPlexOffsetProbe: suspend () -> Result<com.lux032.musicbridge.local.PlexOffsetProbeResult>,
 )

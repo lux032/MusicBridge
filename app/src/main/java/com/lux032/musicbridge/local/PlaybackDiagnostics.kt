@@ -7,13 +7,48 @@ import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.TransferListener
 import com.lux032.musicbridge.BuildConfig
+import com.lux032.musicbridge.plex.stopPlexTranscodeSession
+import com.lux032.musicbridge.plex.withPlexTranscodeOffsetSeconds
+import com.lux032.musicbridge.plex.withPlexTranscodeSession
 import java.io.File
+import java.net.HttpURLConnection
+import java.net.URI
+import java.net.URL
+import java.net.URLDecoder
+import java.nio.charset.StandardCharsets
 import java.text.SimpleDateFormat
 import java.util.ArrayDeque
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicLong
+
+internal data class PlexOffsetProbeCase(
+    val name: String,
+    val url: String,
+    val sessionId: String,
+    val useRange: Boolean = false,
+)
+
+internal data class PlexOffsetProbeOutcome(
+    val name: String,
+    val requestUrl: String,
+    val statusCode: Int,
+    val location: String,
+    val plexProtocol: String,
+    val server: String,
+    val contentType: String,
+    val contentLength: String,
+    val acceptRanges: String,
+    val responseBody: String,
+    val error: String? = null,
+)
+
+data class PlexOffsetProbeResult(
+    val summary: String,
+    val detail: String,
+    val file: File,
+)
 
 internal data class DiagnosticEntry(
     val wallTimeMillis: Long,
@@ -67,7 +102,7 @@ internal object PlaybackDiagnostics {
         Thread(runnable, "playback-diagnostics").apply { isDaemon = true }
     }
     private val sensitiveQuery = Regex(
-        "(?i)([?&](?:X-Plex-Token|X-Plex-Client-Identifier|session|sessionId)=)[^&#\\s]+",
+        "(?i)\\b(X-Plex-Token|X-Plex-Client-Identifier|X-Plex-Session-Identifier|session|sessionId)=([^&#\\s\\r\\n'\"]+)",
     )
     @Volatile private var appContext: Context? = null
     @Volatile private var networkTransports: String = "[UNKNOWN]"
@@ -177,8 +212,195 @@ internal object PlaybackDiagnostics {
         return directory.listFiles()?.filter { it.isFile }?.all(File::delete) ?: false
     }
 
+    fun testPlexOffsetCompatibility(
+        context: Context,
+        liveTranscodeUrl: String,
+    ): Result<PlexOffsetProbeResult> = runCatching {
+        require(liveTranscodeUrl.isPlexLiveTranscodeUrl()) { "请先播放一首 Plex 转码曲目" }
+
+        val cases = buildPlexOffsetProbeCases(liveTranscodeUrl)
+        val outcomes = cases.map(::executePlexOffsetProbe)
+        val baselineStatus = outcomes.firstOrNull { it.name == "baseline_offset0_noRange" }?.statusCode ?: -1
+        val summary = outcomes.joinToString(", ") { "${it.name}: ${it.statusCode}" }
+        val detail = renderPlexOffsetProbeResult(outcomes)
+        outcomes.forEach { outcome ->
+            record(
+                "PLEX_OFFSET_PROBE",
+                "name=${outcome.name} status=${outcome.statusCode} url=${outcome.requestUrl} " +
+                    "location=${outcome.location} plexProtocol=${outcome.plexProtocol} server=${outcome.server} " +
+                    "contentType=${outcome.contentType} contentLength=${outcome.contentLength} " +
+                    "acceptRanges=${outcome.acceptRanges} body=${outcome.responseBody} " +
+                    "error=${outcome.error.orEmpty()}",
+            )
+        }
+        val directory = diagnosticsDirectory(context)
+            ?: error("External diagnostics directory is unavailable")
+        if (!directory.exists() && !directory.mkdirs()) error("Unable to create diagnostics directory")
+        val file = File(directory, "offset_probe_result.log")
+        file.writeText(detail)
+        PlexOffsetProbeResult(
+            summary = if (baselineStatus in 200..399) summary else "基准失败，探针无效；$summary",
+            detail = detail,
+            file = file,
+        )
+    }
+
+    internal fun buildPlexOffsetProbeCases(liveTranscodeUrl: String): List<PlexOffsetProbeCase> {
+        require(liveTranscodeUrl.isPlexLiveTranscodeUrl())
+        fun case(
+            name: String,
+            url: String,
+            useRange: Boolean = false,
+        ): PlexOffsetProbeCase {
+            val sessionId = "probe-${java.util.UUID.randomUUID()}"
+            return PlexOffsetProbeCase(name, url.withPlexTranscodeSession(sessionId), sessionId, useRange)
+        }
+        val offset0 = liveTranscodeUrl.withPlexTranscodeOffsetSeconds(0)
+        val offset30 = liveTranscodeUrl.withPlexTranscodeOffsetSeconds(30)
+        return listOf(
+            case("baseline_offset0_noRange", offset0),
+            case("offset30_noRange", offset30),
+            case("offset30_fastSeek", setQueryParameter(offset30, "fastSeek", "1")),
+            case("offset30_hasMDE", setQueryParameter(offset30, "hasMDE", "1")),
+            case(
+                "offset30_mp3",
+                setQueryParameter(
+                    setQueryParameter(
+                        replaceTranscodeStartPath(offset30, "start.mp3"),
+                        "audioCodec",
+                        "mp3",
+                    ),
+                    "maxAudioBitrate",
+                    "320",
+                ),
+            ),
+            case("baseline_offset0_withRange", offset0, useRange = true),
+        )
+    }
+
+    internal fun renderPlexOffsetProbeResult(outcomes: List<PlexOffsetProbeOutcome>): String = buildString {
+        val baselineStatus = outcomes.firstOrNull { it.name == "baseline_offset0_noRange" }?.statusCode ?: -1
+        appendLine(
+            if (baselineStatus in 200..399) {
+                "VERDICT: BASELINE=$baselineStatus -> offset 探针结果有效"
+            } else {
+                "VERDICT: BASELINE=$baselineStatus -> 基准失败，探针无效"
+            },
+        )
+        appendLine("MusicBridge Plex offset compatibility probe")
+        appendLine("timestamp=${System.currentTimeMillis()}")
+        appendLine("============================================================")
+        outcomes.forEach { outcome ->
+            appendLine("${outcome.name}: url=${redact(outcome.requestUrl)}")
+            appendLine(
+                "status=${outcome.statusCode} location=${redact(outcome.location)} " +
+                    "xPlexProtocol=${outcome.plexProtocol} server=${outcome.server} " +
+                    "contentType=${outcome.contentType} contentLength=${outcome.contentLength} " +
+                    "acceptRanges=${outcome.acceptRanges} body=${redact(outcome.responseBody)} " +
+                    "error=${redact(outcome.error.orEmpty())}",
+            )
+        }
+    }
+
+    private fun executePlexOffsetProbe(case: PlexOffsetProbeCase): PlexOffsetProbeOutcome {
+        var connection: HttpURLConnection? = null
+        val endpoint = parseProbeEndpoint(case.url)
+        return try {
+            connection = URL(case.url).openConnection() as HttpURLConnection
+            connection.connectTimeout = 3_000
+            connection.readTimeout = 3_000
+            connection.requestMethod = "GET"
+            if (case.useRange) connection.setRequestProperty("Range", "bytes=0-0")
+            connection.setRequestProperty("Accept-Encoding", "identity")
+            connection.instanceFollowRedirects = false
+            val status = connection.responseCode
+            val body = if (status in 200..399) {
+                connection.inputStream?.use { stream -> stream.read() }
+                "<success-body-not-captured>"
+            } else {
+                readErrorBody(connection)
+            }
+            probeOutcome(case, connection, status, body)
+        } catch (error: Exception) {
+            probeOutcome(
+                case,
+                connection,
+                connection?.runCatching { responseCode }?.getOrNull() ?: -1,
+                connection?.let(::readErrorBody) ?: "<empty>",
+                "${error.javaClass.simpleName}:${error.message}",
+            )
+        } finally {
+            connection?.disconnect()
+            if (case.sessionId.startsWith("probe-") && endpoint != null) {
+                stopPlexTranscodeSession(endpoint.serverUri, endpoint.token, case.sessionId)
+            }
+        }
+    }
+
+    private fun probeOutcome(
+        case: PlexOffsetProbeCase,
+        connection: HttpURLConnection?,
+        statusCode: Int,
+        body: String,
+        error: String? = null,
+    ) = PlexOffsetProbeOutcome(
+        name = case.name,
+        requestUrl = redact(case.url),
+        statusCode = statusCode,
+        location = connection?.getHeaderField("Location").orEmpty(),
+        plexProtocol = connection?.getHeaderField("X-Plex-Protocol").orEmpty(),
+        server = connection?.getHeaderField("Server").orEmpty(),
+        contentType = connection?.getHeaderField("Content-Type").orEmpty(),
+        contentLength = connection?.getHeaderField("Content-Length").orEmpty(),
+        acceptRanges = connection?.getHeaderField("Accept-Ranges").orEmpty(),
+        responseBody = redact(body.replace(Regex("[\\r\\n]+"), " ").ifBlank { "<empty>" }),
+        error = error?.let(::redact),
+    )
+
+    private fun readErrorBody(connection: HttpURLConnection): String = runCatching {
+        connection.errorStream?.bufferedReader(StandardCharsets.UTF_8)?.use { reader ->
+            val output = CharArray(8 * 1024)
+            val count = reader.read(output)
+            if (count > 0) String(output, 0, count) else "<empty>"
+        } ?: "<empty>"
+    }.getOrDefault("<empty>")
+
+    internal fun setQueryParameter(url: String, name: String, value: String): String {
+        val fragment = url.substringAfter('#', "").takeIf { '#' in url }
+        val withoutFragment = url.substringBefore('#')
+        val base = withoutFragment.substringBefore('?')
+        val query = withoutFragment.substringAfter('?', "")
+        var replaced = false
+        val parameters = query.split('&').filter(String::isNotBlank).map { parameter ->
+            if (parameter.substringBefore('=').equals(name, ignoreCase = true)) {
+                replaced = true
+                "$name=$value"
+            } else parameter
+        }.toMutableList()
+        if (!replaced) parameters += "$name=$value"
+        return buildString {
+            append(base)
+            if (parameters.isNotEmpty()) append('?').append(parameters.joinToString("&"))
+            fragment?.let { append('#').append(it) }
+        }
+    }
+
+    private fun replaceTranscodeStartPath(url: String, fileName: String): String =
+        url.replace(Regex("start\\.[^?/#]+", RegexOption.IGNORE_CASE), fileName)
+
+    private fun parseProbeEndpoint(url: String): PlexTranscodeEndpoint? = runCatching {
+        val uri = URI(url)
+        val serverUri = URI(uri.scheme, uri.rawAuthority, null, null, null).toString().trimEnd('/')
+        val token = uri.rawQuery.orEmpty().split('&').firstNotNullOfOrNull { parameter ->
+            val name = URLDecoder.decode(parameter.substringBefore('='), StandardCharsets.UTF_8.name())
+            if (!name.equals("X-Plex-Token", ignoreCase = true)) null
+            else URLDecoder.decode(parameter.substringAfter('=', ""), StandardCharsets.UTF_8.name())
+        }.orEmpty()
+        if (serverUri.isBlank() || token.isBlank()) null else PlexTranscodeEndpoint(serverUri, token)
+    }.getOrNull()
+
     internal fun redact(value: String): String = sensitiveQuery.replace(value) { match ->
-        match.groupValues[1] + "***"
+        match.groupValues[1] + "=***"
     }
 
     internal fun renderSnapshot(
