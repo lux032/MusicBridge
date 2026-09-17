@@ -36,6 +36,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
 import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy
 import androidx.media3.exoplayer.DecoderReuseEvaluation
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.LoadEventInfo
@@ -95,6 +96,38 @@ internal fun cachedOriginalFallback(item: LocalQueueItem): CachedOriginalFallbac
 
 internal fun filterPrecacheItems(items: List<LocalQueueItem>): List<LocalQueueItem> =
     items.filterNot { it.isCachedOriginal || it.url.startsWith("file:") }
+
+/**
+ * [High-2] While the current track is not fully loaded, cellular queue precaching stays
+ * at zero so all metered bandwidth and transcoder capacity serve foreground playback.
+ * Once it is fully loaded, cellular may precache at most
+ * [CELLULAR_LOADED_PRECACHE_DEPTH] track; Wi-Fi keeps the configured depth.
+ */
+internal const val CELLULAR_LOADED_PRECACHE_DEPTH = 1
+
+internal fun effectiveQueuePrecacheCount(
+    isWifi: Boolean,
+    configuredCount: Int,
+    currentTrackFullyLoaded: Boolean,
+): Int {
+    val safeCount = configuredCount.coerceAtLeast(0)
+    if (isWifi) return safeCount
+    if (!currentTrackFullyLoaded) return 0
+    return safeCount.coerceAtMost(CELLULAR_LOADED_PRECACHE_DEPTH)
+}
+
+internal fun isCurrentTrackFullyLoaded(
+    isFullyCachedInCache: Boolean,
+    isLiveTranscode: Boolean,
+    bufferedPositionMs: Long,
+    durationMs: Long?,
+): Boolean {
+    if (isFullyCachedInCache) return true
+    if (!isLiveTranscode) return false
+    if (durationMs == null || durationMs <= 0L) return false
+    if (bufferedPositionMs == C.TIME_UNSET || bufferedPositionMs < 0L) return false
+    return bufferedPositionMs >= durationMs - LocalPlaybackEngine.FULLY_LOADED_TOLERANCE_MS
+}
 
 
 internal fun shouldEnqueueCompletionPrecache(
@@ -842,26 +875,70 @@ internal sealed interface PlaybackRecoveryDecision {
     data object Stop : PlaybackRecoveryDecision
 }
 
-/** Pure recovery budget: one retry per item and at most three consecutively failed items. */
+/**
+ * Progress-aware recovery budget (Blocker-3).
+ *
+ * A failure after meaningful playback progress is a new incident, not a repeat of the
+ * previous one, so progress beyond [progressRefillMs] refills the per-item retry budget
+ * and clears the consecutive-failure streak. A resumable live transcode with more than
+ * [nearEndThresholdMs] remaining must never auto-skip: it retries at the current
+ * position, and only stops (never skips) after [maxNoProgressRetries] failures with no
+ * playback progress. Non-resumable items keep the legacy retry-then-skip behavior with a
+ * hard stop after [maxConsecutiveFailures] failed items in a row.
+ */
 internal class PlaybackRecoveryBudget(
     private val maxRetriesPerItem: Int = 1,
     private val maxConsecutiveFailures: Int = 3,
+    private val progressRefillMs: Long = 10_000L,
+    private val nearEndThresholdMs: Long = 10_000L,
+    private val maxNoProgressRetries: Int = 3,
 ) {
     private var retriedIndex = C.INDEX_UNSET
     private var retryCount = 0
+    private var noProgressRetries = 0
     private var consecutiveFailures = 0
+    private var lastFailurePositionMs = C.TIME_UNSET.toLong()
 
-    fun onFailure(index: Int): PlaybackRecoveryDecision {
+    fun onFailure(
+        index: Int,
+        positionMs: Long = 0L,
+        durationMs: Long? = null,
+        resumableAtPosition: Boolean = false,
+    ): PlaybackRecoveryDecision {
         if (retriedIndex != index) {
             retriedIndex = index
             retryCount = 0
+            noProgressRetries = 0
+            lastFailurePositionMs = C.TIME_UNSET.toLong()
+        } else if (lastFailurePositionMs != C.TIME_UNSET.toLong() &&
+            positionMs - lastFailurePositionMs >= progressRefillMs
+        ) {
+            // Playback advanced meaningfully since the last failure: refill the budget.
+            retryCount = 0
+            noProgressRetries = 0
+            consecutiveFailures = 0
         }
+        lastFailurePositionMs = positionMs
         if (retryCount < maxRetriesPerItem) {
             retryCount += 1
             return PlaybackRecoveryDecision.RetryCurrent
         }
+        val remainingMs = durationMs?.let { it - positionMs }
+        val nearEnd = remainingMs != null && remainingMs <= nearEndThresholdMs
+        if (resumableAtPosition && !nearEnd) {
+            // Never auto-skip a resumable track with plenty of runtime left. Keep retrying
+            // at the current position; give up by stopping instead of skipping.
+            return if (noProgressRetries < maxNoProgressRetries) {
+                noProgressRetries += 1
+                PlaybackRecoveryDecision.RetryCurrent
+            } else {
+                PlaybackRecoveryDecision.Stop
+            }
+        }
         retriedIndex = C.INDEX_UNSET
         retryCount = 0
+        noProgressRetries = 0
+        lastFailurePositionMs = C.TIME_UNSET.toLong()
         consecutiveFailures += 1
         return if (consecutiveFailures >= maxConsecutiveFailures) {
             PlaybackRecoveryDecision.Stop
@@ -882,7 +959,9 @@ internal class PlaybackRecoveryBudget(
     private fun reset() {
         retriedIndex = C.INDEX_UNSET
         retryCount = 0
+        noProgressRetries = 0
         consecutiveFailures = 0
+        lastFailurePositionMs = C.TIME_UNSET.toLong()
     }
 }
 
@@ -974,6 +1053,13 @@ class LocalPlaybackEngine(
         private const val MAX_COMPLETION_PRECACHE_ATTEMPTS = 2
         private const val MAX_TRUNCATED_RESTARTS = 3
         private const val MIN_TRUNCATED_RESTART_PROGRESS_MILLIS = 1_000L
+        // This confirms full live-transcode loading; nearTrackEnd's 2,000ms threshold
+        // controls gate behavior instead. Their meanings differ and must not be merged.
+        internal const val FULLY_LOADED_TOLERANCE_MS = 1_500L
+        // [Blocker-1] 30-minute forward buffer window: large enough to span a whole song
+        // so the live-transcode upstream is read continuously and never sits idle.
+        private const val LIVE_TRANSCODE_MIN_BUFFER_MS = 1_800_000
+        private const val LIVE_TRANSCODE_MAX_BUFFER_MS = 1_800_000
 
         /**
          * The engine instance owned by AppState. Registered here so [LocalPlaybackService]
@@ -1014,6 +1100,22 @@ class LocalPlaybackEngine(
                 .build(),
             /* handleAudioFocus = */ true,
         )
+        // [Blocker-1] Raise the forward buffer window so the Plex live-transcode HTTP
+        // connection keeps being read instead of going idle once the default ~50s buffer
+        // is full. An idle socket is what lets the server/proxy/NAT silently close the
+        // connection (observed as EOF ~15-30s after the last read burst). Memory stays
+        // bounded by DefaultLoadControl's computed per-track targetBufferBytes, so this
+        // does not raise the decoded-audio memory cap.
+        .setLoadControl(
+            DefaultLoadControl.Builder()
+                .setBufferDurationsMs(
+                    LIVE_TRANSCODE_MIN_BUFFER_MS,
+                    LIVE_TRANSCODE_MAX_BUFFER_MS,
+                    DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_MS,
+                    DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS,
+                )
+                .build(),
+        )
         .setHandleAudioBecomingNoisy(true)
         .setWakeMode(C.WAKE_MODE_NETWORK)
         .build()
@@ -1026,6 +1128,8 @@ class LocalPlaybackEngine(
     private var lastCurrentIndex = C.INDEX_UNSET
     private var queuePrecacheCount = 0
     private var networkIsWifi = true
+    private var lastCurrentTrackFullyLoaded = false
+    private var lastPrecacheCompletenessKey: String? = null
     private data class CompletionPrecacheEntry(val item: LocalQueueItem, val failedAttempts: Int = 0)
     private val completionPrecacheLock = Any()
     private val completionPrecacheItems = linkedMapOf<String, CompletionPrecacheEntry>()
@@ -1395,10 +1499,15 @@ class LocalPlaybackEngine(
             stopAfterPlaybackFailures(error)
             return
         }
-        when (recoveryBudget.onFailure(failedIndex)) {
+        val failedItem = queueItems.getOrNull(failedIndex)
+        val failedPositionMillis = currentPositionMillis
+        when (recoveryBudget.onFailure(
+            failedIndex,
+            positionMs = failedPositionMillis,
+            durationMs = failedItem?.durationMillis,
+            resumableAtPosition = supportsPlexOffsetRetry(failedItem?.url),
+        )) {
             PlaybackRecoveryDecision.RetryCurrent -> {
-                val failedItem = queueItems.getOrNull(failedIndex)
-                val failedPositionMillis = currentPositionMillis
                 when (liveTranscodeRetryAction(
                     streamUrl = failedItem?.url,
                     durationMillis = failedItem?.durationMillis,
@@ -1634,13 +1743,24 @@ class LocalPlaybackEngine(
             val scheme = runCatching { android.net.Uri.parse(url).scheme?.lowercase(Locale.US) }.getOrNull()
             scheme == "file" || scheme == "content" || scheme == "android.resource"
         } == true
+        val fullyCachedNow = item?.let { LocalAudioCache.isFullyCached(it.cacheKey) } ?: false
         val foregroundUsesNetwork = item != null &&
             !isPureLocalItem &&
             !item.isCachedOriginal &&
-            !LocalAudioCache.isFullyCached(item.cacheKey)
+            !fullyCachedNow
+        val fullyLoaded = isCurrentTrackFullyLoaded(
+            isFullyCachedInCache = fullyCachedNow,
+            isLiveTranscode = item?.url?.isPlexLiveTranscodeUrl() == true,
+            bufferedPositionMs = bufferedPosition,
+            durationMs = duration,
+        )
+        val completenessChanged = fullyLoaded != lastCurrentTrackFullyLoaded ||
+            item?.cacheKey != lastPrecacheCompletenessKey
+        lastCurrentTrackFullyLoaded = fullyLoaded
+        lastPrecacheCompletenessKey = item?.cacheKey
         val nearTrackEnd = duration != null && duration > 0L &&
             (bufferedPosition >= duration - 2_000L || duration - position <= 2_000L)
-        when (PrecacheGate.publish(
+        val transition = PrecacheGate.publish(
             PrecacheGateSnapshot(
                 foregroundUsesNetwork = foregroundUsesNetwork,
                 isBuffering = player.playWhenReady && player.playbackState == Player.STATE_BUFFERING,
@@ -1648,10 +1768,18 @@ class LocalPlaybackEngine(
                 isNearTrackEnd = nearTrackEnd,
                 publishedAtMillis = SystemClock.elapsedRealtime(),
             ),
-        )) {
+        )
+        when (transition) {
             PrecacheGateTransition.YIELDED -> LocalAudioCache.cancelPrecache()
             PrecacheGateTransition.RESUMED -> schedulePrecacheFrom(index)
             PrecacheGateTransition.NONE -> Unit
+        }
+        // A seek that makes the track incomplete again is intentionally observed by the
+        // next heartbeat (within one second), rather than synchronously on the seek path.
+        if (completenessChanged && transition == PrecacheGateTransition.NONE &&
+            !PrecacheGate.shouldYield()
+        ) {
+            schedulePrecacheFrom(index)
         }
     }
 
@@ -1682,7 +1810,13 @@ class LocalPlaybackEngine(
         PlaybackDiagnostics.saveAutomaticSnapshot("buffering_watchdog_stall")
         resetBufferingWatchdog()
         val error = bufferingStallException()
-        when (recoveryBudget.onFailure(failedIndex)) {
+        val stalledItem = queueItems.getOrNull(failedIndex)
+        when (recoveryBudget.onFailure(
+            failedIndex,
+            positionMs = targetMillis,
+            durationMs = stalledItem?.durationMillis,
+            resumableAtPosition = supportsPlexOffsetRetry(stalledItem?.url),
+        )) {
             PlaybackRecoveryDecision.RetryCurrent -> {
                 Log.w(LOG_TAG, "Transcode buffering stalled; restarting index=$failedIndex at ${targetMillis}ms")
                 seekToItem(failedIndex, targetMillis)
@@ -1788,6 +1922,8 @@ class LocalPlaybackEngine(
         recoveryBudget.resetForUserAction()
         queueItems.clear()
         queueItems.addAll(items)
+        lastCurrentTrackFullyLoaded = false
+        lastPrecacheCompletenessKey = null
         refreshCachedOriginalKeys()
         positionBaseMillis.clear()
         repeat(items.size) { positionBaseMillis += 0L }
@@ -2060,6 +2196,16 @@ class LocalPlaybackEngine(
         if (isWifi) schedulePrecacheFrom(currentIndex)
     }
 
+    private fun currentTrackFullyLoaded(): Boolean {
+        val item = queueItems.getOrNull(currentIndex) ?: return false
+        return isCurrentTrackFullyLoaded(
+            isFullyCachedInCache = LocalAudioCache.isFullyCached(item.cacheKey),
+            isLiveTranscode = item.url.isPlexLiveTranscodeUrl(),
+            bufferedPositionMs = bufferedPositionMillis,
+            durationMs = durationMillis,
+        )
+    }
+
     private fun schedulePrecacheFrom(index: Int, foregroundKeyOverride: String? = null) {
         if (index !in queueItems.indices) return
         val completionSnapshot = synchronized(completionPrecacheLock) {
@@ -2068,7 +2214,16 @@ class LocalPlaybackEngine(
         }
         // Keep this +2 boundary: current playback and Media3's immediate preload candidate
         // may still own cache ranges, so only released completion items may precede it.
-        val upcoming = filterPrecacheItems(queueItems.drop(index + 2)).take(queuePrecacheCount)
+        // Known limitation: under shuffle, index+2 may not be the actual next track, so
+        // cellular depth 1 can fetch a track that will not play next; this is existing design.
+        val upcoming = filterPrecacheItems(queueItems.drop(index + 2))
+            .take(
+                effectiveQueuePrecacheCount(
+                    isWifi = networkIsWifi,
+                    configuredCount = queuePrecacheCount,
+                    currentTrackFullyLoaded = currentTrackFullyLoaded(),
+                ),
+            )
         val foregroundKey = foregroundKeyOverride ?: if (
             player.playbackState == Player.STATE_READY || player.playbackState == Player.STATE_BUFFERING
         ) {
@@ -2114,6 +2269,8 @@ class LocalPlaybackEngine(
         watchdogHandler.removeCallbacks(bufferingWatchdog)
         resetBufferingWatchdog()
         pendingCachedTranscodeSeek = null
+        lastCurrentTrackFullyLoaded = false
+        lastPrecacheCompletenessKey = null
         LocalAudioCache.cancelPrecache()
         synchronized(completionPrecacheLock) { completionPrecacheItems.clear() }
         player.stop()

@@ -15,6 +15,82 @@ class PlaybackRecoveryBudgetTest {
     }
 
     @Test
+    fun playbackProgressRefillsRetryBudget() {
+        val budget = PlaybackRecoveryBudget()
+
+        assertEquals(PlaybackRecoveryDecision.RetryCurrent, budget.onFailure(2, positionMs = 90_000L))
+        assertEquals(
+            PlaybackRecoveryDecision.SkipCurrent,
+            budget.onFailure(2, positionMs = 92_000L),
+        )
+        // A later failure after > 10s of progress is treated as a new incident.
+        assertEquals(PlaybackRecoveryDecision.RetryCurrent, budget.onFailure(2, positionMs = 103_000L))
+    }
+
+    @Test
+    fun resumableTranscodeWithPlentyRemainingNeverSkips() {
+        val budget = PlaybackRecoveryBudget()
+        var positionMs = 60_000L
+        repeat(12) {
+            val decision = budget.onFailure(
+                1,
+                positionMs = positionMs,
+                durationMs = 300_000L,
+                resumableAtPosition = true,
+            )
+            assertEquals(PlaybackRecoveryDecision.RetryCurrent, decision)
+            positionMs += 15_000L
+        }
+    }
+
+    @Test
+    fun resumableTranscodeWithoutProgressStopsInsteadOfSkipping() {
+        val budget = PlaybackRecoveryBudget()
+
+        assertEquals(
+            PlaybackRecoveryDecision.RetryCurrent,
+            budget.onFailure(1, positionMs = 60_000L, durationMs = 300_000L, resumableAtPosition = true),
+        )
+        repeat(3) {
+            assertEquals(
+                PlaybackRecoveryDecision.RetryCurrent,
+                budget.onFailure(1, positionMs = 60_500L, durationMs = 300_000L, resumableAtPosition = true),
+            )
+        }
+        assertEquals(
+            PlaybackRecoveryDecision.Stop,
+            budget.onFailure(1, positionMs = 60_500L, durationMs = 300_000L, resumableAtPosition = true),
+        )
+    }
+
+    @Test
+    fun resumableTranscodeNearTrackEndMaySkip() {
+        val budget = PlaybackRecoveryBudget()
+
+        assertEquals(
+            PlaybackRecoveryDecision.RetryCurrent,
+            budget.onFailure(1, positionMs = 295_000L, durationMs = 300_000L, resumableAtPosition = true),
+        )
+        assertEquals(
+            PlaybackRecoveryDecision.SkipCurrent,
+            budget.onFailure(1, positionMs = 296_000L, durationMs = 300_000L, resumableAtPosition = true),
+        )
+    }
+
+    @Test
+    fun resumableTranscodeWithUnknownDurationNeverSkips() {
+        val budget = PlaybackRecoveryBudget()
+        var positionMs = 0L
+        repeat(12) {
+            assertEquals(
+                PlaybackRecoveryDecision.RetryCurrent,
+                budget.onFailure(0, positionMs = positionMs, durationMs = null, resumableAtPosition = true),
+            )
+            positionMs += 15_000L
+        }
+    }
+
+    @Test
     fun playingBetweenFailuresDoesNotRestoreRetryBudget() {
         val budget = PlaybackRecoveryBudget()
 
