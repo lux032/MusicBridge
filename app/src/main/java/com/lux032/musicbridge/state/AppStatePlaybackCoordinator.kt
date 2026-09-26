@@ -27,6 +27,31 @@ import kotlinx.coroutines.sync.withLock
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.random.Random
 
+internal fun shouldApplyPlexSonosTranscode(isPlexClient: Boolean?, streamUrl: String): Boolean =
+    isPlexClient ?: streamUrl.contains("X-Plex-Token", ignoreCase = true)
+
+internal fun preparePlexSonosTranscode(
+    track: PlexTrackStream,
+    isPlexSource: Boolean,
+    opusMode: OpusTranscodeMode,
+    hiResMode: SonosHiResTranscodeMode,
+    clientId: String,
+): PlexTrackStream = if (isPlexSource) {
+    track.withOpusTranscodeMode(opusMode, clientId).withSonosHiResTranscodeMode(hiResMode, clientId)
+} else track
+
+internal fun configuredPlexDirectMp3(
+    track: PlexTrackStream,
+    isPlexSource: Boolean,
+    opusMode: OpusTranscodeMode,
+    hiResMode: SonosHiResTranscodeMode,
+): Boolean = isPlexSource && (
+    (track.sourceAudioCodec.equals("opus", ignoreCase = true) && opusMode == OpusTranscodeMode.DIRECT_MP3) ||
+        (track.sourceAudioCodec?.lowercase() in LOSSLESS_AUDIO_CODECS &&
+            (track.sourceAudioSampleRate ?: 0) > SONOS_MAX_SAMPLE_RATE_HZ &&
+            hiResMode == SonosHiResTranscodeMode.TRANSCODE_MP3)
+    )
+
 internal class AppStatePlaybackCoordinator(
     private val state: AppState,
 ) {
@@ -142,7 +167,7 @@ internal class AppStatePlaybackCoordinator(
                 val effectiveTrack = prepareSonosTrack(targetTrack)
                 val isOpus = effectiveTrack.sourceAudioCodec.equals("opus", ignoreCase = true)
                 val isLiveTranscodeDirectMp3 = effectiveTrack.streamUrl.contains("/:/transcode/universal/start.mp3", ignoreCase = true)
-                if (isOpus && state.opusTranscodeMode == OpusTranscodeMode.PROXY_FLAC) {
+                if (isOpus && isPlexSource(effectiveTrack) && state.opusTranscodeMode == OpusTranscodeMode.PROXY_FLAC) {
                     state.actionMessage = "正在准备 FLAC 缓存：${effectiveTrack.title}"
                 }
                 val playbackUrl = if (isLiveTranscodeDirectMp3) {
@@ -276,7 +301,7 @@ internal class AppStatePlaybackCoordinator(
                             0L
                         }
                         isPreparingFirstTrack = false
-                        if (isOpus && state.opusTranscodeMode == OpusTranscodeMode.PROXY_FLAC) {
+                        if (isOpus && isPlexSource(effectiveTrack) && state.opusTranscodeMode == OpusTranscodeMode.PROXY_FLAC) {
                             state.actionMessage = "正在准备 FLAC 缓存：${effectiveTrack.title}"
                         }
                         val isLiveTranscodeDirectMp3 = effectiveTrack.streamUrl.contains("/:/transcode/universal/start.mp3", ignoreCase = true)
@@ -550,7 +575,7 @@ internal class AppStatePlaybackCoordinator(
                     preparePlayback = { track ->
                         val effectiveTrack = prepareSonosTrack(track)
                         val isOpus = effectiveTrack.sourceAudioCodec.equals("opus", ignoreCase = true)
-                        if (isOpus && state.opusTranscodeMode == OpusTranscodeMode.PROXY_FLAC) {
+                        if (isOpus && isPlexSource(effectiveTrack) && state.opusTranscodeMode == OpusTranscodeMode.PROXY_FLAC) {
                             state.actionMessage = "正在准备 FLAC 缓存：${effectiveTrack.title}"
                         }
                         val isLiveTranscodeDirectMp3 = effectiveTrack.streamUrl.contains("/:/transcode/universal/start.mp3", ignoreCase = true)
@@ -1278,17 +1303,19 @@ internal class AppStatePlaybackCoordinator(
         }
     }
 
-    private fun PlexTrackStream.isConfiguredDirectMp3(): Boolean =
-        (sourceAudioCodec.equals("opus", ignoreCase = true) && state.opusTranscodeMode == OpusTranscodeMode.DIRECT_MP3) ||
-            (sourceAudioCodec?.lowercase() in LOSSLESS_AUDIO_CODECS &&
-                (sourceAudioSampleRate ?: 0) > SONOS_MAX_SAMPLE_RATE_HZ &&
-                state.sonosHiResTranscodeMode == SonosHiResTranscodeMode.TRANSCODE_MP3)
+    private fun isPlexSource(track: PlexTrackStream): Boolean = shouldApplyPlexSonosTranscode(
+        runCatching { state.clientFor(track.sourceId) is PlexClient }.getOrNull(), track.streamUrl,
+    )
+
+    private fun PlexTrackStream.isConfiguredDirectMp3(): Boolean = configuredPlexDirectMp3(
+        this, isPlexSource(this), state.opusTranscodeMode, state.sonosHiResTranscodeMode,
+    )
 
     private suspend fun prepareSonosTrack(track: PlexTrackStream): PlexTrackStream {
         val codec = track.sourceAudioCodec?.lowercase()
         val hydrated = if (codec in LOSSLESS_AUDIO_CODECS && track.sourceAudioSampleRate == null) {
             runCatching {
-                (state.clientFor(track.sourceId) as? PlexClient)?.fetchTrackStream(track.ratingKey)
+                state.clientFor(track.sourceId).fetchTrackStream(track.ratingKey)
             }.getOrNull()?.let { fresh ->
                 track.copy(
                     streamUrl = fresh.streamUrl,
@@ -1310,9 +1337,8 @@ internal class AppStatePlaybackCoordinator(
                 )
             }
         }
-        return hydrated
-            .withOpusTranscodeMode(state.opusTranscodeMode, state.plexClientIdentifier)
-            .withSonosHiResTranscodeMode(state.sonosHiResTranscodeMode, state.plexClientIdentifier)
+        return preparePlexSonosTranscode(hydrated, isPlexSource(hydrated),
+            state.opusTranscodeMode, state.sonosHiResTranscodeMode, state.plexClientIdentifier)
     }
 
     private data class TranscodeRestartSeek(

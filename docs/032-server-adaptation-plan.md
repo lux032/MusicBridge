@@ -1,9 +1,9 @@
 # MusicBridge 适配 032 Music Server 新能力 — 实施规划
 
 - **日期**：2026-09-26
-- **状态**：待审阅（规划阶段，未改动任何代码）
+- **状态**：实施中（阶段 A）
 - **服务端基线**：`D:/032music-server` `main` @ `43b2006`（P0–P5 已完成，本地提交未推送）
-- **客户端基线**：`D:/MusicBridge` `e094816`
+- **客户端基线**：`D:/MusicBridge` `f350ad3`
 - **范围**：仅 Android 客户端；服务端不再改动（除非联调发现服务端缺陷，另行立项）
 
 ---
@@ -38,7 +38,7 @@
 
 | # | 领域 | 现状（文件） | 问题 | 目标 |
 |---|---|---|---|---|
-| G1 | 媒体 Token | `music/Music032Client.kt:30` `mediaToken = profile.mediaToken.ifBlank { apiToken }`；`ui/settings/dialogs/ServerEditSheet.kt:207-220` 提示可留空 | 服务端单独配置媒体 Token 时，留空会导致所有音频/封面 401 | 设置页校验与提示；连接时用 capabilities + 一次媒体探测验证 |
+| G1 | 媒体 Token | `music/Music032Client.kt:30` `mediaToken = profile.mediaToken.ifBlank { apiToken }`；`ui/settings/dialogs/ServerEditSheet.kt:207-220` 提示可留空 | 服务端单独配置媒体 Token 时，留空会导致所有音频/封面 401 | 设置页校验与提示；保存时要求媒体 Token，连接后探测 401 提示补填；存量回退 |
 | G2 | 字段解析 | `Music032Client.parseTrack/parseAlbum` | 未解析 codec/采样率/位深/码率/碟号/曲号/lyricsUrl/skipCount，`viewCount` 等依赖旧字段名 | 完整解析；本地库 `AlbumLocalStore` 已有对应列（v16），无需迁移 |
 | G3 | 歌手曲目与收藏 | `Music032Client.fetchArtistTracks` 吞掉异常；`fetchArtistAlbums` 未实现 | 服务端已提供，可直接对接 | 读 `root.tracks`/`root.albums`；歌手 `isFavorite` |
 | G4 | 单曲补全 | `state/AppStatePlaybackCoordinator.kt:1291`、`state/AppStateLibraryCoordinator.kt:453` 仅 `as? PlexClient` 调 `fetchTrackStream` | 032 源无法补采样率，也无法为离线组重建推送流 | 抽象 `fetchTrackStream` 到 `MusicSourceClient`（默认 null），032 实现为 `GET /tracks/{id}` |
@@ -53,13 +53,13 @@
 | G13 | 声波电台 / AI 保存歌单 | `plex/SonicCapableSource.kt`；`state/AppState.kt:689,704` | 032 不支持声波电台与保存 AI 歌单 | `Music032Client` 实现 `SonicCapableSource`：`similar`→`fetchNearestTracks`，`path`→`computeSonicPath`，`POST playlists{trackIds}`→`createPlaylist` |
 | G14 | AI 歌单门禁 | `state/AppState.kt:620-623` `aiPlexOnly`；`:639` 最近播放仅 Plex | 032 用户无法使用 AI 歌单 | 取消门禁；032 最近播放用 `/playback/history`；文案去 Plex 化（`core/Strings.kt:182,186,187`） |
 | G15 | 跳过上报（可选） | `AppStateLocalPlaybackCoordinator.kt:480`、`AppStatePlaybackCoordinator.kt` 切歌时 `stopped+continuing` | 服务端已按推断工作，无需改动；显式上报可提高准确度 | 可选：用户主动"下一首"时对 032 发送 `skipped=true`，自然结束发送 `skipped=false` |
-| G16 | 能力探测 | 无 | 服务端旧版本或无 ffmpeg 时，新 URL 会 404/503 | 连接/切换服务器时拉取 capabilities 并缓存到 profile 运行态，按能力降级 |
+| G16 | 能力探测 | 无 | 服务端旧版本或无 ffmpeg 时，新 URL 会 404/503 | 连接/切换服务器时拉取 capabilities 并缓存到进程级 store，按能力降级 |
 
 ## 4. 设计要点
 
 ### 4.1 能力模型（G16，所有后续阶段的前置）
 - 新增 `data class Music032Capabilities(apiRevision, features: Set<String>, transcodeFormats: Map<String, FormatCaps>, artworkSizes: List<Int>)`。
-- `Music032Client` 懒加载并缓存（服务器切换或设置保存时失效）；获取失败视为 `apiRevision=1`（全部新能力关闭），**保持今天的行为**。
+- 进程级 `Music032CapabilitiesStore` 按规范化地址和 API Token 缓存（成功 10 分钟、失败 30 秒；保存时失效）；获取失败视为 `apiRevision=1`（全部新能力关闭），**保持今天的行为**。
 - 所有 032 新能力调用前检查对应 feature；转码按 `transcode.formats.<fmt>.available` 判断。
 
 ### 4.2 源无关的播放 URL 适配层（G5–G10 的核心）
@@ -86,11 +86,11 @@ internal interface PlaybackUrlAdapter {
 | 无损 >48kHz | （新增选项）转 FLAC ≤48k | `transcode.flac?maxSampleRate=48000` | `audio/flac` |
 | 其他 | — | 原 `stream` 直链 | 按原文件 |
 
-- "无损中继"对 032 实际变成服务端缓存：首次请求需等待服务端转完（NAS 上 5 分钟曲目约 3–10 秒）。建议对 032 源在推送前先以 `HEAD`/`GET Range: bytes=0-0` 预热并显示"服务器正在准备 FLAC"提示；超时（如 30 秒）回退 MP3。
+- "无损中继"对 032 实际变成服务端缓存：首次请求需等待服务端转完（NAS 上 5 分钟曲目约 3–10 秒）。建议对 032 源在推送前先以 `GET Range: bytes=0-0` 预热并显示"服务器正在准备 FLAC"提示；30 秒预算内对 503 按 Retry-After 重试，502/超时回退 MP3；服务端断开后任务仍继续，建议预热下一首。
 - 是否新增"Hi-Res 转 24/48 FLAC"选项需决策（见 §7 D3）。
 
 ### 4.4 本机限速转码（G8/G9）
-- `willTranscodeLocally`：032 源在 `sourceAudioBitrateKbps > policy.limit` 时为 true（码率来自服务端 `bitrateKbps`；未知时不转码，与 Plex 现有"码率未知不转"一致）。
+- `willTranscodeLocally`：032 源在 `sourceAudioBitrateKbps > policy.limit` 时为 true（码率来自服务端 `bitrateKbps`；未知时与 Plex 现状一致：opus 不转，其他 codec 转）。
 - URL：`transcode.ogg?bitrate=<policy.opusBitrate.kbps>`；码率需映射到服务端白名单 {64,96,128,160,192,256}，不在白名单则取不超过的最大值。
 - seek：`offsetMs` 毫秒精度，`LocalSeekPlan.logicalBaseMillis` 可直接用目标毫秒，不再整秒截断；无需 `fastSeek`。
 - 预缓存与缓存键：沿用 `transcodedCacheKey(sourceId, ratingKey, partKey, kbps)`；`OggStreamValidator` 应对 032 输出同样有效（需测试确认）。
@@ -106,7 +106,7 @@ internal interface PlaybackUrlAdapter {
 - 离线下载沿用 `downloadCompanionAsset(lyricUrl)`，需处理 404（无歌词）与 413。
 
 ### 4.7 声波电台与 AI（G13/G14）
-- `fetchNearestTracks`：`similar?limit=` → `SonicTrackMatch(ratingKey, distance, track)`；`HybridRecommender` 对 distance 截断到 0~7.4，032 的 0~1 可直接使用，但**权重尺度与 Plex 不同**，需要评估推荐混合时的比例（见 §7 D4）。
+- `fetchNearestTracks`：`similar?limit=` → `SonicTrackMatch(ratingKey, distance, track)`；032 客户端将 distance 按 `max(0.01, d) × 7.4` 映射；不修改 `HybridRecommender`。
 - `computeSonicPath(sectionKey, start, end)`：032 忽略 sectionKey，调用 `path?from=&to=&limit=`；`complete=false` 时仍返回结果并提示"未完全连通"。
 - `createPlaylist`：`POST /playlists {name, trackIds}`，返回 `PlexPlaylist`。
 - 503（相似度并发满）：按 `Retry-After` 重试一次，再失败提示用户。
@@ -156,10 +156,10 @@ internal interface PlaybackUrlAdapter {
 
 | # | 问题 | 选项 | 建议 |
 |---|---|---|---|
-| D1 | 媒体 Token 留空时的行为 | A：保持回退 API Token，连接时探测一次媒体接口，401 则在设置页提示必须填写；B：直接要求必填 | **A**（兼容未单独配置媒体 Token 的服务器，服务端在未设置时会回退到 API Token） |
+| D1 | 媒体 Token 留空时的行为 | A：保持回退 API Token，连接时探测一次媒体接口，401 则在设置页提示必须填写；B：直接要求必填 | **保存必填；存量回退并探测**（非 devMode 未配置时随机生成媒体 Token） |
 | D2 | 032 的"无损中继"是否仍经过手机代理 | A：直连服务端 FLAC 缓存；B：沿用手机代理 | **A**（服务端已提供 Content-Length/Range，省电且锁屏不断播） |
-| D3 | 是否新增"Hi-Res 转 24/48 FLAC"Sonos 选项 | A：新增（Plex 源下该选项回退为 MP3）；B：不新增 | 需用户决定；A 音质更好但设置项增多 |
-| D4 | 032 相似度与 Plex 声波距离尺度不同 | A：在 `HybridRecommender` 按来源归一化；B：直接使用 | **A**（避免 032 结果在混合推荐中被系统性高估） |
+| D3 | 是否新增"Hi-Res 转 24/48 FLAC"Sonos 选项 | A：新增（Plex 源下该选项回退为 MP3）；B：不新增 | **A**（Plex 下回退 MP3） |
+| D4 | 032 相似度与 Plex 声波距离尺度不同 | A：在 `HybridRecommender` 按来源归一化；B：直接使用 | **A**（032 客户端映射，不修改 HybridRecommender） |
 | D5 | 是否实现显式 skip 上报（F 阶段） | A：做；B：暂缓 | B（服务端推断已可用，先观察准确度） |
 | D6 | 流程 | 是否沿用硬化交付流程（oracle 审计 → 分阶段 worker → reviewer → 真机验收） | 建议沿用，C/D 阶段必须真机验收 |
 
@@ -167,6 +167,14 @@ internal interface PlaybackUrlAdapter {
 - **播放主链路改动（C/D）风险最高**：采用"适配层 + Plex 实现逐字保持"的方式，并以快照测试锁定 Plex URL 输出，防止回归。
 - **Sonos 首字节超时**：服务端 FLAC 缓存首次生成需要数秒，Sonos 的等待上限未知，需真机确认；预热与回退 MP3 是兜底。
 - **实时流 Range**：032 实时流对非 0 Range 返回 416，所有 seek 必须走 `offsetMs` 重开，不能依赖 Sonos/ExoPlayer 的 Range seek。
-- **本地库 URL 持久化**：`stream_url`/`thumb_url` 含 mediaToken，修改媒体 Token 后需重建缓存（现有行为，建议在设置页保存 Token 时提示或自动刷新）。
+- **本地库 URL 持久化**：`stream_url`/`thumb_url` 含 mediaToken，地址或媒体 Token 变化时保存即刷新曲库，重写持久化 URL。
 - **旧服务端兼容**：所有新能力以 capabilities 为准，避免对旧版本发出不存在的请求。
 - **中途失败语义**：032 实时流中途失败会中止连接（非正常 EOF），客户端应按错误处理（重试/回退），不要当作曲目播完。
+
+## 9. Oracle 审计修正与决策记录（2026-09-26）
+- D1：媒体 Token 保存时必填；存量 profile 保留 `mediaToken.ifBlank { apiToken }` 回退且连接时探测，401 提示补填，不更改 `hasCredentials`。非 devMode 未配置 `MUSIC_SERVER_MEDIA_TOKEN` 时服务端每次启动随机生成；服务端 README:136 的回退说明已过期，作为服务端文档问题另行处理。
+- D2 A：032 FLAC 缓存直连，无手机代理。D3 A：新增 `TRANSCODE_FLAC_48K`；Plex `forPlex()` 回退 MP3，设置、Sonos 计划生成、本机播放三处边界保持源隔离。
+- D4 A：在 `Music032Client` 内按 `max(0.01, d) × 7.4` 映射距离，不改 `HybridRecommender`。D5 B：暂缓显式 skip。D6：沿用 oracle 审计 → 分阶段 worker → reviewer → 真机验收硬化流程。
+- 撤回 B-1：`parseTrack` 不写 `playbackMimeType`（该字段是 Sonos 转码覆盖）；原始 MIME 由独立纯函数计算。撤回 H-2：容器 `formats` 不写发行类型 `PlexAlbum.format`；使用 albumType / live / compilation 映射；albumType=album 不写 format（服务端未标记时默认推断为 album，否则会绕过标题/曲数启发式）。
+- Sonos FLAC 预热仅用 GET Range 0-0，HEAD 不触发编码；`offsetMs` 必须 clamp 至 duration-1000（大于 duration 返回 400，等于 duration 返回 502）。
+- 后续阶段需覆盖：PlaybackSection.kt:~2580 `positionIsEncodedInUrl` 与 LocalPlaybackEngine RoutingDataSource:~713 使用通用实时转码谓词（B-3）；Sonos 实时流按实际生成计划判定而不是设置（H-3）；032 曲目不经过 Plex `with*TranscodeMode` 或 `PlexTranscodeProxy`（B-2）。歌词 remember key 加 sourceId（L-4）；渐变路径目前无 UI 调用方；歌手详情曲目上限 5000；能力缓存必须进程级（M-1）。

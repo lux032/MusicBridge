@@ -1,11 +1,26 @@
 package com.lux032.musicbridge.model
 
+import com.lux032.musicbridge.music.Music032Json
 import com.lux032.musicbridge.plex.PlexAlbum
+import org.json.JSONObject
 import com.lux032.musicbridge.plex.PlexSection
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class AlbumCategoryTest {
+    @Test fun music032MappedReleasesClassifyByTypeAndFlags() {
+        val section = PlexSection("032", "032", "artist")
+        for ((json, kind) in listOf(
+            """{"id":1,"title":"Ordinary","albumType":"single","formats":"FLAC"}""" to ReleaseKind.Single,
+            """{"id":2,"title":"Ordinary","albumType":"ep","formats":"MP3"}""" to ReleaseKind.Ep,
+            """{"id":3,"title":"Ordinary","albumType":"album","live":true}""" to ReleaseKind.Live,
+            """{"id":4,"title":"Ordinary","albumType":"compilation"}""" to ReleaseKind.Compilation,
+        )) {
+            val album = Music032Json.parseAlbum(JSONObject(json), "https://example.org", "token", section, "032")
+            assertEquals(kind, classifyArtistAlbum(album).kind)
+        }
+    }
+
     @Test fun plexFormatsAreAuthoritative() {
         assertKind(album(format = "Single", tracks = 12), ArtistAlbumCategory.SingleEp, ReleaseKind.Single)
         assertKind(album(format = "EP", tracks = 12), ArtistAlbumCategory.SingleEp, ReleaseKind.Ep)

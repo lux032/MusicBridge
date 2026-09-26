@@ -211,7 +211,8 @@ fun ServerEditSheet(
                     onValueChange = { draft = draft.copy(mediaToken = it) },
                     modifier = Modifier.fillMaxWidth(),
                     label = { Text("媒体 Token") },
-                    supportingText = { Text("留空时使用 API Token；建议填写服务端独立的媒体 Token。") },
+                    supportingText = { Text("必填：服务端 MUSIC_SERVER_MEDIA_TOKEN 的值。") },
+                    isError = draft.mediaToken.isBlank(),
                     singleLine = true,
                     visualTransformation = if (isMediaTokenVisible) VisualTransformation.None else PasswordVisualTransformation(),
                     trailingIcon = {
@@ -303,6 +304,7 @@ fun ServerEditSheet(
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Button(
+                    enabled = draft.type != MusicServerType.Music032 || draft.mediaToken.isNotBlank(),
                     onClick = {
                         onSave(draft, false)
                         onDismiss()
@@ -317,6 +319,7 @@ fun ServerEditSheet(
                 }
 
                 OutlinedButton(
+                    enabled = draft.type != MusicServerType.Music032 || draft.mediaToken.isNotBlank(),
                     onClick = {
                         onSave(draft, true)
                         onDismiss()

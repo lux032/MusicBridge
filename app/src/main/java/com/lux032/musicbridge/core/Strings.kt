@@ -4,6 +4,9 @@ import android.content.Context
 import java.util.Locale
 
 object Strings {
+    val music032MissingMediaToken get() = if (isZhCN) "请填写 032 Music Server 地址、API Token 和媒体 Token。" else "Enter the 032 Music Server address, API Token and media Token."
+    val music032InvalidMediaToken get() = if (isZhCN) "媒体 Token 无效，音频、封面和歌词将无法加载，请填写服务端的 MUSIC_SERVER_MEDIA_TOKEN。" else "Invalid media Token. Audio, artwork and lyrics will not load; enter MUSIC_SERVER_MEDIA_TOKEN from the server."
+
     private var currentLocale: Locale = Locale.getDefault()
 
     fun init(context: Context) {

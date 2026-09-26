@@ -27,6 +27,8 @@ import com.lux032.musicbridge.local.LocalAudioCache
 import com.lux032.musicbridge.local.LocalPlaybackEngine
 import com.lux032.musicbridge.local.LocalPlaybackService
 import com.lux032.musicbridge.local.NetworkQualityMonitor
+import com.lux032.musicbridge.music.MediaTokenProbeResult
+import com.lux032.musicbridge.music.Music032CapabilitiesStore
 import com.lux032.musicbridge.music.Music032Client
 import com.lux032.musicbridge.music.MusicSourceClient
 import com.lux032.musicbridge.service.PlaybackForegroundService
@@ -35,6 +37,7 @@ import com.lux032.musicbridge.sonos.SonosRoom
 import com.lux032.musicbridge.storage.AlbumLocalStore
 import com.lux032.musicbridge.storage.DownloadedAlbumGroup
 import com.lux032.musicbridge.storage.OfflineDownloadManager
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -458,13 +461,23 @@ class AppState(
         if (!normalized.hasCredentials()) {
             errorMessage = when (normalized.type) {
                 MusicServerType.Plex -> "请填写 Plex Token，或填写 Plex 用户名和密码。"
-                MusicServerType.Music032 -> "请填写 032 Music Server 地址和 API Token。"
+                MusicServerType.Music032 -> Strings.music032MissingMediaToken
             }
             return
         }
+        if (normalized.type == MusicServerType.Music032 && normalized.mediaToken.isBlank()) {
+            errorMessage = Strings.music032MissingMediaToken
+            return
+        }
+        if (index >= 0 && serverProfiles[index].type == MusicServerType.Music032) {
+            val previous = serverProfiles[index]
+            Music032CapabilitiesStore.invalidate(Music032CapabilitiesStore.Key.of(previous.baseUrl, previous.token))
+        }
+        val mediaUrlChanged = normalized.type == MusicServerType.Music032 && index >= 0 &&
+            (serverProfiles[index].baseUrl != normalized.baseUrl || serverProfiles[index].mediaToken != normalized.mediaToken)
         musicSourceClients.remove(normalized.id)
         if (index >= 0) serverProfiles[index] = normalized else serverProfiles.add(normalized)
-        activateServer(normalized, refreshAfterSave)
+        activateServer(normalized, refreshAfterSave || mediaUrlChanged)
         actionMessage = "已保存服务器：${normalized.displayName}"
     }
 
@@ -511,11 +524,34 @@ class AppState(
         clearLibraryForServerChange()
         recentPlayedAlbumKeys = appPreferences.loadRecentPlayedAlbumKeys(profile.id)
         lastAlbumSyncEpochMillis = appPreferences.loadLastAlbumSyncEpochMillis(profile.id)
+        probeActive032Profile(profile, probeProvidedToken = true)
         scope.launch {
             loadAlbumsFromLocalStore()
             loadArtists()
             loadPlaylists()
             if (refreshAfterSave && profile.hasCredentials()) refreshAlbums(showLoading = true)
+
+        }
+    }
+
+    fun probeActive032Profile(profile: MusicServerProfile = connectionPreferences, probeProvidedToken: Boolean = false) {
+        if (profile.type != MusicServerType.Music032 || !profile.hasCredentials()) return
+        val client = runCatching { clientFor(profile.id) }.getOrNull() as? Music032Client ?: return
+        scope.launch {
+            launch {
+                try { client.ensureCapabilities() } catch (cancel: CancellationException) { throw cancel }
+                catch (_: Exception) { /* Capability failure is silent. */ }
+            }
+            if (probeProvidedToken || profile.mediaToken.isBlank()) {
+                launch {
+                    val result = try { client.probeMediaToken() }
+                    catch (cancel: CancellationException) { throw cancel }
+                    catch (_: Exception) { MediaTokenProbeResult.UNKNOWN }
+                    if (result == MediaTokenProbeResult.INVALID && connectionPreferences.id == profile.id && errorMessage == null) {
+                        errorMessage = Strings.music032InvalidMediaToken
+                    }
+                }
+            }
         }
     }
 

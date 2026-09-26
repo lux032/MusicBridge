@@ -1,5 +1,7 @@
 package com.lux032.musicbridge.music
 
+import android.util.Log
+import kotlinx.coroutines.CancellationException
 import com.lux032.musicbridge.MusicServerProfile
 import com.lux032.musicbridge.plex.PlexAlbum
 import com.lux032.musicbridge.plex.PlexAlbumTracksResult
@@ -11,15 +13,14 @@ import com.lux032.musicbridge.plex.PlexPlaylistTracksResult
 import com.lux032.musicbridge.plex.PlexPlaylistsResult
 import com.lux032.musicbridge.plex.PlexSection
 import com.lux032.musicbridge.plex.PlexTrackStream
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
-import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
-import java.time.Instant
 
 class Music032Client(
     private val profile: MusicServerProfile,
@@ -28,6 +29,9 @@ class Music032Client(
     private val baseUrl = profile.baseUrl.trim().trimEnd('/')
     private val apiToken = profile.token.trim()
     private val mediaToken = profile.mediaToken.trim().ifBlank { apiToken }
+    private val capabilitiesKey = Music032CapabilitiesStore.Key.of(baseUrl, apiToken)
+    private val artistDetails = mutableMapOf<String, Pair<Long, String>>()
+    private val artistRequests = mutableMapOf<String, CompletableDeferred<String>>()
     private val section by lazy { PlexSection("032", profile.displayName, "artist") }
 
     init {
@@ -58,10 +62,72 @@ class Music032Client(
     }
 
     override suspend fun fetchArtistTracks(artist: PlexArtist): List<PlexTrackStream> = withContext(Dispatchers.IO) {
-        runCatching {
-            val root = JSONObject(request("GET", "/api/v1/artists/${artist.ratingKey}"))
-            root.optJSONArray("tracks").toObjects().map(::parseTrack)
-        }.getOrDefault(emptyList())
+        val root = artistDetail(artist.ratingKey)
+        val tracks = root.optJSONArray("tracks").toObjects().map(::parseTrack)
+        if (root.optInt("tracksTotal") > tracks.size) Log.w("Music032Client", "Artist tracks truncated: ${artist.ratingKey} (${tracks.size}/${root.optInt("tracksTotal")})")
+        tracks
+    }
+
+    override suspend fun fetchArtistAlbums(artistRatingKey: String): List<PlexAlbum> = withContext(Dispatchers.IO) {
+        artistDetail(artistRatingKey).optJSONArray("albums").toObjects().map(::parseAlbum)
+    }
+
+    private suspend fun artistDetail(id: String): JSONObject {
+        val now = System.currentTimeMillis()
+        val (pending, owner) = synchronized(artistDetails) {
+            artistDetails.entries.removeAll { now - it.value.first >= 30_000 }
+            artistDetails[id]?.second?.let { return JSONObject(it) }
+            artistRequests[id]?.let { it to false } ?: CompletableDeferred<String>().also { artistRequests[id] = it } to true
+        }
+        val text = if (owner) {
+            try {
+                val response = request("GET", "/api/v1/artists/$id")
+                synchronized(artistDetails) {
+                    artistDetails[id] = System.currentTimeMillis() to response
+                    artistRequests.remove(id)
+                }
+                pending.complete(response)
+                response
+            } catch (error: Throwable) {
+                synchronized(artistDetails) { artistRequests.remove(id) }
+                pending.completeExceptionally(error)
+                throw error
+            }
+        } else pending.await()
+        return JSONObject(text)
+    }
+
+    private fun clearArtistDetails() = synchronized(artistDetails) {
+        artistDetails.clear()
+    }
+
+    internal fun capabilities(): Music032Capabilities? = Music032CapabilitiesStore.snapshot(capabilitiesKey)
+
+    internal suspend fun ensureCapabilities(): Music032Capabilities = withContext(Dispatchers.IO) {
+        Music032CapabilitiesStore.ensure(capabilitiesKey) { request("GET", "/api/v1/capabilities") }
+    }
+
+    suspend fun probeMediaToken(): MediaTokenProbeResult = withContext(Dispatchers.IO) {
+        try {
+            val url = Music032Json.mediaUrl("/api/v1/tracks/0/stream", baseUrl, mediaToken)!!
+            val connection = URL(url).openConnection() as HttpURLConnection
+            try {
+                connection.requestMethod = "GET"
+                connection.connectTimeout = 15_000
+                connection.readTimeout = 15_000
+                connection.instanceFollowRedirects = false
+                mediaTokenProbeStatus(connection.responseCode)
+            } finally { connection.disconnect() }
+        } catch (cancel: CancellationException) {
+            throw cancel
+        } catch (_: Exception) {
+            MediaTokenProbeResult.UNKNOWN
+        }
+    }
+
+    override suspend fun fetchTrackStream(ratingKey: String): PlexTrackStream? = withContext(Dispatchers.IO) {
+        try { parseTrack(JSONObject(request("GET", "/api/v1/tracks/$ratingKey"))) }
+        catch (error: Music032HttpException) { if (trackDetailNotFound(error.status)) null else throw error }
     }
 
     override suspend fun fetchFavoriteTracks(): List<PlexTrackStream> = withContext(Dispatchers.IO) {
@@ -108,16 +174,19 @@ class Music032Client(
 
     override suspend fun setAlbumFavorite(ratingKey: String, isFavorite: Boolean) = withContext(Dispatchers.IO) {
         request(if (isFavorite) "PUT" else "DELETE", "/api/v1/albums/$ratingKey/favorite")
+        clearArtistDetails()
         Unit
     }
 
     override suspend fun setTrackFavorite(ratingKey: String, isFavorite: Boolean) = withContext(Dispatchers.IO) {
         request(if (isFavorite) "PUT" else "DELETE", "/api/v1/tracks/$ratingKey/favorite")
+        clearArtistDetails()
         Unit
     }
 
     override suspend fun setArtistFavorite(ratingKey: String, isFavorite: Boolean) = withContext(Dispatchers.IO) {
         request(if (isFavorite) "PUT" else "DELETE", "/api/v1/artists/$ratingKey/favorite")
+        clearArtistDetails()
         Unit
     }
 
@@ -151,53 +220,10 @@ class Music032Client(
         Unit
     }
 
-    private fun parseAlbum(value: JSONObject): PlexAlbum {
-        val year = value.optInt("year").takeIf { it > 0 }
-        return PlexAlbum(
-            ratingKey = value.optLong("id").toString(),
-            title = value.optString("title").trim().ifBlank { "未知专辑" },
-            artistName = value.optString("artist").trim().ifBlank { null },
-            year = year,
-            thumbUrl = mediaUrl(value.optString("artworkUrl")),
-            userRating = if (value.optBoolean("isFavorite")) 10f else null,
-            addedAtEpochSeconds = parseEpochSeconds(value.optString("addedAt")),
-            lastViewedAtEpochSeconds = parseEpochSeconds(value.optString("lastPlayedAt")),
-            section = section,
-            sourceId = sourceId,
-            leafCount = value.optInt("trackCount").takeIf { it > 0 },
-        )
-    }
-
-    private fun parseTrack(value: JSONObject): PlexTrackStream {
-        val id = value.optLong("id").toString()
-        val relativeStream = value.optString("streamUrl").ifBlank { "/api/v1/tracks/$id/stream" }
-        return PlexTrackStream(
-            ratingKey = id,
-            title = value.optString("title").trim().ifBlank { "未知曲目" },
-            streamUrl = mediaUrl(relativeStream).orEmpty(),
-            partKey = relativeStream,
-            durationMillis = value.optLong("durationMillis").takeIf { it > 0L },
-            userRating = if (value.optBoolean("isFavorite")) 10f else null,
-            albumRatingKey = value.optLong("albumId").takeIf { it > 0L }?.toString(),
-            albumTitle = value.optString("album").trim().ifBlank { null },
-            artistName = value.optString("artist").trim().ifBlank { null },
-            thumbUrl = mediaUrl(value.optString("artworkUrl")),
-            sourceId = sourceId,
-            musicAnalysisVersion = value.optString("musicAnalysisVersion").trim().ifBlank { null },
-            viewCount = value.opt("viewCount")?.toString()?.toLongOrNull(),
-            lastViewedAtEpochSeconds = value.opt("lastViewedAt")?.toString()?.toLongOrNull()
-                ?: parseEpochSeconds(value.optString("lastPlayedAt")),
-            skipCount = value.opt("skipCount")?.toString()?.toLongOrNull(),
-        )
-    }
-
-    private fun parsePlaylist(value: JSONObject): PlexPlaylist = PlexPlaylist(
-        ratingKey = value.optLong("id").toString(),
-        title = value.optString("name").trim().ifBlank { "未命名歌单" },
-        thumbUrl = mediaUrl(value.optString("artworkUrl")),
-        leafCount = value.optInt("itemCount"),
-        sourceId = sourceId,
-    )
+    private fun parseAlbum(value: JSONObject) = Music032Json.parseAlbum(value, baseUrl, mediaToken, section, sourceId)
+    private fun parseTrack(value: JSONObject) = Music032Json.parseTrack(value, baseUrl, mediaToken, sourceId)
+    private fun parsePlaylist(value: JSONObject) = Music032Json.parsePlaylist(value, baseUrl, mediaToken, sourceId)
+    private fun mediaUrl(path: String) = Music032Json.mediaUrl(path, baseUrl, mediaToken)
 
     private fun <T> fetchCursorPaged(
         path: String,
@@ -261,38 +287,10 @@ class Music032Client(
             val message = runCatching {
                 JSONObject(response).optJSONObject("error")?.optString("message")
             }.getOrNull().orEmpty().ifBlank { response.take(300) }
-            error("032 Music Server HTTP $status：$message")
+            throw Music032HttpException(status, "032 Music Server HTTP $status：$message")
         }
         return response
     }
-
-    private fun mediaUrl(path: String): String? {
-        val normalized = path.trim()
-        if (normalized.isEmpty()) return null
-        val isAbsolute = normalized.startsWith("http://") || normalized.startsWith("https://")
-        val absolute = if (isAbsolute) {
-            normalized
-        } else {
-            "$baseUrl/${normalized.trimStart('/')}"
-        }
-        if (isAbsolute && !isSameOrigin(absolute, baseUrl)) return absolute
-        if (mediaToken.isBlank()) return absolute
-        val separator = if ('?' in absolute) '&' else '?'
-        return "$absolute${separator}mediaToken=${mediaToken.urlEncode()}"
-    }
-
-    private fun isSameOrigin(first: String, second: String): Boolean = runCatching {
-        val firstUrl = URL(first)
-        val secondUrl = URL(second)
-        firstUrl.protocol.equals(secondUrl.protocol, ignoreCase = true) &&
-            firstUrl.host.equals(secondUrl.host, ignoreCase = true) &&
-            firstUrl.effectivePort() == secondUrl.effectivePort()
-    }.getOrDefault(false)
-
-    private fun URL.effectivePort(): Int = if (port >= 0) port else defaultPort
-
-    private fun parseEpochSeconds(value: String): Long? =
-        value.trim().takeIf { it.isNotEmpty() }?.let { runCatching { Instant.parse(it).epochSecond }.getOrNull() }
 
     private fun JSONArray?.toObjects(): List<JSONObject> {
         if (this == null) return emptyList()
@@ -301,10 +299,21 @@ class Music032Client(
         }
     }
 
-    private fun String.urlEncode(): String = URLEncoder.encode(this, StandardCharsets.UTF_8.name())
+
+    private class Music032HttpException(val status: Int, message: String) : IllegalStateException(message)
 
     private companion object {
         const val PAGE_SIZE = 500
         const val SYNC_PAGE_SIZE = 1000
     }
 }
+
+enum class MediaTokenProbeResult { OK, INVALID, UNKNOWN }
+
+internal fun mediaTokenProbeStatus(status: Int): MediaTokenProbeResult = when (status) {
+    404 -> MediaTokenProbeResult.OK
+    401, 403 -> MediaTokenProbeResult.INVALID
+    else -> MediaTokenProbeResult.UNKNOWN
+}
+
+internal fun trackDetailNotFound(status: Int): Boolean = status == 404

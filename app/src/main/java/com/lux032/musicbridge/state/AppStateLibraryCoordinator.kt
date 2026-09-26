@@ -450,7 +450,7 @@ internal class AppStateLibraryCoordinator(
         val remoteByRatingKey = remote?.tracks.orEmpty().associateBy(PlexTrackStream::ratingKey)
         val hydrated = group.tracks.mapNotNull { downloaded ->
             remoteByRatingKey[downloaded.ratingKey]
-                ?: (client as? PlexClient)?.fetchTrackStream(downloaded.ratingKey)
+                ?: client.fetchTrackStream(downloaded.ratingKey)
         }
         check(hydrated.isNotEmpty()) { "服务器未返回可推送的曲目" }
         return PlexAlbumTracksResult(

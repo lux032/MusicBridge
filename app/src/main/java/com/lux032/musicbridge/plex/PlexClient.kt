@@ -537,7 +537,7 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient, SonicC
         setFavorite(ratingKey, isFavorite)
     }
 
-    suspend fun fetchTrackStream(ratingKey: String): PlexTrackStream? = withContext(Dispatchers.IO) {
+    override suspend fun fetchTrackStream(ratingKey: String): PlexTrackStream? = withContext(Dispatchers.IO) {
         val normalizedKey = ratingKey.trim()
         if (normalizedKey.isEmpty()) return@withContext null
         val token = resolveToken()
