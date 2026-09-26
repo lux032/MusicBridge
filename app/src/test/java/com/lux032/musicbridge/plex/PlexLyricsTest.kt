@@ -40,6 +40,17 @@ class PlexLyricsTest {
     }
 
     @Test
+    fun bomIsRemovedFromTimedAndPlainLyrics() {
+        val timed = parseLrcLyrics("\uFEFF[00:01.25]First line")
+        assertEquals(true, timed.isSynced)
+        assertEquals(listOf(PlexLyricLine(1_250L, "First line")), timed.lines)
+
+        val plain = parseLrcLyrics("\uFEFFFirst line\nSecond line")
+        assertEquals(false, plain.isSynced)
+        assertEquals("First line", plain.lines.first().text)
+    }
+
+    @Test
     fun parsesLyricStreamKeyFromTrackMetadata() {
         val xml = """
             <MediaContainer><Track><Media><Part>

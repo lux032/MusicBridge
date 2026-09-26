@@ -1,7 +1,6 @@
 package com.lux032.musicbridge.music
 
 import android.util.Log
-import kotlinx.coroutines.CancellationException
 import com.lux032.musicbridge.MusicServerProfile
 import com.lux032.musicbridge.plex.PlexAlbum
 import com.lux032.musicbridge.plex.PlexAlbumTracksResult
@@ -13,6 +12,7 @@ import com.lux032.musicbridge.plex.PlexPlaylistTracksResult
 import com.lux032.musicbridge.plex.PlexPlaylistsResult
 import com.lux032.musicbridge.plex.PlexSection
 import com.lux032.musicbridge.plex.PlexTrackStream
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -21,6 +21,7 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 import java.nio.charset.StandardCharsets
+import java.util.concurrent.atomic.AtomicLong
 
 class Music032Client(
     private val profile: MusicServerProfile,
@@ -32,6 +33,7 @@ class Music032Client(
     private val capabilitiesKey = Music032CapabilitiesStore.Key.of(baseUrl, apiToken)
     private val artistDetails = mutableMapOf<String, Pair<Long, String>>()
     private val artistRequests = mutableMapOf<String, CompletableDeferred<String>>()
+    private val artistGeneration = AtomicLong()
     private val section by lazy { PlexSection("032", profile.displayName, "artist") }
 
     init {
@@ -74,22 +76,26 @@ class Music032Client(
 
     private suspend fun artistDetail(id: String): JSONObject {
         val now = System.currentTimeMillis()
-        val (pending, owner) = synchronized(artistDetails) {
+        val (pending, owner, generation) = synchronized(artistDetails) {
             artistDetails.entries.removeAll { now - it.value.first >= 30_000 }
             artistDetails[id]?.second?.let { return JSONObject(it) }
-            artistRequests[id]?.let { it to false } ?: CompletableDeferred<String>().also { artistRequests[id] = it } to true
+            val request = artistRequests[id]?.let { it to false }
+                ?: (CompletableDeferred<String>().also { artistRequests[id] = it } to true)
+            Triple(request.first, request.second, artistGeneration.get())
         }
         val text = if (owner) {
             try {
                 val response = request("GET", "/api/v1/artists/$id")
                 synchronized(artistDetails) {
-                    artistDetails[id] = System.currentTimeMillis() to response
-                    artistRequests.remove(id)
+                    if (shouldCacheArtistDetail(generation, artistGeneration.get())) {
+                        artistDetails[id] = System.currentTimeMillis() to response
+                    }
+                    if (artistRequests[id] === pending) artistRequests.remove(id)
                 }
                 pending.complete(response)
                 response
             } catch (error: Throwable) {
-                synchronized(artistDetails) { artistRequests.remove(id) }
+                synchronized(artistDetails) { if (artistRequests[id] === pending) artistRequests.remove(id) }
                 pending.completeExceptionally(error)
                 throw error
             }
@@ -98,7 +104,9 @@ class Music032Client(
     }
 
     private fun clearArtistDetails() = synchronized(artistDetails) {
+        artistGeneration.incrementAndGet()
         artistDetails.clear()
+        artistRequests.clear()
     }
 
     internal fun capabilities(): Music032Capabilities? = Music032CapabilitiesStore.snapshot(capabilitiesKey)
@@ -307,6 +315,9 @@ class Music032Client(
         const val SYNC_PAGE_SIZE = 1000
     }
 }
+
+internal fun shouldCacheArtistDetail(requestGeneration: Long, currentGeneration: Long): Boolean =
+    requestGeneration == currentGeneration
 
 enum class MediaTokenProbeResult { OK, INVALID, UNKNOWN }
 

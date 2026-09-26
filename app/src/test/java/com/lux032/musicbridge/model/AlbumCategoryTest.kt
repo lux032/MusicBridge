@@ -2,8 +2,8 @@ package com.lux032.musicbridge.model
 
 import com.lux032.musicbridge.music.Music032Json
 import com.lux032.musicbridge.plex.PlexAlbum
-import org.json.JSONObject
 import com.lux032.musicbridge.plex.PlexSection
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -18,6 +18,23 @@ class AlbumCategoryTest {
         )) {
             val album = Music032Json.parseAlbum(JSONObject(json), "https://example.org", "token", section, "032")
             assertEquals(kind, classifyArtistAlbum(album).kind)
+        }
+    }
+
+    @Test fun music032DefaultAlbumTypesRetainTitleAndCountHeuristics() {
+        val section = PlexSection("032", "032", "artist")
+        for (albumType in listOf("album", "soundtrack")) {
+            val tagged = Music032Json.parseAlbum(
+                JSONObject("""{"id":5,"title":"Ordinary","trackCount":2,"albumType":"$albumType"}"""),
+                "https://example.org", "token", section, "032",
+            )
+            val legacy = Music032Json.parseAlbum(
+                JSONObject("""{"id":5,"title":"Ordinary","trackCount":2}"""),
+                "https://example.org", "token", section, "032",
+            )
+            assertEquals(null, tagged.format)
+            assertEquals(ReleaseKind.Single, classifyArtistAlbum(tagged).kind)
+            assertEquals(classifyArtistAlbum(legacy), classifyArtistAlbum(tagged))
         }
     }
 

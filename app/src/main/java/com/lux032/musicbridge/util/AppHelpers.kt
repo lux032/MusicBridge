@@ -124,6 +124,32 @@ fun plexThumbnailUrl(originalUrl: String, targetPx: Int): String {
         .toString()
 }
 
+internal val Music032ArtworkSizes = listOf(256, 512, 768, 1024, 1536)
+private val music032ArtworkPath = Regex("(?:^|/)api/v1/(?:artwork/[^/]+|artists/[^/]+/image)$")
+
+fun thumbnailUrl(originalUrl: String, targetPx: Int): String =
+    music032ThumbnailUrl(originalUrl, targetPx) ?: plexThumbnailUrl(originalUrl, targetPx)
+
+internal fun music032ThumbnailUrl(url: String, px: Int): String? {
+    val schemeEnd = url.indexOf("://")
+    if (schemeEnd < 0 || url.substring(0, schemeEnd).lowercase() !in setOf("http", "https")) return null
+    val fragmentIndex = url.indexOf('#')
+    val withoutFragment = if (fragmentIndex >= 0) url.substring(0, fragmentIndex) else url
+    val fragment = if (fragmentIndex >= 0) url.substring(fragmentIndex) else ""
+    val queryIndex = withoutFragment.indexOf('?')
+    if (queryIndex < 0) return null
+    val pathStart = withoutFragment.indexOf('/', schemeEnd + 3)
+    if (pathStart < 0 || pathStart >= queryIndex) return null
+    val path = withoutFragment.substring(pathStart, queryIndex)
+    if (!music032ArtworkPath.containsMatchIn(path)) return null
+    val query = withoutFragment.substring(queryIndex + 1).split('&')
+    if (query.none { it.startsWith("mediaToken=") }) return null
+    if (px <= 0) return url
+    val bucket = Music032ArtworkSizes.firstOrNull { it >= px } ?: Music032ArtworkSizes.last()
+    val preserved = query.filterNot { it == "size" || it.startsWith("size=") }
+    return withoutFragment.substring(0, queryIndex + 1) + (preserved + "size=$bucket").joinToString("&") + fragment
+}
+
 fun indexLabelForText(text: String?): String {
     if (text.isNullOrBlank()) return "#"
     val normalized = normalizedIndexValue(text)

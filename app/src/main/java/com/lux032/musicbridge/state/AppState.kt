@@ -534,6 +534,14 @@ class AppState(
         }
     }
 
+    private var startupProbeDone = false
+
+    fun probeStartup032Profile() {
+        if (startupProbeDone) return
+        startupProbeDone = true
+        probeActive032Profile()
+    }
+
     fun probeActive032Profile(profile: MusicServerProfile = connectionPreferences, probeProvidedToken: Boolean = false) {
         if (profile.type != MusicServerType.Music032 || !profile.hasCredentials()) return
         val client = runCatching { clientFor(profile.id) }.getOrNull() as? Music032Client ?: return

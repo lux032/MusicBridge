@@ -1,10 +1,9 @@
 package com.lux032.musicbridge.music
 
-import com.lux032.musicbridge.model.ReleaseKind
-import com.lux032.musicbridge.model.classifyArtistAlbum
 import com.lux032.musicbridge.plex.PlexSection
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Test
@@ -44,15 +43,14 @@ class Music032JsonTest {
     }
 
     @Test fun albumTypesAndFlags() {
-        for ((type, format, sub, kind) in listOf(
-            listOf("single", "Single", "", "Single"), listOf("ep", "EP", "", "Ep"),
-            listOf("album", "", "", "Album"), listOf("soundtrack", "", "", "Album"),
-            listOf("live", "", "Live", "Live"), listOf("compilation", "", "Compilation", "Compilation"),
+        for ((type, format, sub) in listOf(
+            listOf("single", "Single", ""), listOf("ep", "EP", ""),
+            listOf("album", "", ""), listOf("soundtrack", "", ""),
+            listOf("live", "", "Live"), listOf("compilation", "", "Compilation"),
         )) {
             val result = album(type)
             assertEquals(format.ifEmpty { null }, result.format)
             assertEquals(sub.ifEmpty { null }, result.subformat)
-            assertEquals(kind, classifyArtistAlbum(result).kind.name)
         }
         assertEquals("Live,Compilation", album("album", ",\"live\":true,\"compilation\":true").subformat)
     }
@@ -113,17 +111,24 @@ class Music032JsonTest {
     }
 
     @Test fun differentKeysDoNotBlockEachOther() = runBlocking {
-        val store = Music032CapabilitiesCache()
-        val first = Music032CapabilitiesStore.Key.of(base, "first")
-        val second = Music032CapabilitiesStore.Key.of(base, "second")
-        val waiting = kotlinx.coroutines.CompletableDeferred<Unit>()
-        val started = kotlinx.coroutines.CompletableDeferred<Unit>()
-        val job = launch {
-            store.ensure(first) { started.complete(Unit); waiting.await(); """{"apiRevision":2}""" }
+        withTimeout(5_000) {
+            val store = Music032CapabilitiesCache()
+            val first = Music032CapabilitiesStore.Key.of(base, "first")
+            val second = Music032CapabilitiesStore.Key.of(base, "second")
+            val waiting = kotlinx.coroutines.CompletableDeferred<Unit>()
+            val started = kotlinx.coroutines.CompletableDeferred<Unit>()
+            val job = launch {
+                store.ensure(first) { started.complete(Unit); waiting.await(); """{"apiRevision":2}""" }
+            }
+            started.await()
+            assertEquals(3, store.ensure(second) { """{"apiRevision":3}""" }.apiRevision)
+            waiting.complete(Unit)
+            job.join()
         }
-        started.await()
-        assertEquals(3, store.ensure(second) { """{"apiRevision":3}""" }.apiRevision)
-        waiting.complete(Unit)
-        job.join()
+    }
+
+    @Test fun artistDetailGenerationRejectsStaleResponse() {
+        assertTrue(shouldCacheArtistDetail(4, 4))
+        assertFalse(shouldCacheArtistDetail(4, 5))
     }
 }

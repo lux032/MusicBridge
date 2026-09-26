@@ -783,7 +783,7 @@ internal fun AsyncAlbumArtwork(
         val density = LocalDensity.current
         val requestUrl = remember(imageUrl, thumbnailSize, density) {
             if (thumbnailSize != null) {
-                plexThumbnailUrl(imageUrl, with(density) { thumbnailSize.roundToPx() })
+                thumbnailUrl(imageUrl, with(density) { thumbnailSize.roundToPx() })
             } else {
                 imageUrl
             }
@@ -793,7 +793,7 @@ internal fun AsyncAlbumArtwork(
         // keeps the first frame of the morph a real cover instead of a grey flash.
         val placeholderCacheKey = remember(imageUrl, placeholderThumbnailSize, density) {
             placeholderThumbnailSize?.let {
-                plexThumbnailUrl(imageUrl, with(density) { it.roundToPx() })
+                thumbnailUrl(imageUrl, with(density) { it.roundToPx() })
             }
         }
         val imageRequest = remember(requestUrl, placeholderCacheKey, context) {

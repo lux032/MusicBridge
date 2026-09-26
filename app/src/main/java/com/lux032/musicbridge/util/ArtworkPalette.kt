@@ -117,7 +117,7 @@ private fun animateArtworkColor(target: Color, label: String): State<Color> =
 private suspend fun extractArtworkPalette(context: android.content.Context, imageUrl: String): ArtworkPalette {
     return try {
         val request = ImageRequest.Builder(context)
-            .data(plexThumbnailUrl(imageUrl, PaletteRequestPx))
+            .data(thumbnailUrl(imageUrl, PaletteRequestPx))
             .size(Size(PaletteRequestPx, PaletteRequestPx))
             .allowHardware(false)
             .build()

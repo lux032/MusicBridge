@@ -25,8 +25,9 @@ private val lrcMetadataTag = Regex("\\[[a-zA-Z]+:.*]")
 
 /** Parses timed LRC; plain-text lyrics remain explicitly unsynchronised for static reading. */
 internal fun parseLrcLyrics(body: String): PlexLyrics {
+    val normalizedBody = body.removePrefix("\uFEFF")
     val timed = buildList {
-        body.lineSequence().forEach { rawLine ->
+        normalizedBody.lineSequence().forEach { rawLine ->
             val matches = lrcTimestamp.findAll(rawLine).toList()
             if (matches.isEmpty()) return@forEach
             val text = rawLine.substring(matches.last().range.last + 1).trim()
@@ -47,7 +48,7 @@ internal fun parseLrcLyrics(body: String): PlexLyrics {
     }.sortedBy(PlexLyricLine::timeMillis)
     if (timed.isNotEmpty()) return PlexLyrics(lines = timed, isSynced = true)
 
-    val plainLines = body.lineSequence()
+    val plainLines = normalizedBody.lineSequence()
         .map(String::trim)
         .filter { it.isNotEmpty() && !it.matches(lrcMetadataTag) }
         .mapIndexed { index, text -> PlexLyricLine(index * PLAIN_LYRIC_LINE_DURATION_MILLIS, text) }
@@ -122,7 +123,7 @@ private fun downloadText(url: String, accept: String): String {
             setRequestProperty("Accept", accept)
         }
         val status = connection.responseCode
-        if (status !in 200..299) error("HTTP $status while loading Plex lyrics")
+        if (status !in 200..299) error("HTTP $status while loading lyrics")
         return connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
     } finally {
         connection?.disconnect()

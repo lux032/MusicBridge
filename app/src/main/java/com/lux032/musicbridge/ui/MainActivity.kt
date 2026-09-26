@@ -219,7 +219,7 @@ fun PlexAlbumScreen(
     }
 
     LaunchedEffect(Unit) {
-        state.probeActive032Profile()
+        state.probeStartup032Profile()
         if (!state.hasLoadedLocalAlbums) {
             state.loadAlbumsFromLocalStore()
         }

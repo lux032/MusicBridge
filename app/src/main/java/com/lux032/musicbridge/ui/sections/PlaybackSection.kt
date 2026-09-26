@@ -142,8 +142,8 @@ internal fun PlaybackDetailSection(
     val palette = rememberAnimatedArtworkPalette(displayAlbum.thumbUrl)
 
     val trackDurationMillis = currentState.durationMillis?.takeIf { it > 0L } ?: currentTrack.durationMillis
-    var isSeeking by remember(currentTrack.ratingKey) { mutableStateOf(false) }
-    var sliderPositionMillis by remember(currentTrack.ratingKey) {
+    var isSeeking by remember(currentTrack.sourceId, currentTrack.ratingKey) { mutableStateOf(false) }
+    var sliderPositionMillis by remember(currentTrack.sourceId, currentTrack.ratingKey) {
         mutableStateOf(currentState.currentPositionMillis.toFloat())
     }
     var isPlaylistSheetVisible by remember { mutableStateOf(false) }
@@ -155,11 +155,11 @@ internal fun PlaybackDetailSection(
     var sleepTimerHours by remember { mutableIntStateOf(0) }
     var sleepTimerMinutes by remember { mutableIntStateOf(30) }
     var sleepTimerInputError by remember { mutableStateOf<String?>(null) }
-    var optimisticFavorite by remember(currentTrack.ratingKey) { mutableStateOf(currentTrack.isFavorite) }
-    var lyrics by remember(currentTrack.ratingKey) { mutableStateOf(PlexLyrics(emptyList(), isSynced = false)) }
-    var isLyricsLoading by remember(currentTrack.ratingKey) { mutableStateOf(false) }
+    var optimisticFavorite by remember(currentTrack.sourceId, currentTrack.ratingKey) { mutableStateOf(currentTrack.isFavorite) }
+    var lyrics by remember(currentTrack.sourceId, currentTrack.ratingKey) { mutableStateOf(PlexLyrics(emptyList(), isSynced = false)) }
+    var isLyricsLoading by remember(currentTrack.sourceId, currentTrack.ratingKey) { mutableStateOf(false) }
 
-    LaunchedEffect(currentTrack.ratingKey, currentTrack.lyricUrl) {
+    LaunchedEffect(currentTrack.sourceId, currentTrack.ratingKey, currentTrack.lyricUrl) {
         isLyricsLoading = true
         lyrics = runCatching {
             resolvePlexLyricUrl(currentTrack)?.let { fetchPlexLyrics(it) }
@@ -171,7 +171,7 @@ internal fun PlaybackDetailSection(
     LaunchedEffect(currentTrack.isFavorite, isFavoriteLoading) {
         if (!isFavoriteLoading) optimisticFavorite = currentTrack.isFavorite
     }
-    LaunchedEffect(currentState.currentPositionMillis, currentTrack.ratingKey, isSeeking) {
+    LaunchedEffect(currentState.currentPositionMillis, currentTrack.sourceId, currentTrack.ratingKey, isSeeking) {
         if (!isSeeking) {
             sliderPositionMillis = currentState.currentPositionMillis.toFloat()
         }
@@ -1934,7 +1934,7 @@ private fun AlbumDetailHeroCompact(
         ?.takeIf { it.isNotBlank() }
         ?.uppercase(Locale.ROOT)
     val playEnabled = !isPlaybackLoading && trackResult.tracks.isNotEmpty()
-    var showActionQueueMenu by remember(album.ratingKey) { mutableStateOf(false) }
+    var showActionQueueMenu by remember(album.sourceId, album.ratingKey) { mutableStateOf(false) }
     val totalTracks = trackResult.tracks.size
     val downloadedCount = trackResult.tracks.count { track ->
         "${track.sourceId}:${track.ratingKey}" in downloadedTrackKeys || track.ratingKey in downloadedTrackKeys

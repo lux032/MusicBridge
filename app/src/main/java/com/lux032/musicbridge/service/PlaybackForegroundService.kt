@@ -17,7 +17,7 @@ import android.os.IBinder
 import android.os.PowerManager
 import com.lux032.musicbridge.MainActivity
 import com.lux032.musicbridge.R
-import com.lux032.musicbridge.plexThumbnailUrl
+import com.lux032.musicbridge.thumbnailUrl
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -128,9 +128,9 @@ class PlaybackForegroundService : Service() {
     private fun loadArtworkAsync(url: String) {
         serviceScope.launch {
             val bitmap = runCatching {
-                // Media notifications render a relatively small large icon. Asking Plex for a
+                // Media notifications render a relatively small large icon. Requesting a
                 // bounded source avoids decoding multi-megapixel artwork outside Coil's cache.
-                URL(plexThumbnailUrl(url, NOTIFICATION_ARTWORK_SIZE_PX)).openStream().use {
+                URL(thumbnailUrl(url, NOTIFICATION_ARTWORK_SIZE_PX)).openStream().use {
                     BitmapFactory.decodeStream(it)
                 }
             }.getOrNull()
