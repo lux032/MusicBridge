@@ -253,6 +253,7 @@ internal val LOSSLESS_AUDIO_CODECS = setOf("flac", "alac", "wav", "wave", "aiff"
 
 enum class SonosHiResTranscodeMode(val id: String) {
     TRANSCODE_MP3("transcode_mp3"),
+    TRANSCODE_FLAC_48K("transcode_flac_48k"),
     DIRECT_ORIGINAL("direct_original");
 
     companion object {
@@ -261,6 +262,9 @@ enum class SonosHiResTranscodeMode(val id: String) {
             entries.firstOrNull { it.id == id } ?: DEFAULT
     }
 }
+
+fun SonosHiResTranscodeMode.forPlex(): SonosHiResTranscodeMode =
+    if (this == SonosHiResTranscodeMode.TRANSCODE_FLAC_48K) SonosHiResTranscodeMode.TRANSCODE_MP3 else this
 
 enum class OpusTranscodeMode(val id: String, val mimeType: String) {
     /** 直连秒播：Plex 实时转码 MP3 320k 直投 Sonos，绕过手机代理 */

@@ -323,7 +323,7 @@ class AppState(
                     sourceId = preferences.id,
                     clientIdentifier = plexClientIdentifier,
                     opusTranscodeMode = opusTranscodeMode,
-                    sonosHiResTranscodeMode = sonosHiResTranscodeMode,
+                    sonosHiResTranscodeMode = sonosHiResTranscodeMode.forPlex(),
                 )
             )
             MusicServerType.Music032 -> Music032Client(preferences)
@@ -346,6 +346,7 @@ class AppState(
         appPreferences.setSonosHiResTranscodeMode(mode)
         actionMessage = when (mode) {
             SonosHiResTranscodeMode.TRANSCODE_MP3 -> "已开启 Sonos Hi-Res MP3 320k 转码"
+            SonosHiResTranscodeMode.TRANSCODE_FLAC_48K -> "已开启 Sonos Hi-Res FLAC 24/48 转码"
             SonosHiResTranscodeMode.DIRECT_ORIGINAL -> "已切换为 Sonos Hi-Res 原盘直投"
         }
     }

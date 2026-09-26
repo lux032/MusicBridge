@@ -64,18 +64,21 @@ fun SonosAdvancedSection(
             label = { mode ->
                 when (mode) {
                     SonosHiResTranscodeMode.TRANSCODE_MP3 -> Strings.sonosHiResModeTranscodeMp3
+                    SonosHiResTranscodeMode.TRANSCODE_FLAC_48K -> Strings.sonosHiResModeTranscodeFlac48k
                     SonosHiResTranscodeMode.DIRECT_ORIGINAL -> Strings.sonosHiResModeDirectOriginal
                 }
             },
             description = { mode ->
                 when (mode) {
                     SonosHiResTranscodeMode.TRANSCODE_MP3 -> Strings.sonosHiResModeTranscodeMp3Desc
+                    SonosHiResTranscodeMode.TRANSCODE_FLAC_48K -> Strings.sonosHiResModeTranscodeFlac48kDesc
                     SonosHiResTranscodeMode.DIRECT_ORIGINAL -> Strings.sonosHiResModeDirectOriginalDesc
                 }
             },
             badge = { mode ->
                 when (mode) {
                     SonosHiResTranscodeMode.TRANSCODE_MP3 -> "推荐"
+                    SonosHiResTranscodeMode.TRANSCODE_FLAC_48K -> null
                     SonosHiResTranscodeMode.DIRECT_ORIGINAL -> null
                 }
             },
@@ -91,6 +94,7 @@ fun SonosAdvancedSection(
 
     val currentHiResLabel = when (sonosHiResTranscodeMode) {
         SonosHiResTranscodeMode.TRANSCODE_MP3 -> Strings.sonosHiResModeTranscodeMp3
+        SonosHiResTranscodeMode.TRANSCODE_FLAC_48K -> Strings.sonosHiResModeTranscodeFlac48k
         SonosHiResTranscodeMode.DIRECT_ORIGINAL -> Strings.sonosHiResModeDirectOriginal
     }
 

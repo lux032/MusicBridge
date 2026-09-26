@@ -111,7 +111,7 @@ class Music032Client(
 
     internal fun capabilities(): Music032Capabilities? = Music032CapabilitiesStore.snapshot(capabilitiesKey)
 
-    internal suspend fun ensureCapabilities(): Music032Capabilities = withContext(Dispatchers.IO) {
+    internal suspend fun ensureCapabilities(): Music032Capabilities? = withContext(Dispatchers.IO) {
         Music032CapabilitiesStore.ensure(capabilitiesKey) { request("GET", "/api/v1/capabilities") }
     }
 
@@ -308,7 +308,6 @@ class Music032Client(
     }
 
 
-    private class Music032HttpException(val status: Int, message: String) : IllegalStateException(message)
 
     private companion object {
         const val PAGE_SIZE = 500
@@ -318,6 +317,8 @@ class Music032Client(
 
 internal fun shouldCacheArtistDetail(requestGeneration: Long, currentGeneration: Long): Boolean =
     requestGeneration == currentGeneration
+
+internal class Music032HttpException(val status: Int, message: String) : IllegalStateException(message)
 
 enum class MediaTokenProbeResult { OK, INVALID, UNKNOWN }
 

@@ -2548,7 +2548,8 @@ internal suspend fun playAlbumSequentially(
     getTracks: () -> List<PlexTrackStream> = { trackResult.tracks },
     getNextIndex: (Int) -> Int?,
     onTrackChanged: (Int, PlexTrackStream, Long) -> Unit,
-    preparePlayback: (suspend (PlexTrackStream) -> Pair<String, String?>)? = null,
+    preparePlayback: (suspend (PlexTrackStream) -> SonosPlayback)? = null,
+    onTrackPushed: (PlexTrackStream, SonosPlayback) -> Unit = { _, _ -> },
 ) {
     val initialTracks = getTracks()
     require(initialTracks.isNotEmpty()) { "专辑里没有可播放的单曲。" }
@@ -2563,11 +2564,13 @@ internal suspend fun playAlbumSequentially(
         val track = tracks[index]
         val startPositionMillis = if (isFirstTrack) initialPositionMillis.coerceAtLeast(0L) else 0L
         isFirstTrack = false
-        val (playbackUrl, mimeType) = if (preparePlayback != null) {
+        val playback = if (preparePlayback != null) {
             preparePlayback(track)
         } else {
-            prepareTrackUrl(track) to track.playbackMimeType
+            val url = prepareTrackUrl(track)
+            SonosPlayback(url, track.playbackMimeType, url.contains("/:/transcode/universal/start", ignoreCase = true))
         }
+        val (playbackUrl, mimeType, positionIsEncodedInUrl) = playback
         sonosController.playTrack(
             room = room,
             trackUrl = playbackUrl,
@@ -2575,12 +2578,9 @@ internal suspend fun playAlbumSequentially(
             albumTitle = track.albumTitle ?: trackResult.album.title,
             mimeType = mimeType,
         )
+        onTrackPushed(track, playback)
         // Plex universal transcodes are live responses and do not support reliable Sonos
         // REL_TIME seeking. Their source offset is already encoded in playbackUrl.
-        val positionIsEncodedInUrl = playbackUrl.contains(
-            "/:/transcode/universal/start",
-            ignoreCase = true,
-        )
         if (startPositionMillis > 0L && !positionIsEncodedInUrl) {
             sonosController.seek(room, (startPositionMillis / 1_000L).toInt())
         }

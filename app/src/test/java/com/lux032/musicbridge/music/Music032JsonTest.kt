@@ -92,7 +92,7 @@ class Music032JsonTest {
         val key = Music032CapabilitiesStore.Key.of("https://ttl.example/", "secret")
         var calls = 0
         suspend fun fetch(): String { calls++; return """{"apiRevision":2}""" }
-        assertEquals(2, store.ensure(key, ::fetch).apiRevision)
+        assertEquals(2, store.ensure(key, ::fetch)?.apiRevision)
         time += 599_999
         store.ensure(key, ::fetch)
         assertEquals(1, calls)
@@ -100,14 +100,34 @@ class Music032JsonTest {
         store.ensure(key, ::fetch)
         assertEquals(2, calls)
         store.invalidate(key)
-        store.ensure(key) { calls++; error("offline") }
-        assertEquals(Music032Capabilities.LEGACY, store.snapshot(key))
-        time += 29_999
-        store.ensure(key, ::fetch)
+        assertNull(store.ensure(key) { calls++; error("offline") })
+        assertNull(store.snapshot(key))
+        time += 4_999
+        assertNull(store.ensure(key, ::fetch))
         assertEquals(3, calls)
         time++
         store.ensure(key, ::fetch)
         assertEquals(4, calls)
+        store.invalidate(key)
+        assertEquals(Music032Capabilities.LEGACY,
+            store.ensure(key) { calls++; throw Music032HttpException(404, "not found") })
+        assertEquals(Music032Capabilities.LEGACY, store.snapshot(key))
+        time += 29_999
+        store.ensure(key, ::fetch)
+        assertEquals(5, calls)
+        time++
+        assertEquals(2, store.ensure(key, ::fetch)?.apiRevision)
+        assertEquals(6, calls)
+    }
+
+    @Test fun non404HttpErrorAndMalformedResponseStayUnknown() = runBlocking {
+        val store = Music032CapabilitiesCache()
+        val key = Music032CapabilitiesStore.Key.of(base, "failures")
+        assertNull(store.ensure(key) { throw Music032HttpException(503, "unavailable") })
+        assertNull(store.snapshot(key))
+        store.invalidate(key)
+        assertNull(store.ensure(key) { "not json" })
+        assertNull(store.snapshot(key))
     }
 
     @Test fun differentKeysDoNotBlockEachOther() = runBlocking {
@@ -121,7 +141,7 @@ class Music032JsonTest {
                 store.ensure(first) { started.complete(Unit); waiting.await(); """{"apiRevision":2}""" }
             }
             started.await()
-            assertEquals(3, store.ensure(second) { """{"apiRevision":3}""" }.apiRevision)
+            assertEquals(3, store.ensure(second) { """{"apiRevision":3}""" }?.apiRevision)
             waiting.complete(Unit)
             job.join()
         }

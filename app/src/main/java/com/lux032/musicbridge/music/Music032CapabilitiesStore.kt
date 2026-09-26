@@ -4,26 +4,43 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.util.concurrent.ConcurrentHashMap
+import org.json.JSONObject
 
 internal class Music032CapabilitiesCache(private val nowMillis: () -> Long = System::currentTimeMillis) {
     private data class Entry(val value: Music032Capabilities, val expiresAt: Long)
     private val locks = ConcurrentHashMap<Music032CapabilitiesStore.Key, Mutex>()
     private val entries = ConcurrentHashMap<Music032CapabilitiesStore.Key, Entry>()
+    private val failures = ConcurrentHashMap<Music032CapabilitiesStore.Key, Long>()
 
     fun snapshot(key: Music032CapabilitiesStore.Key): Music032Capabilities? =
         entries[key]?.takeIf { it.expiresAt > nowMillis() }?.value
 
-    fun invalidate(key: Music032CapabilitiesStore.Key) { entries.remove(key) }
+    fun invalidate(key: Music032CapabilitiesStore.Key) { entries.remove(key); failures.remove(key) }
 
-    suspend fun ensure(key: Music032CapabilitiesStore.Key, fetcher: suspend () -> String): Music032Capabilities {
+    suspend fun ensure(key: Music032CapabilitiesStore.Key, fetcher: suspend () -> String): Music032Capabilities? {
         snapshot(key)?.let { return it }
+        if ((failures[key] ?: 0L) > nowMillis()) return null
         return locks.computeIfAbsent(key) { Mutex() }.withLock {
             snapshot(key) ?: run {
-                val text = try { fetcher() } catch (cancel: CancellationException) { throw cancel }
-                catch (_: Exception) { null }
-                val value = text?.let(Music032Json::parseCapabilities) ?: Music032Capabilities.LEGACY
-                val ttl = if (text == null || value == Music032Capabilities.LEGACY) 30_000L else 600_000L
-                entries[key] = Entry(value, nowMillis() + ttl)
+                if ((failures[key] ?: 0L) > nowMillis()) return@run null
+                val value = try {
+                    val text = fetcher()
+                    if (runCatching { JSONObject(text) }.isFailure) null
+                    else Music032Json.parseCapabilities(text).let {
+                        if (it.apiRevision <= 1) Music032Capabilities.LEGACY else it
+                    }
+                } catch (cancel: CancellationException) {
+                    throw cancel
+                } catch (error: Music032HttpException) {
+                    if (error.status == 404) Music032Capabilities.LEGACY else null
+                } catch (_: Exception) {
+                    null
+                }
+                if (value != null) {
+                    failures.remove(key)
+                    val ttl = if (value == Music032Capabilities.LEGACY) 30_000L else 600_000L
+                    entries[key] = Entry(value, nowMillis() + ttl)
+                } else failures[key] = nowMillis() + 5_000L
                 value
             }
         }
@@ -40,5 +57,5 @@ internal object Music032CapabilitiesStore {
     private val cache = Music032CapabilitiesCache()
     fun snapshot(key: Key): Music032Capabilities? = cache.snapshot(key)
     fun invalidate(key: Key) = cache.invalidate(key)
-    suspend fun ensure(key: Key, fetcher: suspend () -> String): Music032Capabilities = cache.ensure(key, fetcher)
+    suspend fun ensure(key: Key, fetcher: suspend () -> String): Music032Capabilities? = cache.ensure(key, fetcher)
 }

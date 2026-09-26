@@ -4,6 +4,12 @@ import android.content.Context
 import java.util.Locale
 
 object Strings {
+    val sonosHiResModeTranscodeFlac48k get() = if (isZhCN) "转 FLAC 24/48（032）" else "FLAC 24/48 (032)"
+    val sonosHiResModeTranscodeFlac48kDesc get() = if (isZhCN) "032 服务器转为 ≤48kHz FLAC，首次播放需等待服务器转码；Plex 源按 MP3 320k 处理。" else "032 converts to FLAC at ≤48 kHz; first playback waits for the server. Plex uses MP3 320k."
+    val music032FlacPreparing get() = if (isZhCN) "服务器正在准备 FLAC" else "Server is preparing FLAC"
+    val music032SonosFallbackUnavailable get() = if (isZhCN) "FLAC 准备失败，服务器也未启用 MP3 转码，无法在 Sonos 播放" else "FLAC preparation failed and server MP3 transcoding is unavailable; Sonos playback cannot start."
+    val music032FlacFallback get() = if (isZhCN) "FLAC 准备失败，已改用 MP3" else "FLAC preparation failed; using MP3"
+    val music032SonosTranscodeUnavailable get() = if (isZhCN) "服务器未启用转码，无法在 Sonos 播放 Opus" else "Server transcoding is unavailable; Opus cannot play on Sonos."
     val music032MissingMediaToken get() = if (isZhCN) "请填写 032 Music Server 地址、API Token 和媒体 Token。" else "Enter the 032 Music Server address, API Token and media Token."
     val music032InvalidMediaToken get() = if (isZhCN) "媒体 Token 无效，音频、封面和歌词将无法加载，请填写服务端的 MUSIC_SERVER_MEDIA_TOKEN。" else "Invalid media Token. Audio, artwork and lyrics will not load; enter MUSIC_SERVER_MEDIA_TOKEN from the server."
 

@@ -1,6 +1,11 @@
 package com.lux032.musicbridge
 
 import android.util.Log
+import com.lux032.musicbridge.music.Music032Client
+import com.lux032.musicbridge.music.Music032Json
+import com.lux032.musicbridge.music.Music032TranscodeUrls
+import com.lux032.musicbridge.music.Music032Warmup
+import com.lux032.musicbridge.music.WarmupResult
 import com.lux032.musicbridge.local.LocalAudioCache
 import com.lux032.musicbridge.local.originalCacheKey
 import com.lux032.musicbridge.plex.PlexAlbum
@@ -19,9 +24,11 @@ import com.lux032.musicbridge.sonos.SonosPlaybackStatus
 import com.lux032.musicbridge.sonos.SonosRoom
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.util.concurrent.atomic.AtomicLong
@@ -37,7 +44,7 @@ internal fun preparePlexSonosTranscode(
     hiResMode: SonosHiResTranscodeMode,
     clientId: String,
 ): PlexTrackStream = if (isPlexSource) {
-    track.withOpusTranscodeMode(opusMode, clientId).withSonosHiResTranscodeMode(hiResMode, clientId)
+    track.withOpusTranscodeMode(opusMode, clientId).withSonosHiResTranscodeMode(hiResMode.forPlex(), clientId)
 } else track
 
 internal fun configuredPlexDirectMp3(
@@ -49,7 +56,7 @@ internal fun configuredPlexDirectMp3(
     (track.sourceAudioCodec.equals("opus", ignoreCase = true) && opusMode == OpusTranscodeMode.DIRECT_MP3) ||
         (track.sourceAudioCodec?.lowercase() in LOSSLESS_AUDIO_CODECS &&
             (track.sourceAudioSampleRate ?: 0) > SONOS_MAX_SAMPLE_RATE_HZ &&
-            hiResMode == SonosHiResTranscodeMode.TRANSCODE_MP3)
+            hiResMode.forPlex() == SonosHiResTranscodeMode.TRANSCODE_MP3)
     )
 
 internal class AppStatePlaybackCoordinator(
@@ -59,12 +66,47 @@ internal class AppStatePlaybackCoordinator(
     private val seekRequestGeneration = AtomicLong(0L)
     private val playbackToggleGeneration = AtomicLong(0L)
     private val playbackToggleMutex = Mutex()
+    private val hydrationCache = Music032HydrationCache(state.scope)
+
+    private var pending032Plan: Pair<PlexTrackStream, SonosPlan>? = null
+    private var pending032Offset = 0L
+    @Volatile private var activeSonosPlan: ActiveSonosPlan? = null
+    private data class ActiveSonosPlan(val sourceId: String, val ratingKey: String, val kind: SonosPlanKind,
+                                       val url: String, val mime: String?)
+    private data class PreparedSonosTrack(val track: PlexTrackStream, val plan: SonosPlan?)
+    private var pending032Fallback = false
+    private var current032Fallback = false
+
+    private fun is032Source(track: PlexTrackStream): Boolean =
+        runCatching { state.clientFor(track.sourceId) is Music032Client }.getOrNull()
+            ?: Music032TranscodeUrls.isOriginalStream(track.streamUrl)
+
+    private fun activePlanFor(track: PlexTrackStream): ActiveSonosPlan? = activeSonosPlan?.takeIf {
+        it.sourceId == track.sourceId && it.ratingKey == track.ratingKey &&
+            state.miniPlayerState?.let { player ->
+                player.tracks.getOrNull(player.currentIndex)?.let { current ->
+                    current.sourceId == track.sourceId && current.ratingKey == track.ratingKey
+                }
+            } == true
+    }
+
+    private fun set032RestartSeek(track: PlexTrackStream, offset: Long) {
+        val clamped = Music032TranscodeUrls.clampedOffsetMs(offset, track.durationMillis)
+        transcodeRestartSeek = if (clamped > 0) TranscodeRestartSeek(track.sourceId, track.ratingKey,
+            clamped, seekRequestGeneration.incrementAndGet(), true, System.currentTimeMillis()) else null
+    }
+
+    private fun record032Plan(track: PlexTrackStream, plan: SonosPlan, url: String) {
+        activeSonosPlan = ActiveSonosPlan(track.sourceId, track.ratingKey, plan.kind, url, plan.mime)
+    }
 
     @Volatile
     private var transcodeRestartSeek: TranscodeRestartSeek? = null
 
     init {
         SleepTimerController.onExpired = { room ->
+            activeSonosPlan = null
+            pending032Plan = null
             playbackRequestGeneration.incrementAndGet()
             state.albumPlaybackJob?.cancel()
             state.playbackReportingJob?.cancel()
@@ -120,7 +162,7 @@ internal class AppStatePlaybackCoordinator(
         initialPositionMillis: Long,
     ) {
         val targetTrack = tracks.getOrNull(trackIndex) ?: return
-        val resumesLiveTranscodeDirectMp3 = initialPositionMillis > 0L && targetTrack.isConfiguredDirectMp3()
+        val resumesLiveTranscodeDirectMp3 = initialPositionMillis > 0L && !is032Source(targetTrack) && targetTrack.isConfiguredDirectMp3()
         transcodeRestartSeek = if (resumesLiveTranscodeDirectMp3) {
             TranscodeRestartSeek(
                 sourceId = targetTrack.sourceId,
@@ -164,13 +206,20 @@ internal class AppStatePlaybackCoordinator(
         state.actionMessage = null
         state.scope.launch {
             runCatching {
-                val effectiveTrack = prepareSonosTrack(targetTrack)
+                val prepared = prepareSonosTrack(targetTrack) { isCurrentPlaybackRequest(requestGeneration) }
+                if (prepared.plan != null) ensureCurrentPlaybackRequest(requestGeneration)
+                val effectiveTrack = prepared.track
                 val isOpus = effectiveTrack.sourceAudioCodec.equals("opus", ignoreCase = true)
                 val isLiveTranscodeDirectMp3 = effectiveTrack.streamUrl.contains("/:/transcode/universal/start.mp3", ignoreCase = true)
                 if (isOpus && isPlexSource(effectiveTrack) && state.opusTranscodeMode == OpusTranscodeMode.PROXY_FLAC) {
                     state.actionMessage = "正在准备 FLAC 缓存：${effectiveTrack.title}"
                 }
-                val playbackUrl = if (isLiveTranscodeDirectMp3) {
+                val playbackUrl = if (prepared.plan != null) {
+                    state.plexTranscodeProxy.cancelPendingDownload()
+                    if (prepared.plan.kind == SonosPlanKind.LIVE_MP3)
+                        Music032TranscodeUrls.withOffsetMs(prepared.plan.url, initialPositionMillis, effectiveTrack.durationMillis)
+                    else prepared.plan.url
+                } else if (isLiveTranscodeDirectMp3) {
                     state.plexTranscodeProxy.cancelPendingDownload()
                     effectiveTrack.streamUrl.withPlexTranscodeOffsetSeconds(
                         (initialPositionMillis.coerceAtLeast(0L) / 1_000L).toInt(),
@@ -179,14 +228,21 @@ internal class AppStatePlaybackCoordinator(
                     state.plexTranscodeProxy.preparePlaybackUrl(effectiveTrack)
                 }
                 ensureCurrentPlaybackRequest(requestGeneration)
+                if (prepared.plan != null) set032RestartSeek(effectiveTrack,
+                    if (prepared.plan.kind == SonosPlanKind.LIVE_MP3) initialPositionMillis else 0L)
                 state.sonosController.playTrack(
                     room = room,
                     trackUrl = playbackUrl,
                     title = effectiveTrack.title,
                     albumTitle = effectiveTrack.albumTitle ?: displayAlbum.title,
-                    mimeType = effectiveTrack.playbackMimeType,
+                    mimeType = if (prepared.plan != null) prepared.plan.mime else effectiveTrack.playbackMimeType,
                 )
-                if (initialPositionMillis > 0L && !isLiveTranscodeDirectMp3) {
+                if (prepared.plan != null && isCurrentPlaybackRequest(requestGeneration)) {
+                    record032Plan(effectiveTrack, prepared.plan, playbackUrl)
+                    current032Fallback = prepared.plan.fellBackFromFlac
+                }
+                if (if (prepared.plan != null) shouldSonosSeekAfterPush(prepared.plan.kind, initialPositionMillis)
+                    else initialPositionMillis > 0L && !isLiveTranscodeDirectMp3) {
                     state.sonosController.seek(room, (initialPositionMillis / 1_000L).toInt())
                 }
             }.onSuccess {
@@ -198,7 +254,8 @@ internal class AppStatePlaybackCoordinator(
                         initialPositionMillis,
                         autoAdvanceWhenStopped = true,
                     )
-                    state.actionMessage = "已将 ${targetTrack.title} 推送到 ${room.roomName}"
+                    state.actionMessage = sonosPushMessage("已将 ${targetTrack.title} 推送到 ${room.roomName}",
+                        is032Source(targetTrack) && current032Fallback)
                 }
             }.onFailure { error ->
                 if (error !is CancellationException && isCurrentPlaybackRequest(requestGeneration)) {
@@ -239,7 +296,7 @@ internal class AppStatePlaybackCoordinator(
         initialPositionMillis: Long,
     ) {
         val initialTrack = albumTrackResult.tracks.getOrNull(startIndex)
-        val resumesLiveTranscodeDirectMp3 = initialPositionMillis > 0L && initialTrack?.isConfiguredDirectMp3() == true
+        val resumesLiveTranscodeDirectMp3 = initialPositionMillis > 0L && initialTrack != null && !is032Source(initialTrack) && initialTrack.isConfiguredDirectMp3()
         transcodeRestartSeek = if (resumesLiveTranscodeDirectMp3) {
             TranscodeRestartSeek(
                 sourceId = initialTrack.sourceId,
@@ -293,7 +350,9 @@ internal class AppStatePlaybackCoordinator(
                     startIndex = startIndex,
                     initialPositionMillis = initialPositionMillis,
                     preparePlayback = { track ->
-                        val effectiveTrack = prepareSonosTrack(track)
+                        val prepared = prepareSonosTrack(track) { isCurrentPlaybackRequest(requestGeneration) }
+                        if (prepared.plan != null) ensureCurrentPlaybackRequest(requestGeneration)
+                        val effectiveTrack = prepared.track
                         val isOpus = effectiveTrack.sourceAudioCodec.equals("opus", ignoreCase = true)
                         val playbackOffsetMillis = if (isPreparingFirstTrack) {
                             initialPositionMillis.coerceAtLeast(0L)
@@ -305,7 +364,13 @@ internal class AppStatePlaybackCoordinator(
                             state.actionMessage = "正在准备 FLAC 缓存：${effectiveTrack.title}"
                         }
                         val isLiveTranscodeDirectMp3 = effectiveTrack.streamUrl.contains("/:/transcode/universal/start.mp3", ignoreCase = true)
-                        val playbackUrl = if (isLiveTranscodeDirectMp3) {
+                        val playbackUrl = if (prepared.plan != null) {
+                            ensureCurrentPlaybackRequest(requestGeneration)
+                            state.plexTranscodeProxy.cancelPendingDownload()
+                            if (prepared.plan.kind == SonosPlanKind.LIVE_MP3)
+                                Music032TranscodeUrls.withOffsetMs(prepared.plan.url, playbackOffsetMillis, effectiveTrack.durationMillis)
+                            else prepared.plan.url
+                        } else if (isLiveTranscodeDirectMp3) {
                             ensureCurrentPlaybackRequest(requestGeneration)
                             state.plexTranscodeProxy.cancelPendingDownload()
                             effectiveTrack.streamUrl.withPlexTranscodeOffsetSeconds(
@@ -316,7 +381,26 @@ internal class AppStatePlaybackCoordinator(
                                 ensureCurrentPlaybackRequest(requestGeneration)
                             }
                         }
-                        playbackUrl to effectiveTrack.playbackMimeType
+                        if (prepared.plan != null) {
+                            ensureCurrentPlaybackRequest(requestGeneration)
+                            pending032Plan = effectiveTrack to prepared.plan
+                            pending032Offset = playbackOffsetMillis
+                            pending032Fallback = prepared.plan.fellBackFromFlac
+                        }
+                        SonosPlayback(playbackUrl, if (prepared.plan != null) prepared.plan.mime else effectiveTrack.playbackMimeType,
+                            prepared.plan?.let { it.kind == SonosPlanKind.LIVE_MP3 && playbackOffsetMillis > 0L }
+                                ?: playbackUrl.contains("/:/transcode/universal/start", ignoreCase = true))
+                    },
+                    onTrackPushed = { track, playback ->
+                        if (isCurrentPlaybackRequest(requestGeneration)) {
+                            val plan = pending032Plan?.takeIf { it.first.sourceId == track.sourceId && it.first.ratingKey == track.ratingKey }
+                            if (plan != null) {
+                                record032Plan(plan.first, plan.second, playback.url)
+                                current032Fallback = pending032Fallback
+                                set032RestartSeek(plan.first, if (plan.second.kind == SonosPlanKind.LIVE_MP3) pending032Offset else 0L)
+                                pending032Plan = null
+                            }
+                        }
                     },
                     getTracks = { state.miniPlayerState?.tracks ?: albumTrackResult.tracks },
                     getNextIndex = { currentIndex ->
@@ -327,6 +411,9 @@ internal class AppStatePlaybackCoordinator(
                     },
                     onTrackChanged = { index, track, startPositionMillis ->
                         transcodeRestartSeek = transcodeRestartSeek?.takeIf {
+                            it.sourceId == track.sourceId && it.ratingKey == track.ratingKey
+                        }
+                        activeSonosPlan = activeSonosPlan?.takeIf {
                             it.sourceId == track.sourceId && it.ratingKey == track.ratingKey
                         }
                         if (!didStartFirstTrack) {
@@ -347,7 +434,23 @@ internal class AppStatePlaybackCoordinator(
                             durationMillis = track.durationMillis,
                             target = PlaybackTarget.Sonos(room),
                         )
-                        state.actionMessage = "正在连续播放：${track.title}"
+                        state.actionMessage = sonosPushMessage("正在连续播放：${track.title}",
+                            is032Source(track) && current032Fallback)
+                        val queue = state.miniPlayerState?.tracks ?: albumTrackResult.tracks
+                        val candidate = next032WarmupCandidate(queue, index,
+                            state.playbackMode == PlaybackMode.Sequential, state.opusTranscodeMode,
+                            state.sonosHiResTranscodeMode) { next ->
+                            (runCatching { state.clientFor(next.sourceId) }.getOrNull() as? Music032Client)?.capabilities()
+                        }?.takeIf(::is032Source)
+                        if (candidate != null) launch {
+                            try {
+                                val nextPlan = plan032(candidate, state.opusTranscodeMode,
+                                    state.sonosHiResTranscodeMode,
+                                    (runCatching { state.clientFor(candidate.sourceId) }.getOrNull() as? Music032Client)?.capabilities()).getOrNull()
+                                if (nextPlan?.needsWarmup == true) Music032Warmup.prepare(nextPlan.url)
+                            } catch (cancel: CancellationException) { throw cancel }
+                            catch (_: Exception) { /* Best-effort prewarm. */ }
+                        }
                     },
                 )
             }.onSuccess {
@@ -357,6 +460,10 @@ internal class AppStatePlaybackCoordinator(
                     state.actionMessage = "专辑播放结束：${albumTrackResult.album.title}"
                 }
             }.onFailure { error ->
+                if (error is CancellationException && isCurrentPlaybackRequest(requestGeneration) &&
+                    state.miniPlayerState?.tracks?.getOrNull(state.miniPlayerState?.currentIndex ?: -1)?.let(::is032Source) == true) {
+                    state.isPlaybackCommandLoading = false
+                }
                 if (error !is CancellationException && isCurrentPlaybackRequest(requestGeneration)) {
                     state.errorMessage = error.message ?: "未知错误"
                     state.isPlaybackCommandLoading = false
@@ -573,13 +680,21 @@ internal class AppStatePlaybackCoordinator(
                     startIndex = 0,
                     initialPositionMillis = 0L,
                     preparePlayback = { track ->
-                        val effectiveTrack = prepareSonosTrack(track)
+                        val prepared = prepareSonosTrack(track) { isCurrentPlaybackRequest(requestGeneration) }
+                        if (prepared.plan != null) ensureCurrentPlaybackRequest(requestGeneration)
+                        val effectiveTrack = prepared.track
                         val isOpus = effectiveTrack.sourceAudioCodec.equals("opus", ignoreCase = true)
                         if (isOpus && isPlexSource(effectiveTrack) && state.opusTranscodeMode == OpusTranscodeMode.PROXY_FLAC) {
                             state.actionMessage = "正在准备 FLAC 缓存：${effectiveTrack.title}"
                         }
                         val isLiveTranscodeDirectMp3 = effectiveTrack.streamUrl.contains("/:/transcode/universal/start.mp3", ignoreCase = true)
-                        val playbackUrl = if (isLiveTranscodeDirectMp3) {
+                        val playbackUrl = if (prepared.plan != null) {
+                            ensureCurrentPlaybackRequest(requestGeneration)
+                            state.plexTranscodeProxy.cancelPendingDownload()
+                            if (prepared.plan.kind == SonosPlanKind.LIVE_MP3)
+                                Music032TranscodeUrls.withOffsetMs(prepared.plan.url, 0L, effectiveTrack.durationMillis)
+                            else prepared.plan.url
+                        } else if (isLiveTranscodeDirectMp3) {
                             ensureCurrentPlaybackRequest(requestGeneration)
                             state.plexTranscodeProxy.cancelPendingDownload()
                             effectiveTrack.streamUrl
@@ -588,7 +703,26 @@ internal class AppStatePlaybackCoordinator(
                                 ensureCurrentPlaybackRequest(requestGeneration)
                             }
                         }
-                        playbackUrl to effectiveTrack.playbackMimeType
+                        if (prepared.plan != null) {
+                            ensureCurrentPlaybackRequest(requestGeneration)
+                            pending032Plan = effectiveTrack to prepared.plan
+                            pending032Offset = 0L
+                            pending032Fallback = prepared.plan.fellBackFromFlac
+                        }
+                        SonosPlayback(playbackUrl, if (prepared.plan != null) prepared.plan.mime else effectiveTrack.playbackMimeType,
+                            if (prepared.plan != null) false
+                            else playbackUrl.contains("/:/transcode/universal/start", ignoreCase = true))
+                    },
+                    onTrackPushed = { track, playback ->
+                        if (isCurrentPlaybackRequest(requestGeneration)) {
+                            val plan = pending032Plan?.takeIf { it.first.sourceId == track.sourceId && it.first.ratingKey == track.ratingKey }
+                            if (plan != null) {
+                                record032Plan(plan.first, plan.second, playback.url)
+                                current032Fallback = pending032Fallback
+                                set032RestartSeek(plan.first, if (plan.second.kind == SonosPlanKind.LIVE_MP3) pending032Offset else 0L)
+                                pending032Plan = null
+                            }
+                        }
                     },
                     getTracks = { state.miniPlayerState?.tracks ?: tracks },
                     getNextIndex = { currentIndex ->
@@ -602,6 +736,9 @@ internal class AppStatePlaybackCoordinator(
                     },
                     onTrackChanged = { index, track, positionMillis ->
                         transcodeRestartSeek = null
+                        activeSonosPlan = activeSonosPlan?.takeIf {
+                            it.sourceId == track.sourceId && it.ratingKey == track.ratingKey
+                        }
                         if (!didStartFirstTrack) {
                             didStartFirstTrack = true
                             state.isPlaybackCommandLoading = false
@@ -619,6 +756,23 @@ internal class AppStatePlaybackCoordinator(
                             currentPositionMillis = positionMillis,
                             durationMillis = track.durationMillis,
                         )
+                        playlistTrackMessage(track.title, is032Source(track), current032Fallback)?.let {
+                            state.actionMessage = it
+                        }
+                        val candidate = next032WarmupCandidate(state.miniPlayerState?.tracks ?: tracks, index,
+                            state.playbackMode == PlaybackMode.Sequential, state.opusTranscodeMode,
+                            state.sonosHiResTranscodeMode) { next ->
+                            (runCatching { state.clientFor(next.sourceId) }.getOrNull() as? Music032Client)?.capabilities()
+                        }?.takeIf(::is032Source)
+                        if (candidate != null) launch {
+                            try {
+                                val nextPlan = plan032(candidate, state.opusTranscodeMode,
+                                    state.sonosHiResTranscodeMode,
+                                    (runCatching { state.clientFor(candidate.sourceId) }.getOrNull() as? Music032Client)?.capabilities()).getOrNull()
+                                if (nextPlan?.needsWarmup == true) Music032Warmup.prepare(nextPlan.url)
+                            } catch (cancel: CancellationException) { throw cancel }
+                            catch (_: Exception) { /* Best-effort prewarm. */ }
+                        }
                     },
                 )
             }.onSuccess {
@@ -628,6 +782,10 @@ internal class AppStatePlaybackCoordinator(
                     state.actionMessage = "播放列表播放结束：${playlistResult.playlist.title}"
                 }
             }.onFailure { error ->
+                if (error is CancellationException && isCurrentPlaybackRequest(requestGeneration) &&
+                    state.miniPlayerState?.tracks?.getOrNull(state.miniPlayerState?.currentIndex ?: -1)?.let(::is032Source) == true) {
+                    state.isPlaybackCommandLoading = false
+                }
                 if (error !is CancellationException && isCurrentPlaybackRequest(requestGeneration)) {
                     state.errorMessage = error.message ?: "播放失败"
                     state.isPlaybackCommandLoading = false
@@ -659,8 +817,9 @@ internal class AppStatePlaybackCoordinator(
                     transportState.equals("NO_MEDIA_PRESENT", ignoreCase = true)
                 val shouldResume = if (transportState.isBlank()) latest.isPaused else !isActuallyPlaying
                 val currentTrack = latest.tracks.getOrNull(latest.currentIndex)
-                val resumesLiveTranscodeDirectMp3 = shouldResume &&
-                    currentTrack?.isConfiguredDirectMp3() == true
+                val resumesLiveTranscodeDirectMp3 = shouldResume && currentTrack != null &&
+                    (activePlanFor(currentTrack)?.let { it.kind == SonosPlanKind.LIVE_MP3 }
+                        ?: currentTrack.isConfiguredDirectMp3())
                 Log.i(
                     LOG_TAG,
                     "toggle transport=$transportState shouldResume=$shouldResume " +
@@ -671,6 +830,37 @@ internal class AppStatePlaybackCoordinator(
                 // Sonos still briefly reports PAUSED_PLAYBACK. A plain Play is therefore
                 // inherently racy: always create a fresh offset stream for this format.
                 if (resumesLiveTranscodeDirectMp3 || (shouldResume && isActuallyStopped)) {
+                    val active032 = currentTrack?.let(::activePlanFor)
+                    if (active032?.kind == SonosPlanKind.LIVE_MP3) {
+                        val position = Music032TranscodeUrls.clampedOffsetMs(latest.currentPositionMillis,
+                            latest.durationMillis ?: currentTrack.durationMillis)
+                        val url = Music032TranscodeUrls.withOffsetMs(active032.url, position,
+                            latest.durationMillis ?: currentTrack.durationMillis)
+                        val seekGeneration = seekRequestGeneration.incrementAndGet()
+                        transcodeRestartSeek = TranscodeRestartSeek(currentTrack.sourceId, currentTrack.ratingKey,
+                            position, seekGeneration, true, System.currentTimeMillis())
+                        if (commandGeneration != playbackToggleGeneration.get() || activePlanFor(currentTrack) != active032) {
+                            if (transcodeRestartSeek?.generation == seekGeneration) transcodeRestartSeek = null
+                            return@withLock
+                        }
+                        val outcome = runCatching {
+                            state.plexTranscodeProxy.cancelPendingDownload()
+                            state.sonosController.playTrack(room, url, currentTrack.title,
+                                currentTrack.albumTitle ?: latest.album.title, active032.mime)
+                        }
+                        if (commandGeneration == playbackToggleGeneration.get() && activePlanFor(currentTrack) == active032) {
+                            outcome.onSuccess {
+                                activeSonosPlan = active032.copy(url = url)
+                                state.miniPlayerState = state.miniPlayerState?.copy(isPaused = false)
+                                state.actionMessage = "已继续播放"
+                            }.onFailure {
+                                transcodeRestartSeek = null
+                                state.errorMessage = it.message ?: "未知错误"
+                            }
+                            state.isPlaybackCommandLoading = false
+                        }
+                        return@withLock
+                    }
                     restartedPlayback = true
                     Log.i(LOG_TAG, "restart transport at ${latest.currentPositionMillis}ms")
                     playQueueIndex(latest.currentIndex, latest.currentPositionMillis, PlaybackTarget.Sonos(room))
@@ -754,6 +944,8 @@ internal class AppStatePlaybackCoordinator(
         val targetIndex = index.coerceIn(0, playerState.tracks.lastIndex)
         when (val resolvedTarget = target ?: playerState.target) {
             PlaybackTarget.LocalDevice -> {
+                activeSonosPlan = null
+                pending032Plan = null
                 if (playerState.target == PlaybackTarget.LocalDevice) {
                     // Same renderer: seek inside the live ExoPlayer queue.
                     state.localPlaybackCoordinator.playLocalIndex(targetIndex, positionMillis)
@@ -807,6 +999,10 @@ internal class AppStatePlaybackCoordinator(
 
     /** Moves the current playback (or just the selection, when idle) to another output. */
     fun switchPlaybackTarget(target: PlaybackTarget) {
+        if (target == PlaybackTarget.LocalDevice) {
+            activeSonosPlan = null
+            pending032Plan = null
+        }
         val playerState = state.miniPlayerState ?: run {
             state.selectPlaybackTarget(target)
             state.actionMessage = when (target) {
@@ -840,9 +1036,13 @@ internal class AppStatePlaybackCoordinator(
         }
         val room = playerState.sonosRoom ?: return
         val durationMillis = playerState.durationMillis?.takeIf { it > 0L } ?: return
-        val targetMillis = positionMillis.coerceIn(0L, durationMillis)
         val targetTrack = playerState.tracks.getOrNull(playerState.currentIndex) ?: return
-        val isLiveTranscodeDirectMp3 = targetTrack.isConfiguredDirectMp3()
+        val active032 = activePlanFor(targetTrack)
+        val targetMillis = if (active032?.kind == SonosPlanKind.LIVE_MP3 ||
+            (active032 == null && is032Source(targetTrack) && targetTrack.isConfiguredDirectMp3()))
+            Music032TranscodeUrls.clampedOffsetMs(positionMillis, durationMillis)
+        else positionMillis.coerceIn(0L, durationMillis)
+        val isLiveTranscodeDirectMp3 = if (active032 != null) active032.kind == SonosPlanKind.LIVE_MP3 else targetTrack.isConfiguredDirectMp3()
         val seekGeneration = seekRequestGeneration.incrementAndGet()
         if (isLiveTranscodeDirectMp3) {
             transcodeRestartSeek = TranscodeRestartSeek(
@@ -862,18 +1062,47 @@ internal class AppStatePlaybackCoordinator(
         state.scope.launch {
             runCatching {
                 if (isLiveTranscodeDirectMp3) {
-                    val effectiveTrack = prepareSonosTrack(targetTrack)
+                    val prepared = if (active032 == null) prepareSonosTrack(targetTrack) {
+                        seekRequestGeneration.get() == seekGeneration &&
+                            state.miniPlayerState?.sonosRoom?.coordinatorUuid == room.coordinatorUuid &&
+                            state.miniPlayerState?.tracks?.getOrNull(state.miniPlayerState?.currentIndex ?: -1)?.let {
+                                it.sourceId == targetTrack.sourceId && it.ratingKey == targetTrack.ratingKey
+                            } == true
+                    } else null
+                    val effectiveTrack = prepared?.track ?: targetTrack
                     val offsetSeconds = (targetMillis / 1_000L).toInt()
-                    val seekUrl = effectiveTrack.streamUrl.withPlexTranscodeOffsetSeconds(offsetSeconds)
+                    val actual032Kind = prepared?.plan?.kind
+                    if (active032 == null && prepared?.plan != null &&
+                        !shouldRestart032Seek(isLiveTranscodeDirectMp3, actual032Kind ?: SonosPlanKind.ORIGINAL)) {
+                        ensureCurrent032Seek(targetTrack, room, seekGeneration)
+                        transcodeRestartSeek = null
+                        state.sonosController.seek(room, (targetMillis / 1_000L).toInt())
+                        return@runCatching
+                    }
+                    val seekUrl = when {
+                        active032 != null -> Music032TranscodeUrls.withOffsetMs(active032.url, targetMillis, durationMillis)
+                        prepared?.plan?.kind == SonosPlanKind.LIVE_MP3 ->
+                            Music032TranscodeUrls.withOffsetMs(prepared.plan.url, targetMillis, durationMillis)
+                        else -> effectiveTrack.streamUrl.withPlexTranscodeOffsetSeconds(offsetSeconds)
+                    }
                     Log.i(LOG_TAG, "opus seek restart targetMs=$targetMillis generation=$seekGeneration")
+                    if (active032 != null || prepared?.plan != null) ensureCurrent032Seek(targetTrack, room, seekGeneration)
                     state.plexTranscodeProxy.cancelPendingDownload()
                     state.sonosController.playTrack(
                         room = room,
                         trackUrl = seekUrl,
                         title = effectiveTrack.title,
                         albumTitle = effectiveTrack.albumTitle ?: playerState.album.title,
-                        mimeType = effectiveTrack.playbackMimeType,
+                        mimeType = if (active032 != null) active032.mime
+                            else if (prepared?.plan != null) prepared.plan.mime else effectiveTrack.playbackMimeType,
                     )
+                    if (seekRequestGeneration.get() == seekGeneration) {
+                        if (active032 != null && activePlanFor(targetTrack) == active032) activeSonosPlan = active032.copy(url = seekUrl)
+                        else if (prepared?.plan != null && prepared.plan.kind == SonosPlanKind.LIVE_MP3 &&
+                            state.miniPlayerState?.tracks?.getOrNull(state.miniPlayerState?.currentIndex ?: -1)?.let {
+                                it.sourceId == targetTrack.sourceId && it.ratingKey == targetTrack.ratingKey
+                            } == true) record032Plan(effectiveTrack, prepared.plan, seekUrl)
+                    }
                     if (playerState.isPaused) state.sonosController.pause(room)
                 } else {
                     transcodeRestartSeek = null
@@ -885,7 +1114,7 @@ internal class AppStatePlaybackCoordinator(
                     state.actionMessage = "已跳转到 ${formatDuration(targetMillis)}"
                 }
             }.onFailure { error ->
-                if (seekRequestGeneration.get() == seekGeneration) {
+                if (error !is CancellationException && seekRequestGeneration.get() == seekGeneration) {
                     transcodeRestartSeek = null
                     Log.w(LOG_TAG, "seek failed targetMs=$targetMillis", error)
                     state.errorMessage = error.message ?: "未知错误"
@@ -1119,6 +1348,9 @@ internal class AppStatePlaybackCoordinator(
 
                 if (resolvedTrack.ratingKey != currentTrack.ratingKey || resolvedTrack.sourceId != currentTrack.sourceId) {
                     transcodeRestartSeek = null
+                    activeSonosPlan = activeSonosPlan?.takeIf {
+                        retainSonosPlanForTrack(it.sourceId, it.ratingKey, resolvedTrack)
+                    }
                     reportStoppedTrackIfNeeded(
                         track = currentTrack,
                         timeMillis = currentTrackTimeMillis,
@@ -1250,6 +1482,9 @@ internal class AppStatePlaybackCoordinator(
     }
 
     private fun resetFinishedSonosQueue(room: SonosRoom) {
+        activeSonosPlan = null
+        pending032Plan = null
+        current032Fallback = false
         val current = state.miniPlayerState ?: return
         if (current.sonosRoom?.coordinatorUuid != room.coordinatorUuid) return
 
@@ -1263,6 +1498,9 @@ internal class AppStatePlaybackCoordinator(
     }
 
     private fun nextPlaybackRequestGeneration(): Long {
+        activeSonosPlan = null
+        pending032Plan = null
+        current032Fallback = false
         playbackToggleGeneration.incrementAndGet()
         return playbackRequestGeneration.incrementAndGet()
     }
@@ -1303,17 +1541,33 @@ internal class AppStatePlaybackCoordinator(
         }
     }
 
+    private fun ensureCurrent032Seek(track: PlexTrackStream, room: SonosRoom, generation: Long) {
+        if (seekRequestGeneration.get() != generation ||
+            state.miniPlayerState?.sonosRoom?.coordinatorUuid != room.coordinatorUuid ||
+            state.miniPlayerState?.tracks?.getOrNull(state.miniPlayerState?.currentIndex ?: -1)?.let {
+                it.sourceId == track.sourceId && it.ratingKey == track.ratingKey
+            } != true) throw CancellationException("播放请求已被新的操作取代。")
+    }
+
     private fun isPlexSource(track: PlexTrackStream): Boolean = shouldApplyPlexSonosTranscode(
         runCatching { state.clientFor(track.sourceId) is PlexClient }.getOrNull(), track.streamUrl,
     )
 
-    private fun PlexTrackStream.isConfiguredDirectMp3(): Boolean = configuredPlexDirectMp3(
-        this, isPlexSource(this), state.opusTranscodeMode, state.sonosHiResTranscodeMode,
-    )
+    private fun PlexTrackStream.isConfiguredDirectMp3(): Boolean = if (is032Source(this)) {
+        predictSonosKind(this, state.opusTranscodeMode, state.sonosHiResTranscodeMode,
+            (runCatching { state.clientFor(sourceId) }.getOrNull() as? Music032Client)?.capabilities()) == SonosPlanKind.LIVE_MP3
+    } else configuredPlexDirectMp3(this, isPlexSource(this), state.opusTranscodeMode, state.sonosHiResTranscodeMode.forPlex())
 
-    private suspend fun prepareSonosTrack(track: PlexTrackStream): PlexTrackStream {
+    private suspend fun hydrate032Track(track: PlexTrackStream): PlexTrackStream =
+        hydrationCache.hydrate(track) { state.clientFor(track.sourceId).fetchTrackStream(track.ratingKey) }
+
+    private suspend fun prepareSonosTrack(
+        track: PlexTrackStream,
+        isCurrent: () -> Boolean = { true },
+    ): PreparedSonosTrack {
+        val is032 = is032Source(track)
         val codec = track.sourceAudioCodec?.lowercase()
-        val hydrated = if (codec in LOSSLESS_AUDIO_CODECS && track.sourceAudioSampleRate == null) {
+        val hydrated = if (is032) hydrate032Track(track) else if (codec in LOSSLESS_AUDIO_CODECS && track.sourceAudioSampleRate == null) {
             runCatching {
                 state.clientFor(track.sourceId).fetchTrackStream(track.ratingKey)
             }.getOrNull()?.let { fresh ->
@@ -1328,7 +1582,8 @@ internal class AppStatePlaybackCoordinator(
         } else {
             track
         }
-        if (hydrated.sourceAudioSampleRate != track.sourceAudioSampleRate) {
+        if (hydrated.sourceAudioSampleRate != track.sourceAudioSampleRate ||
+            (is032 && hydrated.sourceAudioCodec != track.sourceAudioCodec)) {
             state.miniPlayerState = state.miniPlayerState?.let { player ->
                 player.copy(
                     tracks = player.tracks.map { queued ->
@@ -1337,8 +1592,35 @@ internal class AppStatePlaybackCoordinator(
                 )
             }
         }
-        return preparePlexSonosTranscode(hydrated, isPlexSource(hydrated),
-            state.opusTranscodeMode, state.sonosHiResTranscodeMode, state.plexClientIdentifier)
+        if (is032) {
+            val client = runCatching { state.clientFor(track.sourceId) }.getOrNull() as? Music032Client
+            val caps = client?.let {
+                val deferred = state.scope.async(Dispatchers.IO) { it.ensureCapabilities() }
+                withTimeoutOrNull(3_000L) {
+                    try { deferred.await() } catch (cancel: CancellationException) { throw cancel }
+                    catch (_: Exception) { null }
+                }
+            }
+            var plan = plan032(hydrated, state.opusTranscodeMode,
+                state.sonosHiResTranscodeMode, caps).getOrThrow()
+            if (plan.needsWarmup) {
+                if (Music032Warmup.prepare(plan.url, isCurrent = isCurrent,
+                    onCacheMiss = { state.actionMessage = "${Strings.music032FlacPreparing}：${hydrated.title}" }) != WarmupResult.READY) {
+                    Music032Warmup.ensureCurrent(isCurrent)
+                    plan = fallback032Mp3(hydrated, caps,
+                        SonosPlan(hydrated.streamUrl, Music032Json.original032MimeType(hydrated.sourceAudioCodec, null), SonosPlanKind.ORIGINAL))
+                        .getOrElse { error(Strings.music032SonosFallbackUnavailable) }
+                    if (plan.kind != SonosPlanKind.LIVE_MP3) error(Strings.music032SonosFallbackUnavailable)
+                    Music032Warmup.ensureCurrent(isCurrent)
+                    plan = plan.copy(fellBackFromFlac = true)
+                    state.actionMessage = Strings.music032FlacFallback
+                }
+            }
+            Music032Warmup.ensureCurrent(isCurrent)
+            return PreparedSonosTrack(hydrated, plan)
+        }
+        return PreparedSonosTrack(preparePlexSonosTranscode(hydrated, isPlexSource(hydrated),
+            state.opusTranscodeMode, state.sonosHiResTranscodeMode, state.plexClientIdentifier), null)
     }
 
     private data class TranscodeRestartSeek(

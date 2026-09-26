@@ -1,7 +1,7 @@
 # MusicBridge 适配 032 Music Server 新能力 — 实施规划
 
 - **日期**：2026-09-26
-- **状态**：实施中（阶段 A）
+- **状态**：阶段 C 实施中（C1+C2 待真机验收）
 - **服务端基线**：`D:/032music-server` `main` @ `43b2006`（P0–P5 已完成，本地提交未推送）
 - **客户端基线**：`D:/MusicBridge` `f350ad3`
 - **范围**：仅 Android 客户端；服务端不再改动（除非联调发现服务端缺陷，另行立项）
@@ -59,7 +59,7 @@
 
 ### 4.1 能力模型（G16，所有后续阶段的前置）
 - 新增 `data class Music032Capabilities(apiRevision, features: Set<String>, transcodeFormats: Map<String, FormatCaps>, artworkSizes: List<Int>)`。
-- 进程级 `Music032CapabilitiesStore` 按规范化地址和 API Token 缓存（成功 10 分钟、失败 30 秒；保存时失效）；获取失败视为 `apiRevision=1`（全部新能力关闭），**保持今天的行为**。
+- 进程级 `Music032CapabilitiesStore` 按规范化地址和 API Token 缓存（成功 10 分钟、明确旧版 30 秒；保存时失效）；404 或成功响应 `apiRevision<=1` 视为 LEGACY，网络错误/5xx/无效响应返回未知（不伪装为旧版，仅短暂抑制重复请求），Sonos 对未知能力乐观尝试。
 - 所有 032 新能力调用前检查对应 feature；转码按 `transcode.formats.<fmt>.available` 判断。
 
 ### 4.2 源无关的播放 URL 适配层（G5–G10 的核心）
@@ -87,7 +87,7 @@ internal interface PlaybackUrlAdapter {
 | 其他 | — | 原 `stream` 直链 | 按原文件 |
 
 - "无损中继"对 032 实际变成服务端缓存：首次请求需等待服务端转完（NAS 上 5 分钟曲目约 3–10 秒）。建议对 032 源在推送前先以 `GET Range: bytes=0-0` 预热并显示"服务器正在准备 FLAC"提示；30 秒预算内对 503 按 Retry-After 重试，502/超时回退 MP3；服务端断开后任务仍继续，建议预热下一首。
-- 是否新增"Hi-Res 转 24/48 FLAC"选项需决策（见 §7 D3）。
+- Hi-Res 新增转 FLAC ≤48k 选项；Plex 选择此项时按 MP3 320k 转码。
 
 ### 4.4 本机限速转码（G8/G9）
 - `willTranscodeLocally`：032 源在 `sourceAudioBitrateKbps > policy.limit` 时为 true（码率来自服务端 `bitrateKbps`；未知时与 Plex 现状一致：opus 不转，其他 codec 转）。
@@ -176,5 +176,7 @@ internal interface PlaybackUrlAdapter {
 - D2 A：032 FLAC 缓存直连，无手机代理。D3 A：新增 `TRANSCODE_FLAC_48K`；Plex `forPlex()` 回退 MP3，设置、Sonos 计划生成、本机播放三处边界保持源隔离。
 - D4 A：在 `Music032Client` 内按 `max(0.01, d) × 7.4` 映射距离，不改 `HybridRecommender`。D5 B：暂缓显式 skip。D6：沿用 oracle 审计 → 分阶段 worker → reviewer → 真机验收硬化流程。
 - 撤回 B-1：`parseTrack` 不写 `playbackMimeType`（该字段是 Sonos 转码覆盖）；原始 MIME 由独立纯函数计算。撤回 H-2：容器 `formats` 不写发行类型 `PlexAlbum.format`；使用 albumType / live / compilation 映射；albumType=album 不写 format（服务端未标记时默认推断为 album，否则会绕过标题/曲数启发式）。
-- Sonos FLAC 预热仅用 GET Range 0-0，HEAD 不触发编码；`offsetMs` 必须 clamp 至 duration-1000（大于 duration 返回 400，等于 duration 返回 502）。
-- 后续阶段需覆盖：PlaybackSection.kt:~2580 `positionIsEncodedInUrl` 与 LocalPlaybackEngine RoutingDataSource:~713 使用通用实时转码谓词（B-3）；Sonos 实时流按实际生成计划判定而不是设置（H-3）；032 曲目不经过 Plex `with*TranscodeMode` 或 `PlexTranscodeProxy`（B-2）。歌词 remember key 加 sourceId（L-4）；渐变路径目前无 UI 调用方；歌手详情曲目上限 5000；能力缓存必须进程级（M-1）。
+- Sonos FLAC 可先以 HEAD 查询缓存状态（仅有 Content-Length 时认为已缓存；HEAD 不触发编码），实际预热仅用 GET Range 0-0；`offsetMs` 必须 clamp 至 duration-1000（大于 duration 返回 400，等于 duration 返回 502）。
+- C1 决策 D-C1：032 codec 缺失或无损采样率缺失时会话内补拉并复用；D-C2：实时流中断恢复暂缓；D-C3：原始流用 codec 推断 MIME；D-C4：能力等待 3 秒，未知乐观、明确不可用降级；D-C5：C1/C2 分开审查后真机验收。
+- C2 实施：新增 Hi-Res FLAC 48k 选项，Plex 按 MP3 处理；032 静态 FLAC 先用 HEAD 零成本判断是否已缓存（HEAD 不编码），未缓存再 GET `Range: bytes=0-0` 预热，30 秒预算内 503 按 Retry-After 重试；失败回退 MP3。顺序播放后台预热下一首静态 FLAC。
+- 后续阶段需覆盖：PlaybackSection.kt:~2580 `positionIsEncodedInUrl` 与 LocalPlaybackEngine RoutingDataSource:~713 使用通用实时转码谓词（B-3）；Sonos 实时流按实际生成计划判定而不是设置（H-3）；032 曲目不经过 Plex `with*TranscodeMode` 或 `PlexTranscodeProxy`（B-2）。歌词 remember key 加 sourceId（L-4）；渐变路径目前无 UI 调用方；歌手详情曲目上限 5000；能力缓存必须进程级（M-1）；网络错误/5xx 对外为未知、仅 404/旧 revision 为 LEGACY。
