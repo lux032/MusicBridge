@@ -55,6 +55,7 @@ internal object Music032Json {
 
     fun parseAlbum(value: JSONObject, baseUrl: String, mediaToken: String, section: PlexSection, sourceId: String): PlexAlbum {
         val year = value.optInt("year").takeIf { it > 0 }
+        val (format, subformat) = albumFormat(value)
         return PlexAlbum(
             ratingKey = value.optLong("id").toString(),
             title = value.optString("title").trim().ifBlank { "未知专辑" },
@@ -67,12 +68,38 @@ internal object Music032Json {
             section = section,
             sourceId = sourceId,
             leafCount = value.optInt("trackCount").takeIf { it > 0 },
-            format = when (value.optString("albumType").lowercase()) { "single" -> "Single"; "ep" -> "EP"; else -> null },
-            subformat = listOfNotNull(
-                "Live".takeIf { value.optBoolean("live") || value.optString("albumType").equals("live", true) },
-                "Compilation".takeIf { value.optBoolean("compilation") || value.optString("albumType").equals("compilation", true) },
-            ).joinToString(",").ifBlank { null },
+            format = format,
+            subformat = subformat,
         )
+    }
+
+    /**
+     * 把 032 的发行类型映射成 classifyArtistAlbum 使用的 format / subformat。
+     *
+     * 新版服务端下发 releaseKind：已合并手动纠正、文件标签与服务端推断，
+     * 直接采用并明确给出 format，使 App 不再走本地标题/曲目数启发式，
+     * 与 Web 管理界面歌手页分组一致。旧版服务端没有该字段时保持原有映射
+     * （albumType=album 视为未知，由本地启发式兜底）。
+     */
+    private fun albumFormat(value: JSONObject): Pair<String?, String?> {
+        val releaseKind = value.optString("releaseKind").trim().lowercase()
+        if (releaseKind.isNotEmpty()) {
+            return when (releaseKind) {
+                "single" -> "Single" to null
+                "ep" -> "EP" to null
+                "live" -> null to "Live"
+                "compilation" -> null to "Compilation"
+                // album / soundtrack / bootleg / other：App 没有“其他发行”分组，归入专辑。
+                else -> "Album" to null
+            }
+        }
+        val albumType = value.optString("albumType").lowercase()
+        val format = when (albumType) { "single" -> "Single"; "ep" -> "EP"; else -> null }
+        val subformat = listOfNotNull(
+            "Live".takeIf { value.optBoolean("live") || albumType == "live" },
+            "Compilation".takeIf { value.optBoolean("compilation") || albumType == "compilation" },
+        ).joinToString(",").ifBlank { null }
+        return format to subformat
     }
 
     fun parseTrack(value: JSONObject, baseUrl: String, mediaToken: String, sourceId: String): PlexTrackStream {

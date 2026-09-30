@@ -38,6 +38,23 @@ class AlbumCategoryTest {
         }
     }
 
+    @Test fun music032ReleaseKindIsAuthoritative() {
+        val section = PlexSection("032", "032", "artist")
+        for ((json, kind) in listOf(
+            // 服务端判定为 album 的 2 曲专辑不再被本地曲目数启发式判成单曲。
+            """{"id":6,"title":"Ordinary","trackCount":2,"albumType":"album","releaseKind":"album"}""" to ReleaseKind.Album,
+            // 服务端推断为单曲的 4 曲日系单曲（含伴奏）不再被判成 EP。
+            """{"id":7,"title":"Ordinary","trackCount":4,"albumType":"album","releaseKind":"single"}""" to ReleaseKind.Single,
+            // 标题含 BEST 但服务端判定为 EP。
+            """{"id":8,"title":"Best of Summer","trackCount":5,"releaseKind":"ep"}""" to ReleaseKind.Ep,
+            """{"id":9,"title":"Ordinary","trackCount":20,"releaseKind":"live"}""" to ReleaseKind.Live,
+            """{"id":10,"title":"Ordinary","trackCount":2,"releaseKind":"soundtrack"}""" to ReleaseKind.Album,
+        )) {
+            val album = Music032Json.parseAlbum(JSONObject(json), "https://example.org", "token", section, "032")
+            assertEquals(json, kind, classifyArtistAlbum(album).kind)
+        }
+    }
+
     @Test fun plexFormatsAreAuthoritative() {
         assertKind(album(format = "Single", tracks = 12), ArtistAlbumCategory.SingleEp, ReleaseKind.Single)
         assertKind(album(format = "EP", tracks = 12), ArtistAlbumCategory.SingleEp, ReleaseKind.Ep)

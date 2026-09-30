@@ -55,6 +55,26 @@ class Music032JsonTest {
         assertEquals("Live,Compilation", album("album", ",\"live\":true,\"compilation\":true").subformat)
     }
 
+    @Test fun serverReleaseKindTakesPrecedence() {
+        for ((kind, format, sub) in listOf(
+            listOf("single", "Single", ""), listOf("ep", "EP", ""),
+            listOf("album", "Album", ""), listOf("soundtrack", "Album", ""),
+            listOf("bootleg", "Album", ""), listOf("other", "Album", ""),
+            listOf("live", "", "Live"), listOf("compilation", "", "Compilation"),
+        )) {
+            // albumType 保持默认 album（未标注），releaseKind 是服务端最终判定。
+            val result = album("album", ",\"releaseKind\":\"$kind\"")
+            assertEquals(kind, format.ifEmpty { null }, result.format)
+            assertEquals(kind, sub.ifEmpty { null }, result.subformat)
+        }
+        // 服务端已判定时不再叠加旧的 live/compilation 布尔标记。
+        val single = album("album", ",\"releaseKind\":\"single\",\"live\":true,\"compilation\":true")
+        assertEquals("Single", single.format)
+        assertNull(single.subformat)
+        // 空 releaseKind 视为旧版服务端。
+        assertEquals("Single", album("single", ",\"releaseKind\":\"\"").format)
+    }
+
     @Test fun capabilitiesAndMime() {
         val caps = Music032Json.parseCapabilities("""{"apiRevision":2,"features":{"lyrics":true,"transcode":false},"transcode":{"formats":{"flac":{"available":false,"maxSampleRates":[48000]},"mp3":{"available":true,"bitrates":[128,320]}}},"artwork":{"sizes":[256,512]}}""")
         assertTrue(caps.hasFeature("lyrics"))
