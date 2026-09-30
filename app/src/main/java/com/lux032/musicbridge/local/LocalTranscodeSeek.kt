@@ -1,8 +1,9 @@
 package com.lux032.musicbridge.local
 
+import com.lux032.musicbridge.music.Music032TranscodeUrls
 import com.lux032.musicbridge.plex.withPlexTranscodeOffsetSeconds
 
-/** A seek plan keeps direct files on Media3's native path and restarts only Plex live streams. */
+/** A seek plan keeps direct files on Media3's native path and restarts only live transcode streams. */
 internal data class LocalSeekPlan(
     val url: String,
     val playerPositionMillis: Long,
@@ -13,8 +14,19 @@ internal data class LocalSeekPlan(
         get() = logicalBaseMillis + playerPositionMillis
 }
 
-internal fun buildLocalSeekPlan(url: String, positionMillis: Long): LocalSeekPlan {
+internal fun buildLocalSeekPlan(url: String, positionMillis: Long, durationMillis: Long? = null): LocalSeekPlan {
     val safePositionMillis = positionMillis.coerceAtLeast(0L)
+    if (Music032TranscodeUrls.isLive(url)) {
+        // 032 实时转码用 offsetMs 重开（毫秒精度，服务端要求小于曲目时长），
+        // 不需要 Plex 的整秒截断与 fastSeek。
+        val offsetMillis = Music032TranscodeUrls.clampedOffsetMs(safePositionMillis, durationMillis?.takeIf { it > 0L })
+        return LocalSeekPlan(
+            url = Music032TranscodeUrls.withOffsetMs(url, offsetMillis, durationMillis?.takeIf { it > 0L }),
+            playerPositionMillis = 0L,
+            logicalBaseMillis = offsetMillis,
+            restartsLiveTranscode = true,
+        )
+    }
     if (!url.isPlexLiveTranscodeUrl()) {
         return LocalSeekPlan(
             url = url,
@@ -66,3 +78,10 @@ private fun String.withPlexFastSeek(): String {
 
 internal fun String.isPlexLiveTranscodeUrl(): Boolean =
     contains("/:/transcode/universal/start", ignoreCase = true)
+
+/**
+ * 实时转码流（无 Content-Length、不支持 Range、拖动靠偏移重开）：Plex universal transcode
+ * 或 032 的 transcode.ogg / transcode.mp3。Plex 会话注入/停止等仍只认 Plex URL。
+ */
+internal fun String.isLiveTranscodeUrl(): Boolean =
+    isPlexLiveTranscodeUrl() || Music032TranscodeUrls.isLive(this)

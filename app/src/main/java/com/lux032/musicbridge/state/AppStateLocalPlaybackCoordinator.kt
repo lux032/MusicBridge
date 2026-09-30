@@ -4,6 +4,7 @@ import com.lux032.musicbridge.local.LocalAudioCache
 import com.lux032.musicbridge.local.LocalPlaybackEngine
 import com.lux032.musicbridge.local.LocalPlaybackService
 import com.lux032.musicbridge.local.LocalQueueItem
+import com.lux032.musicbridge.local.isLiveTranscodeUrl
 import com.lux032.musicbridge.local.originalCacheKey
 import com.lux032.musicbridge.local.shouldUseCachedOriginal
 import com.lux032.musicbridge.local.transcodedCacheKey
@@ -314,7 +315,8 @@ internal class AppStateLocalPlaybackCoordinator(
 
         // Tier 3: Remote Network stream
         val effective = withLocalPlaybackPolicy(policy, state.plexClientIdentifier)
-        val isTranscoded = effective.streamUrl.contains("/:/transcode/universal/start", ignoreCase = true)
+        // Plex universal transcode 或 032 transcode.ogg 都是实时转码流。
+        val isTranscoded = effective.streamUrl.isLiveTranscodeUrl()
         val key = if (isTranscoded) {
             transcodedCacheKey(sourceId, ratingKey, partKey, policy.opusBitrate.kbps)
         } else {

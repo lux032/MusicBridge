@@ -17,6 +17,13 @@ internal class Music032CapabilitiesCache(private val nowMillis: () -> Long = Sys
 
     fun invalidate(key: Music032CapabilitiesStore.Key) { entries.remove(key); failures.remove(key) }
 
+    /** 按服务端地址查未过期的能力快照（曲目播放 URL 只带服务端地址，不带 API Token）。 */
+    fun snapshotForBaseUrl(baseUrl: String): Music032Capabilities? {
+        val normalized = baseUrl.trim().trimEnd('/')
+        val now = nowMillis()
+        return entries.entries.firstOrNull { (key, entry) -> key.baseUrl == normalized && entry.expiresAt > now }?.value?.value
+    }
+
     suspend fun ensure(key: Music032CapabilitiesStore.Key, fetcher: suspend () -> String): Music032Capabilities? {
         snapshot(key)?.let { return it }
         if ((failures[key] ?: 0L) > nowMillis()) return null
@@ -57,5 +64,6 @@ internal object Music032CapabilitiesStore {
     private val cache = Music032CapabilitiesCache()
     fun snapshot(key: Key): Music032Capabilities? = cache.snapshot(key)
     fun invalidate(key: Key) = cache.invalidate(key)
+    fun snapshotForBaseUrl(baseUrl: String): Music032Capabilities? = cache.snapshotForBaseUrl(baseUrl)
     suspend fun ensure(key: Key, fetcher: suspend () -> String): Music032Capabilities? = cache.ensure(key, fetcher)
 }

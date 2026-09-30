@@ -7,6 +7,7 @@ import com.lux032.musicbridge.LOSSLESS_AUDIO_CODECS
 import com.lux032.musicbridge.OpusTranscodeMode
 import com.lux032.musicbridge.SONOS_MAX_SAMPLE_RATE_HZ
 import com.lux032.musicbridge.SonosHiResTranscodeMode
+import com.lux032.musicbridge.music.Music032LocalTranscode
 import com.lux032.musicbridge.music.MusicSourceClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -1629,6 +1630,10 @@ internal fun PlexTrackStream.withOpusTranscodeMode(
  * first — on-device playback has no use for the Sonos opus workarounds.
  */
 internal fun PlexTrackStream.willTranscodeLocally(policy: LocalPlaybackPolicy): Boolean {
+    // 032 源走服务端 transcode.ogg，判定见 Music032LocalTranscode；以下为 Plex 逻辑。
+    if (Music032LocalTranscode.isMusic032Track(this)) {
+        return Music032LocalTranscode.transcodeUrl(this, policy) != null
+    }
     val direct = withDirectFileUrl()
     val limitKbps = policy.streamingLimit.maxSourceBitrateKbps ?: return false
     val sourceBitrate = direct.sourceAudioBitrateKbps
@@ -1649,6 +1654,15 @@ internal fun PlexTrackStream.withLocalPlaybackPolicy(
     policy: LocalPlaybackPolicy,
     clientIdentifier: String,
 ): PlexTrackStream {
+    if (Music032LocalTranscode.isMusic032Track(this)) {
+        val transcodeUrl = Music032LocalTranscode.transcodeUrl(this, policy)
+        android.util.Log.i(
+            "LocalPlaybackPolicy",
+            "source=032 codec=${sourceAudioCodec.orEmpty()}, sourceKbps=${sourceAudioBitrateKbps ?: -1}, " +
+                "limitKbps=${policy.streamingLimit.maxSourceBitrateKbps ?: -1}, transcode=${transcodeUrl != null}",
+        )
+        return if (transcodeUrl == null) this else copy(streamUrl = transcodeUrl, playbackMimeType = "audio/ogg")
+    }
     val direct = withDirectFileUrl()
     val shouldTranscode = direct.willTranscodeLocally(policy)
     android.util.Log.i(

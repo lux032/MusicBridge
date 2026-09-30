@@ -71,6 +71,7 @@ import com.lux032.musicbridge.plex.PlexLyrics
 import com.lux032.musicbridge.plex.fetchPlexLyrics
 import com.lux032.musicbridge.plex.resolvePlexLyricUrl
 import com.lux032.musicbridge.plex.willTranscodeLocally
+import com.lux032.musicbridge.music.Music032LocalTranscode
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import com.lux032.musicbridge.sonos.SonosController
@@ -1216,12 +1217,20 @@ private fun PlexTrackStream.outputQualityBadges(
     val localTranscode = target == PlaybackTarget.LocalDevice && !cachedOriginal && willTranscodeLocally(policy)
     val sonosTranscode = target is PlaybackTarget.Sonos && !playbackMimeType.isNullOrBlank()
     return when {
-        localTranscode -> listOf("TRANSCODE", "OPUS", "${policy.opusBitrate.kbps}k")
+        localTranscode -> listOf("TRANSCODE", "OPUS", "${localTranscodeOpusKbps(policy)}k")
         sonosTranscode && playbackMimeType.equals("audio/mpeg", true) -> listOf("TRANSCODE", "MP3", "320k")
         sonosTranscode && playbackMimeType.equals("audio/flac", true) -> listOf("TRANSCODE", "FLAC")
         else -> originalAudioQualityBadges(sourceAudioCodec, bitDepth, sourceAudioSampleRate)
     }
 }
+
+/** 本机转码实际使用的 Opus 码率：032 按服务端白名单映射，Plex 直接用设置值。 */
+private fun PlexTrackStream.localTranscodeOpusKbps(policy: LocalPlaybackPolicy): Int =
+    if (Music032LocalTranscode.isMusic032Track(this)) {
+        Music032LocalTranscode.opusBitrate(policy.opusBitrate.kbps, Music032LocalTranscode.capabilitiesFor(this))
+    } else {
+        policy.opusBitrate.kbps
+    }
 
 private fun PlexTrackStream.trackDetailText(
     target: PlaybackTarget,

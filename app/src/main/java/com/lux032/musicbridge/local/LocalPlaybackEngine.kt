@@ -710,7 +710,7 @@ private class RoutingDataSource(
         val url = dataSpec.uri.toString()
         val route = playbackDataSourceRoute(
             url = url,
-            isTranscoded = url.isPlexLiveTranscodeUrl(),
+            isTranscoded = url.isLiveTranscodeUrl(),
             isFullyCached = cacheKey != null && LocalAudioCache.isFullyCached(cacheKey),
             isCachedOriginal = isCachedOriginalKey(cacheKey),
         )
@@ -735,7 +735,10 @@ private class RoutingDataSource(
         val upstreamSpec = if (route == PlaybackDataSourceRoute.TRANSCODE_UPSTREAM) {
             val endpoint = priorSessionEndpoint ?: parsePlexTranscodeEndpoint(dataSpec.uri.toString())
             if (endpoint == null) {
-                Log.w("RoutingDataSource", "Plex transcode endpoint is incomplete; opening without session injection")
+                // 032 实时转码没有会话概念（服务端随连接断开回收 ffmpeg），直接打开即可。
+                if (url.isPlexLiveTranscodeUrl()) {
+                    Log.w("RoutingDataSource", "Plex transcode endpoint is incomplete; opening without session injection")
+                }
                 dataSpec
             } else {
                 val sessionId = foregroundTranscodeSessionId(dataSpec.position, priorSessionId) {
@@ -785,7 +788,7 @@ internal fun isFatalZeroByteTranscodeLoad(
     bytesLoaded: Long,
     error: IOException,
 ): Boolean {
-    if (!url.isPlexLiveTranscodeUrl() || bytesLoaded != 0L) return false
+    if (!url.isLiveTranscodeUrl() || bytesLoaded != 0L) return false
     if (error is EOFException || error.hasCause<EOFException>()) return true
     if (error is ParserException || error.hasCause<ParserException>()) return true
     val responseError = error.findCause<HttpDataSource.InvalidResponseCodeException>()
@@ -855,15 +858,16 @@ internal fun isPrematureTranscodeEnd(
     durationMillis > 0L &&
     currentPositionMillis < durationMillis - 5_000L
 
+/** 实时转码流（Plex offset / 032 offsetMs）都能从指定位置重开。 */
 internal fun supportsPlexOffsetRetry(url: String?): Boolean =
-    url?.isPlexLiveTranscodeUrl() == true
+    url?.isLiveTranscodeUrl() == true
 
 internal fun liveTranscodeRetryAction(
     streamUrl: String?,
     durationMillis: Long?,
     currentPositionMillis: Long,
 ): LiveTranscodeRetryAction = when {
-    streamUrl?.isPlexLiveTranscodeUrl() != true -> LiveTranscodeRetryAction.RETRY_FROM_START
+    streamUrl?.isLiveTranscodeUrl() != true -> LiveTranscodeRetryAction.RETRY_FROM_START
     durationMillis == null || durationMillis <= 0L -> LiveTranscodeRetryAction.RESTART_AT_POSITION
     durationMillis - currentPositionMillis > 3_000L -> LiveTranscodeRetryAction.RESTART_AT_POSITION
     else -> LiveTranscodeRetryAction.SKIP_NEAR_END
@@ -1529,7 +1533,7 @@ class LocalPlaybackEngine(
                     }
                     LiveTranscodeRetryAction.RETRY_FROM_START -> {
                         Log.w(LOG_TAG, "Retrying failed media item index=$failedIndex from start")
-                        if (failedItem?.url?.isPlexLiveTranscodeUrl() == true) {
+                        if (failedItem?.url?.isLiveTranscodeUrl() == true) {
                             PlaybackDiagnostics.record(
                                 "TRANSCODE_RETRY_FROM_START",
                                 "index=$failedIndex previousPositionMs=$failedPositionMillis offsetUnsupported=true",
@@ -1637,7 +1641,7 @@ class LocalPlaybackEngine(
 
     val currentIndex: Int get() = player.currentMediaItemIndex
     val currentLiveTranscodeUrl: String?
-        get() = queueItems.getOrNull(currentIndex)?.url?.takeIf(String::isPlexLiveTranscodeUrl)
+        get() = queueItems.getOrNull(currentIndex)?.url?.takeIf(String::isLiveTranscodeUrl)
     val currentPositionMillis: Long
         get() = logicalPositionMillis(currentIndex, player.currentPosition)
     private val bufferedPositionMillis: Long
@@ -1647,7 +1651,7 @@ class LocalPlaybackEngine(
             val index = currentIndex
             val item = queueItems.getOrNull(index)
                 ?: return player.duration.takeIf { it > 0L }
-            return if (item.url.isPlexLiveTranscodeUrl()) {
+            return if (item.url.isLiveTranscodeUrl()) {
                 item.durationMillis?.takeIf { it > 0L }
             } else {
                 player.duration.takeIf { it > 0L }
@@ -1675,12 +1679,12 @@ class LocalPlaybackEngine(
     }
 
     private fun currentItemIsLiveTranscode(): Boolean =
-        queueItems.getOrNull(currentIndex)?.url?.isPlexLiveTranscodeUrl() == true
+        queueItems.getOrNull(currentIndex)?.url?.isLiveTranscodeUrl() == true
 
     private fun resetRepeatedTranscode(index: Int) {
         if (resettingRepeatedTranscode) return
         val item = queueItems.getOrNull(index) ?: return
-        if (!item.url.isPlexLiveTranscodeUrl()) return
+        if (!item.url.isLiveTranscodeUrl()) return
         val shouldPlay = player.playWhenReady
         resettingRepeatedTranscode = true
         try {
@@ -1750,7 +1754,7 @@ class LocalPlaybackEngine(
             !fullyCachedNow
         val fullyLoaded = isCurrentTrackFullyLoaded(
             isFullyCachedInCache = fullyCachedNow,
-            isLiveTranscode = item?.url?.isPlexLiveTranscodeUrl() == true,
+            isLiveTranscode = item?.url?.isLiveTranscodeUrl() == true,
             bufferedPositionMs = bufferedPosition,
             durationMs = duration,
         )
@@ -1839,7 +1843,7 @@ class LocalPlaybackEngine(
         val position = currentPositionMillis
         val duration = durationMillis
         if (!isPrematureTranscodeEnd(
-                isLiveTranscode = item.url.isPlexLiveTranscodeUrl(),
+                isLiveTranscode = item.url.isLiveTranscodeUrl(),
                 isFullyCached = LocalAudioCache.isFullyCached(item.cacheKey),
                 currentPositionMillis = position,
                 durationMillis = duration,
@@ -1932,7 +1936,7 @@ class LocalPlaybackEngine(
         val selectedItem = items.getOrNull(safeIndex)
         val selectedSeekPlan = selectedItem
             ?.takeUnless { LocalAudioCache.isFullyCached(it.cacheKey) }
-            ?.let { buildLocalSeekPlan(it.url, safeStartMillis) }
+            ?.let { buildLocalSeekPlan(it.url, safeStartMillis, it.durationMillis) }
         val selectedOffsetMillis = selectedSeekPlan?.logicalBaseMillis ?: 0L
         if (safeIndex in positionBaseMillis.indices) {
             positionBaseMillis[safeIndex] = selectedOffsetMillis
@@ -2044,7 +2048,7 @@ class LocalPlaybackEngine(
         )
         val item = queueItems.getOrNull(currentIndex)
         if (currentPositionMillis > player.maxSeekToPreviousPosition) {
-            if (item?.url?.isPlexLiveTranscodeUrl() == true) {
+            if (item?.url?.isLiveTranscodeUrl() == true) {
                 seekToInternal(0L, source)
             } else {
                 player.seekTo(0L)
@@ -2102,12 +2106,12 @@ class LocalPlaybackEngine(
         if (index !in queueItems.indices || index !in 0 until player.mediaItemCount) return 0L
         resetBufferingWatchdog()
         val item = queueItems[index]
-        val plan = buildLocalSeekPlan(item.url, positionMillis)
+        val plan = buildLocalSeekPlan(item.url, positionMillis, item.durationMillis)
         val fullLocalCopy = LocalAudioCache.isFullyCached(item.cacheKey)
         val requestedOffsetSeconds = positionMillis.coerceAtLeast(0L) / 1_000L
         val currentPositionBaseMillis = positionBaseMillis.getOrNull(index) ?: 0L
         if (shouldShortCircuitTranscodeSeek(
-                isLiveTranscode = item.url.isPlexLiveTranscodeUrl(),
+                isLiveTranscode = item.url.isLiveTranscodeUrl(),
                 isFullyCached = fullLocalCopy,
                 requestedPositionMillis = positionMillis,
                 currentPositionBaseMillis = currentPositionBaseMillis,
@@ -2155,7 +2159,7 @@ class LocalPlaybackEngine(
     ): Long {
         val item = queueItems.getOrNull(index) ?: return 0L
         if (index !in positionBaseMillis.indices || index !in 0 until player.mediaItemCount) return 0L
-        val plan = buildLocalSeekPlan(item.url, positionMillis)
+        val plan = buildLocalSeekPlan(item.url, positionMillis, item.durationMillis)
         positionBaseMillis[index] = plan.logicalBaseMillis
         player.replaceMediaItem(index, buildMediaItem(item, plan.url))
         player.seekTo(index, plan.playerPositionMillis)
@@ -2167,7 +2171,7 @@ class LocalPlaybackEngine(
     private fun logicalPositionMillis(index: Int, playerPositionMillis: Long): Long {
         val rawPositionMillis = playerPositionMillis.coerceAtLeast(0L)
         val item = queueItems.getOrNull(index) ?: return rawPositionMillis
-        if (!item.url.isPlexLiveTranscodeUrl()) return rawPositionMillis
+        if (!item.url.isLiveTranscodeUrl()) return rawPositionMillis
         val baseMillis = positionBaseMillis.getOrNull(index) ?: 0L
         val logicalMillis = baseMillis + rawPositionMillis
         return item.durationMillis
@@ -2200,7 +2204,7 @@ class LocalPlaybackEngine(
         val item = queueItems.getOrNull(currentIndex) ?: return false
         return isCurrentTrackFullyLoaded(
             isFullyCachedInCache = LocalAudioCache.isFullyCached(item.cacheKey),
-            isLiveTranscode = item.url.isPlexLiveTranscodeUrl(),
+            isLiveTranscode = item.url.isLiveTranscodeUrl(),
             bufferedPositionMs = bufferedPositionMillis,
             durationMs = durationMillis,
         )
