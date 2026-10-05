@@ -21,7 +21,20 @@ Download the latest APK from [Releases](https://github.com/lux032/MusicBridge/re
 - Stream music from Plex or 032 Music Server to Sonos
 - Real-time playback control and status
 - Sync favorites, playback progress, and scrobbles to the active music server
+- Durable playback sessions for 032 Music Server (apiRevision 3): every play is a server-side session with ordered events, so play counts, skips and breakpoints stay correct across output switches, repeat loops, app restarts and crashes
 - Material Design 3 UI
+
+## 032 playback sessions
+
+When the active server is 032 Music Server, playback is reported through a dedicated session reporter (`Music032PlaybackReporter`) instead of the legacy timeline/scrobble calls (those endpoints were removed server-side and answer 410; the app never falls back to them):
+
+- Each explicit play opens a fresh session (UUID) and never resumes an older chain; heartbeats renew the server lease every 15s while playing/buffering and every 60s while paused. The reporter lives with actual playback, not with the UI: the screen turning off keeps the session alive, and leaving the app fires a bounded best-effort `end(client_closed)` from a process-level reporter scope (non-blocking, cancellable transport with its own deadline) — a force kill is backstopped by the server-side 90s/10min lease.
+- Repeat-one loops and track changes close the old session with its own last observed position and open a genuinely new play; user skips report `skipped`, auto-advances `completed`, failures `error` (a failed last track is never reported as a full-duration completion).
+- Switching output between this device and Sonos chains the session (takeover resume), so a continuous listen counts exactly once; that takeover resume link is the only client-side use of the persisted session snapshot. Re-selecting the currently playing queue item is an explicit new play from 0 on a fresh chain; plain pause/resume and STOPPED transport re-pushes keep the chain.
+- Reporting runs on a serialized actor: observations are conflated off the 1s playback loop, periodic sends back off exponentially while offline, and non-retryable rejections (401/400/404) halt reporting visibly instead of hammering the server.
+- If a session stops receiving observations (reporting loop died, speaker unreachable), the reporter ends it at the last real position instead of renewing the lease forever — and keeps the resume link, so the same track coming back continues the original chain rather than counting again. Name-only server-profile edits never interrupt reporting; a token change on the same server hands the current listen over to a reporter built on the NEW credentials (no double count); a different server URL is conservatively treated as another library (the server offers no identity proof): the current track's reporting pauses with a visible notice until the next explicit play — never a fabricated cross-library resume and never an automatic high-position fresh count. If the URL change is actually the same server at a new address, the cost is that the current listen simply starts over on the next explicit play.
+- Counting is derived server-side at 50% with playback evidence; the app never fakes a `playing` state for tracks that were not actually heard — recovery events may only claim `playing` when the track is playing right now or the position was provably reached while playing (a paused session that was merely seeked to a high position is never recovered as playing).
+- Plex sources are untouched: they keep the existing timeline/scrobble behavior.
 
 ## Requirements
 

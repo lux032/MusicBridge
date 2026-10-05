@@ -1,5 +1,6 @@
 package com.lux032.musicbridge
 
+import androidx.media3.common.Player
 import com.lux032.musicbridge.local.LocalAudioCache
 import com.lux032.musicbridge.local.LocalPlaybackEngine
 import com.lux032.musicbridge.local.LocalPlaybackService
@@ -8,6 +9,10 @@ import com.lux032.musicbridge.local.isLiveTranscodeUrl
 import com.lux032.musicbridge.local.originalCacheKey
 import com.lux032.musicbridge.local.shouldUseCachedOriginal
 import com.lux032.musicbridge.local.transcodedCacheKey
+import com.lux032.musicbridge.music.Music032Client
+import com.lux032.musicbridge.music.Music032TranscodeUrls
+import com.lux032.musicbridge.music.ReporterEndReason
+import com.lux032.musicbridge.music.ReporterPlayState
 import com.lux032.musicbridge.plex.PlexAlbum
 import com.lux032.musicbridge.plex.PlexTrackStream
 import com.lux032.musicbridge.plex.willTranscodeLocally
@@ -17,6 +22,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -45,6 +51,34 @@ internal fun networkReevaluationIndices(
 }
 
 /**
+ * End reason a 032 session gets when the local engine moves to another media item.
+ * AUTO and REPEAT both mean the previous track played to its end (REPEAT is the
+ * repeat-one loop: the completed play closes and a genuinely new play starts, so a loop
+ * counts again). SEEK is a user-initiated jump — the server only counts it as a skip when
+ * the final position sits below its skip threshold.
+ */
+internal fun reporterEndReasonForTransition(reason: Int): ReporterEndReason = when (reason) {
+    Player.MEDIA_ITEM_TRANSITION_REASON_SEEK -> ReporterEndReason.Skipped
+    else -> ReporterEndReason.Completed
+}
+
+/**
+ * Honest playback state for 032 session reporting. `isPlaying` already requires READY +
+ * playWhenReady + no playback suppression, so an audio-focus loss is reported as
+ * buffering (not audible) instead of pretending to play.
+ */
+internal fun localReporterPlayState(
+    isPlaying: Boolean,
+    isPlayRequested: Boolean,
+    isBuffering: Boolean,
+): ReporterPlayState = when {
+    isPlaying -> ReporterPlayState.Playing
+    !isPlayRequested -> ReporterPlayState.Paused
+    // Play requested but buffering or suppressed: honestly not playing.
+    else -> ReporterPlayState.Buffering
+}
+
+/**
  * Drives on-device playback through [LocalPlaybackEngine]. Mirrors the Sonos side of
  * [AppStatePlaybackCoordinator]: the engine owns rendering, this coordinator owns queue
  * state, Plex timeline reporting, and scrobbling. The system media notification is
@@ -55,6 +89,16 @@ internal fun networkReevaluationIndices(
 internal class AppStateLocalPlaybackCoordinator(
     private val state: AppState,
 ) {
+    private fun is032Track(track: PlexTrackStream): Boolean =
+        runCatching { state.clientFor(track.sourceId) is Music032Client }.getOrNull()
+            ?: Music032TranscodeUrls.isOriginalStream(track.streamUrl)
+
+    /** All 032 session routing for the local target (see Local032SessionDriver docs). */
+    private val sessionDriver = Local032SessionDriver(
+        reporterFor = { sourceId -> state.music032ReporterFor(sourceId) },
+        is032Track = ::is032Track,
+    )
+
     init {
         state.localPlaybackEngine.listener = object : LocalPlaybackEngine.Listener {
             override fun onTrackChanged(index: Int) {
@@ -73,7 +117,22 @@ internal class AppStateLocalPlaybackCoordinator(
                 }
             }
 
+            override fun onTrackTransition(index: Int, reason: Int) {
+                val current = state.miniPlayerState ?: return
+                if (current.target != PlaybackTarget.LocalDevice) return
+                val track = current.tracks.getOrNull(index) ?: return
+                val engine = state.localPlaybackEngine
+                sessionDriver.onEngineTransition(
+                    newTrack = track,
+                    reason = reason,
+                    positionMillis = engine.currentPositionMillis.coerceAtLeast(0L),
+                    durationMillis = engine.durationMillis ?: track.durationMillis ?: 0L,
+                    initialState = localReporterPlayState(engine.isPlaying, engine.isPlayRequested, engine.isBuffering),
+                )
+            }
+
             override fun onIsPlayingChanged(isPlaying: Boolean) {
+                push032ObservationNow()
                 state.scope.launch {
                     val current = state.miniPlayerState ?: return@launch
                     if (current.target != PlaybackTarget.LocalDevice) return@launch
@@ -88,6 +147,7 @@ internal class AppStateLocalPlaybackCoordinator(
             }
 
             override fun onBufferingChanged(isBuffering: Boolean) {
+                push032ObservationNow()
                 state.scope.launch {
                     val current = state.miniPlayerState ?: return@launch
                     if (current.target != PlaybackTarget.LocalDevice) return@launch
@@ -100,10 +160,17 @@ internal class AppStateLocalPlaybackCoordinator(
                 }
             }
 
-            override fun onQueueEnded() {
+            override fun onQueueEnded(failed: Boolean) {
                 state.scope.launch {
                     val current = state.miniPlayerState ?: return@launch
                     if (current.target != PlaybackTarget.LocalDevice) return@launch
+                    // The final track never produces a media-item transition, so its 032
+                    // session is closed here: completed on a natural STATE_ENDED, error
+                    // (with the real last observed position) when it failed (P1-3).
+                    sessionDriver.onQueueEnded(
+                        track = current.tracks.getOrNull(state.localPlaybackEngine.currentIndex),
+                        failed = failed,
+                    )
                     state.localPlaybackEngine.rewindToStartAndPause()
                     state.miniPlayerState = current.copy(
                         isPaused = true,
@@ -114,11 +181,26 @@ internal class AppStateLocalPlaybackCoordinator(
                 }
             }
 
+            override fun onSeeked() {
+                val current = state.miniPlayerState ?: return
+                if (current.target != PlaybackTarget.LocalDevice) return
+                val engine = state.localPlaybackEngine
+                val track = current.tracks.getOrNull(engine.currentIndex) ?: return
+                sessionDriver.onSeek(
+                    track = track,
+                    positionMillis = engine.currentPositionMillis.coerceAtLeast(0L),
+                    durationMillis = engine.durationMillis ?: track.durationMillis ?: 0L,
+                )
+            }
+
             override fun onTrackSkipped(index: Int) {
                 state.scope.launch {
                     val current = state.miniPlayerState ?: return@launch
                     if (current.target != PlaybackTarget.LocalDevice) return@launch
                     val track = current.tracks.getOrNull(index) ?: return@launch
+                    // The engine gave up on this item: close its 032 session as error; the
+                    // following transition opens the next track's session.
+                    sessionDriver.onTrackFailed(track)
                     state.actionMessage = "《${track.title}》播放异常，已跳至下一首"
                 }
             }
@@ -148,6 +230,9 @@ internal class AppStateLocalPlaybackCoordinator(
             override fun onPlayerError(message: String) {
                 state.scope.launch {
                     if (state.miniPlayerState?.target != PlaybackTarget.LocalDevice) return@launch
+                    state.miniPlayerState
+                        ?.tracks?.getOrNull(state.localPlaybackEngine.currentIndex)
+                        ?.let(sessionDriver::onTrackFailed)
                     state.miniPlayerState = state.miniPlayerState?.copy(isBuffering = false)
                     state.errorMessage = message
                 }
@@ -198,11 +283,26 @@ internal class AppStateLocalPlaybackCoordinator(
         return track
     }
 
+    /** Pushes the honest engine observation into the 032 reporter (non-blocking). */
+    private fun push032ObservationNow() {
+        val current = state.miniPlayerState ?: return
+        if (current.target != PlaybackTarget.LocalDevice) return
+        val engine = state.localPlaybackEngine
+        val track = current.tracks.getOrNull(engine.currentIndex) ?: return
+        if (!is032Track(track)) return
+        state.music032ReporterFor(track.sourceId)?.observe(
+            localReporterPlayState(engine.isPlaying, engine.isPlayRequested, engine.isBuffering),
+            engine.currentPositionMillis.coerceAtLeast(0L),
+            engine.durationMillis ?: track.durationMillis ?: 0L,
+        )
+    }
+
     fun startLocalPlayback(
         album: PlexAlbum,
         tracks: List<PlexTrackStream>,
         startIndex: Int,
         initialPositionMillis: Long,
+        continueChain: Boolean = false,
     ) {
         if (tracks.isEmpty()) return
         val safeIndex = startIndex.coerceIn(0, tracks.lastIndex)
@@ -256,9 +356,20 @@ internal class AppStateLocalPlaybackCoordinator(
         }
         // A running sleep timer may still point at a Sonos room; local playback now owns it.
         SleepTimerController.attachRoom(null)
+        // The Sonos reporting job's cleanup is job-identity guarded (P1-1), so the old
+        // job will not stop its foreground notification when we take over: do it here.
+        PlaybackForegroundService.stop(state.context)
         LocalPlaybackService.start(state.context)
         val initialTrack = resolvedTracks[safeIndex]
         state.actionMessage = "正在本机播放：${initialTrack.title}"
+        // Explicit starts open a fresh chain; only a renderer switch (Sonos -> this
+        // device) takes the open session over.
+        sessionDriver.onExplicitStart(
+            track = initialTrack,
+            positionMillis = initialPositionMillis.coerceAtLeast(0L),
+            durationMillis = initialTrack.durationMillis ?: 0L,
+            continueChain = continueChain,
+        )
         startReporting()
     }
 
@@ -390,6 +501,14 @@ internal class AppStateLocalPlaybackCoordinator(
         state.miniPlayerState = state.miniPlayerState
             ?.takeIf { it.target == PlaybackTarget.LocalDevice }
             ?.copy(currentPositionMillis = effectiveTargetMillis)
+        playerState.tracks.getOrNull(playerState.currentIndex)
+            ?.let { track ->
+                sessionDriver.onSeek(
+                    track = track,
+                    positionMillis = effectiveTargetMillis,
+                    durationMillis = playerState.durationMillis ?: track.durationMillis ?: 0L,
+                )
+            }
         state.actionMessage = "已跳转到 ${formatDuration(effectiveTargetMillis)}"
     }
 
@@ -419,6 +538,16 @@ internal class AppStateLocalPlaybackCoordinator(
     fun playLocalIndex(index: Int, positionMillis: Long) {
         val playerState = state.miniPlayerState ?: return
         val safeIndex = index.coerceIn(0, playerState.tracks.lastIndex)
+        // Re-selecting the CURRENT item is an explicit new play from 0 on a fresh chain
+        // (P2-A); plain pause/resume never goes through here and keeps its chain.
+        if (safeIndex == playerState.currentIndex) {
+            playerState.tracks.getOrNull(safeIndex)?.let { track ->
+                sessionDriver.onExplicitReplaySameTrack(
+                    track = track,
+                    durationMillis = state.localPlaybackEngine.durationMillis ?: track.durationMillis ?: 0L,
+                )
+            }
+        }
         state.localPlaybackEngine.playAt(safeIndex, positionMillis)
         val track = playerState.tracks.getOrNull(safeIndex) ?: return
         state.miniPlayerState = playerState.copy(
@@ -442,6 +571,10 @@ internal class AppStateLocalPlaybackCoordinator(
     private fun startReporting() {
         state.playbackReportingJob?.cancel()
         state.playbackReportingJob = state.scope.launch {
+            val thisJob = coroutineContext.job
+            // P3: the session this job owns is captured into a JOB-LOCAL variable during
+            // the loop's life; the finally never reads shared driver state.
+            var ownedSession: Pair<String, String>? = null
             try {
                 val scrobbledTrackKeys = mutableSetOf<String>()
                 var reportedTrack: PlexTrackStream? = null
@@ -475,27 +608,64 @@ internal class AppStateLocalPlaybackCoordinator(
                         durationMillis = durationMillis,
                     )
 
+                    val trackIs032 = is032Track(track)
                     if (reportedTrack != null &&
                         (reportedTrack!!.ratingKey != track.ratingKey || reportedTrack!!.sourceId != track.sourceId)
                     ) {
                         val finished = reportedTrack!!
-                        reportTimelineSafelyLocal(finished, "stopped", positionMillis = 0L, finished.durationMillis, continuing = true)
-                        scrobbleIfNeededLocal(scrobbledTrackKeys, finished, positionMillis, finished.durationMillis)
+                        // 032 transitions are closed by the engine transition callback with
+                        // the old session's own position; the legacy path stays Plex-only.
+                        if (!is032Track(finished)) {
+                            reportTimelineSafelyLocal(finished, "stopped", positionMillis = 0L, finished.durationMillis, continuing = true)
+                            scrobbleIfNeededLocal(scrobbledTrackKeys, finished, positionMillis, finished.durationMillis)
+                        }
                         lastReportedState = null
                         lastTimelineReportAt = 0L
                     }
                     reportedTrack = track
 
-                    val now = System.currentTimeMillis()
-                    if (playbackState != lastReportedState || now - lastTimelineReportAt >= 10_000L) {
-                        reportTimelineSafelyLocal(track, playbackState, positionMillis, durationMillis, continuing = false)
-                        lastReportedState = playbackState
-                        lastTimelineReportAt = now
+                    if (trackIs032) {
+                        // Non-blocking: the reporter actor merges the observation and
+                        // repairs a missing session itself (no network on this loop).
+                        sessionDriver.onPoll(
+                            track = track,
+                            enginePlaybackState = playbackState,
+                            reporterState = localReporterPlayState(
+                                engine.isPlaying, engine.isPlayRequested, engine.isBuffering,
+                            ),
+                            positionMillis = positionMillis.coerceAtLeast(0L),
+                            durationMillis = durationMillis ?: 0L,
+                        )
+                        sessionDriver.captureOwnedSession()?.let { ownedSession = it }
+                    } else {
+                        val now = System.currentTimeMillis()
+                        if (playbackState != lastReportedState || now - lastTimelineReportAt >= 10_000L) {
+                            reportTimelineSafelyLocal(track, playbackState, positionMillis, durationMillis, continuing = false)
+                            lastReportedState = playbackState
+                            lastTimelineReportAt = now
+                        }
+                        scrobbleIfNeededLocal(scrobbledTrackKeys, track, positionMillis, durationMillis)
                     }
-                    scrobbleIfNeededLocal(scrobbledTrackKeys, track, positionMillis, durationMillis)
                 }
             } finally {
-                LocalPlaybackService.stop(state.context)
+                // P1-1: service teardown runs synchronously and only while this job is
+                // still the active reporting job (a cancelled old job never stops the new
+                // playback's service). P3: an inactive job sends no end — the superseding
+                // play's own start ends or chains the old session. The bounded end is
+                // fire-and-forget and never gates the teardown on network.
+                val owned = ownedSession
+                ReportingJobCleanup(
+                    isActiveJob = { state.playbackReportingJob === thisJob },
+                    stopPlaybackService = { LocalPlaybackService.stop(state.context) },
+                    requestSessionEnd = {
+                        owned?.let { (sourceId, sessionId) ->
+                            state.music032ReporterFor(sourceId)?.requestEnd(
+                                ReporterEndReason.Stopped,
+                                expectedSessionId = sessionId,
+                            )
+                        }
+                    },
+                ).onJobFinished()
             }
         }
     }

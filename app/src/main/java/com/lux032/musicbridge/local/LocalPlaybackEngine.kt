@@ -1037,9 +1037,23 @@ class LocalPlaybackEngine(
 ) {
     interface Listener {
         fun onTrackChanged(index: Int)
+        /**
+         * Fired for AUTO/SEEK/REPEAT media-item transitions, including REPEAT transitions
+         * that keep the same index (repeat-one loop = a genuinely new play). Default no-op
+         * so existing listeners stay source-compatible; [androidx.media3.common.Player]
+         * supplies the reason constants.
+         */
+        fun onTrackTransition(index: Int, reason: Int) {}
         fun onIsPlayingChanged(isPlaying: Boolean)
         fun onBufferingChanged(isBuffering: Boolean)
-        fun onQueueEnded()
+        /**
+         * The queue ran out. [failed] is true when the last item could not be played and
+         * the engine gave up on it (a failure, not a natural completion): consumers must
+         * not report that as a completed play.
+         */
+        fun onQueueEnded(failed: Boolean)
+        /** A user/agent seek landed inside the current item (MediaSession seeks included). */
+        fun onSeeked() {}
         fun onTrackSkipped(index: Int)
         fun onCachedOriginalFallback(cacheKey: String)
         fun onAudioFormat(index: Int, sampleRate: Int?, bitDepth: Int?, isTranscoded: Boolean)
@@ -1277,6 +1291,15 @@ class LocalPlaybackEngine(
                 "TRACK_TRANSITION",
                 "index=$newIndex from=$previousIndex reason=${mediaItemTransitionReasonName(reason)}",
             )
+            if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO ||
+                reason == Player.MEDIA_ITEM_TRANSITION_REASON_SEEK ||
+                reason == Player.MEDIA_ITEM_TRANSITION_REASON_REPEAT
+            ) {
+                // 032 playback sessions key off this to detect a genuinely new play
+                // (repeat-one loops the same index) and to close the old session with its
+                // own final position instead of the next track's.
+                listener?.onTrackTransition(newIndex, reason)
+            }
             if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_REPEAT && newIndex in queueItems.indices) {
                 resetRepeatedTranscode(newIndex)
                 listener?.onTrackChanged(newIndex)
@@ -1315,6 +1338,11 @@ class LocalPlaybackEngine(
                 "reason=${positionDiscontinuityReasonName(reason)} oldIndex=${oldPosition.mediaItemIndex} " +
                     "oldPosMs=${oldPosition.positionMs} newIndex=${newPosition.mediaItemIndex} newPosMs=${newPosition.positionMs}",
             )
+            if (reason == Player.DISCONTINUITY_REASON_SEEK &&
+                oldPosition.mediaItemIndex == newPosition.mediaItemIndex
+            ) {
+                listener?.onSeeked()
+            }
         }
 
         override fun onIsPlayingChanged(isPlaying: Boolean) {
@@ -1365,7 +1393,8 @@ class LocalPlaybackEngine(
             if (playbackState == Player.STATE_ENDED) {
                 if (recoverPrematureTranscodeEnd()) return
                 queueItems.getOrNull(currentIndex)?.let(::enqueueCompletionPrecache)
-                listener?.onQueueEnded()
+                // Natural end of the queue: the last item really played to its end.
+                listener?.onQueueEnded(failed = false)
             }
         }
 
@@ -1565,7 +1594,9 @@ class LocalPlaybackEngine(
             hasUnrecoveredPlaybackError = false
             player.pause()
             player.seekTo(failedIndex, 0L)
-            listener?.onQueueEnded()
+            // The last item failed and there is nowhere to skip to: this is an error end,
+            // never a completion.
+            listener?.onQueueEnded(failed = true)
             return
         }
         Log.w(LOG_TAG, "Skipping failed media item index=$failedIndex", error)
@@ -1663,6 +1694,10 @@ class LocalPlaybackEngine(
         get() = player.playbackState == Player.STATE_BUFFERING && player.playWhenReady
     val isEnded: Boolean get() = player.playbackState == Player.STATE_ENDED
     val isIdleAfterError: Boolean get() = hasUnrecoveredPlaybackError && player.playbackState == Player.STATE_IDLE
+    /** playWhenReady is not enough: audio-focus loss etc. suppress audible playback. */
+    val playbackSuppressionReason: Int get() = player.playbackSuppressionReason
+    /** True while the last playback error has not been recovered (queue end after failures). */
+    val hasUnrecoveredError: Boolean get() = hasUnrecoveredPlaybackError
     val isActive: Boolean get() = !released && player.mediaItemCount > 0
 
     private fun buildMediaItem(item: LocalQueueItem, url: String = item.url): MediaItem {

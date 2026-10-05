@@ -15,13 +15,17 @@ import com.lux032.musicbridge.plex.PlexTrackStream
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 import java.nio.charset.StandardCharsets
+import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
+import kotlin.coroutines.resume
 
 class Music032Client(
     private val profile: MusicServerProfile,
@@ -198,35 +202,87 @@ class Music032Client(
         Unit
     }
 
+    /**
+     * Playback sessions (plan C, apiRevision 3): the legacy timeline/scrobble endpoints
+     * were removed server-side and answer 410. 032 playback is reported exclusively
+     * through [Music032PlaybackReporter]; this method is intentionally unsupported and
+     * must never fall back to the removed endpoints.
+     */
     override suspend fun reportTimeline(
         ratingKey: String,
         state: String,
         timeMillis: Long,
         durationMillis: Long?,
         continuing: Boolean,
-    ) = withContext(Dispatchers.IO) {
-        val payload = JSONObject()
-            .put("trackId", ratingKey.toLongOrNull() ?: error("无效的 032 曲目 ID。"))
-            .put("state", state)
-            .put("positionMillis", timeMillis.coerceAtLeast(0L))
-            .put("durationMillis", durationMillis?.coerceAtLeast(0L) ?: 0L)
-            .put("continuing", continuing)
-        request("POST", "/api/v1/playback/timeline", payload)
-        Unit
+    ) {
+        Log.w(
+            "Music032Client",
+            "reportTimeline() is unsupported for 032 (playback sessions replaced it); call ignored",
+        )
     }
 
+    /** See [reportTimeline]: counting is derived server-side from session events now. */
     override suspend fun scrobble(
         ratingKey: String,
         positionMillis: Long,
         durationMillis: Long?,
-    ) = withContext(Dispatchers.IO) {
-        val payload = JSONObject()
-            .put("trackId", ratingKey.toLongOrNull() ?: error("无效的 032 曲目 ID。"))
-            .put("positionMillis", positionMillis.coerceAtLeast(0L))
-            .put("durationMillis", durationMillis?.coerceAtLeast(0L) ?: 0L)
-        request("POST", "/api/v1/playback/scrobble", payload)
-        Unit
+    ) {
+        Log.w(
+            "Music032Client",
+            "scrobble() is unsupported for 032 (playback sessions replaced it); call ignored",
+        )
     }
+
+    /** Transport used by [Music032PlaybackReporter] to POST one playback session event. */
+    internal val playbackEventTransport = PlaybackEventTransport { payload -> postPlaybackEvent(payload) }
+
+    // Daemon threads: a dying process never joins them; cancellation disconnects the
+    // in-flight connection instead of interrupting the worker.
+    private val playbackEventExecutor = Executors.newCachedThreadPool { runnable ->
+        Thread(runnable, "music032-playback-events").apply { isDaemon = true }
+    }
+
+    /**
+     * POSTs one session event without throwing on protocol statuses: the reporter needs
+     * the exact 404/409 codes to drive its recovery rules. Status 0 means the request
+     * never produced a response (network failure, cancellation or deadline). The call is
+     * genuinely cancellable: cancelling the coroutine disconnects the connection, which
+     * unblocks the worker thread instead of waiting out connect+read timeouts on the
+     * calling thread (this is what bounds app-teardown reporting). Short timeouts keep
+     * the reporter's serialized queue from stalling behind a dead connection.
+     */
+    internal suspend fun postPlaybackEvent(payload: JSONObject): PlaybackEventHttpResult =
+        suspendCancellableCoroutine { continuation ->
+            val connectionReference = AtomicReference<HttpURLConnection?>()
+            continuation.invokeOnCancellation {
+                connectionReference.get()?.let { connection -> runCatching { connection.disconnect() } }
+            }
+            playbackEventExecutor.execute {
+                try {
+                    val connection = (URL("$baseUrl/api/v1/playback/events").openConnection() as HttpURLConnection).apply {
+                        requestMethod = "POST"
+                        connectTimeout = PLAYBACK_EVENT_CONNECT_TIMEOUT_MILLIS
+                        readTimeout = PLAYBACK_EVENT_READ_TIMEOUT_MILLIS
+                        instanceFollowRedirects = true
+                        doInput = true
+                        doOutput = true
+                        setRequestProperty("Accept", "application/json")
+                        setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                        setRequestProperty("Authorization", "Bearer $apiToken")
+                    }
+                    connectionReference.set(connection)
+                    connection.outputStream.bufferedWriter(StandardCharsets.UTF_8).use { it.write(payload.toString()) }
+                    val status = connection.responseCode
+                    val body = (if (status in 200..299) connection.inputStream else connection.errorStream)
+                        ?.bufferedReader(StandardCharsets.UTF_8)
+                        ?.use { it.readText() }
+                    continuation.resume(PlaybackEventHttpResult(status, body))
+                } catch (_: Exception) {
+                    // Includes the SocketException caused by a cancellation disconnect.
+                    continuation.resume(PlaybackEventHttpResult(0, null))
+                }
+            }
+        }
 
     private fun parseAlbum(value: JSONObject) = Music032Json.parseAlbum(value, baseUrl, mediaToken, section, sourceId)
     private fun parseTrack(value: JSONObject) = Music032Json.parseTrack(value, baseUrl, mediaToken, sourceId)
@@ -312,6 +368,8 @@ class Music032Client(
     private companion object {
         const val PAGE_SIZE = 500
         const val SYNC_PAGE_SIZE = 1000
+        const val PLAYBACK_EVENT_CONNECT_TIMEOUT_MILLIS = 5_000
+        const val PLAYBACK_EVENT_READ_TIMEOUT_MILLIS = 5_000
     }
 }
 

@@ -5,7 +5,30 @@ import androidx.core.content.edit
 import org.json.JSONArray
 import org.json.JSONObject
 import com.lux032.musicbridge.ai.AiSettings
+import com.lux032.musicbridge.music.Music032PersistedSession
+import com.lux032.musicbridge.music.Music032ReporterPreferences
 import java.util.UUID
+
+/** Binds the injected [Music032ReporterPreferences] of one 032 source to SharedPreferences. */
+internal class AppPreferencesMusic032ReporterPreferences(
+    private val preferences: AppPreferences,
+    private val sourceId: String,
+    private val isCurrent: () -> Boolean = { true },
+) : Music032ReporterPreferences {
+    // One install-wide clientId for every 032 server; the resume snapshot is per source.
+    override fun loadClientId(): String? = preferences.loadOrCreateMusic032ClientIdentifier()
+    override fun saveClientId(clientId: String) = Unit // loadOrCreate* already persists it
+    override fun loadLastSession(): Music032PersistedSession? =
+        preferences.loadMusic032LastSession(sourceId)
+    override fun saveLastSession(session: Music032PersistedSession?) {
+        // A retired reporter's async writes must not clobber its replacement's state.
+        if (isCurrent()) preferences.saveMusic032LastSession(sourceId, session)
+    }
+    override fun loadResumeBlock(): Long? = preferences.loadMusic032ResumeBlock(sourceId)
+    override fun saveResumeBlock(trackId: Long?) {
+        if (isCurrent()) preferences.saveMusic032ResumeBlock(sourceId, trackId)
+    }
+}
 
 enum class MusicServerType {
     Plex,
@@ -170,6 +193,75 @@ class AppPreferences(context: Context) {
         return identifier
     }
 
+    /**
+     * 032 playback sessions bind to this clientId (single-user server: it identifies this
+     * device across all configured 032 servers). Persisted once and stable for the install.
+     */
+    fun loadOrCreateMusic032ClientIdentifier(): String {
+        sharedPreferences.getString(KEY_MUSIC032_CLIENT_ID, null)
+            ?.trim()
+            ?.takeIf(String::isNotEmpty)
+            ?.let { return it }
+
+        val identifier = UUID.randomUUID().toString()
+        sharedPreferences.edit(commit = true) {
+            putString(KEY_MUSIC032_CLIENT_ID, identifier)
+        }
+        return identifier
+    }
+
+    internal fun loadMusic032LastSession(sourceId: String): Music032PersistedSession? {
+        if (sourceId.isBlank()) return null
+        val raw = sharedPreferences.getString(lastSessionKey(sourceId), null) ?: return null
+        return runCatching {
+            val value = JSONObject(raw)
+            val sessionId = value.optString("sessionId").trim()
+            val trackId = value.optLong("trackId", -1L)
+            if (sessionId.isEmpty() || trackId <= 0L) return null
+            Music032PersistedSession(
+                sessionId = sessionId,
+                trackId = trackId,
+                hasPlayed = value.optBoolean("hasPlayed"),
+                playedHighWaterMillis = value.optLong("playedHighWaterMillis", 0L),
+                savedAtMillis = value.optLong("savedAtMillis"),
+            )
+        }.getOrNull()
+    }
+
+    internal fun saveMusic032LastSession(sourceId: String, session: Music032PersistedSession?) {
+        if (sourceId.isBlank()) return
+        sharedPreferences.edit {
+            if (session == null) {
+                remove(lastSessionKey(sourceId))
+            } else {
+                putString(
+                    lastSessionKey(sourceId),
+                    JSONObject()
+                        .put("sessionId", session.sessionId)
+                        .put("trackId", session.trackId)
+                        .put("hasPlayed", session.hasPlayed)
+                        .put("playedHighWaterMillis", session.playedHighWaterMillis)
+                        .put("savedAtMillis", session.savedAtMillis)
+                        .toString(),
+                )
+            }
+        }
+    }
+
+    /** Persisted resume_invalid block (track id) for one 032 source; null/<=0 means none. */
+    fun loadMusic032ResumeBlock(sourceId: String): Long? {
+        if (sourceId.isBlank()) return null
+        return sharedPreferences.getLong(resumeBlockKey(sourceId), -1L).takeIf { it > 0L }
+    }
+
+    fun saveMusic032ResumeBlock(sourceId: String, trackId: Long?) {
+        if (sourceId.isBlank()) return
+        sharedPreferences.edit {
+            if (trackId == null || trackId <= 0L) remove(resumeBlockKey(sourceId))
+            else putLong(resumeBlockKey(sourceId), trackId)
+        }
+    }
+
     fun loadRecentPlayedAlbumKeys(sourceId: String): List<String> {
         if (sourceId.isBlank()) return emptyList()
         return sharedPreferences.getString(recentKey(sourceId), "").orEmpty()
@@ -227,6 +319,8 @@ class AppPreferences(context: Context) {
         sharedPreferences.edit {
             remove(recentKey(sourceId))
             remove(syncKey(sourceId))
+            remove(lastSessionKey(sourceId))
+            remove(resumeBlockKey(sourceId))
         }
     }
 
@@ -328,6 +422,8 @@ class AppPreferences(context: Context) {
 
     private fun recentKey(sourceId: String) = "${KEY_RECENT_PLAYED_ALBUM_KEYS}_$sourceId"
     private fun syncKey(sourceId: String) = "${KEY_LAST_ALBUM_SYNC_EPOCH_MILLIS}_$sourceId"
+    private fun lastSessionKey(sourceId: String) = "${KEY_MUSIC032_LAST_SESSION}_$sourceId"
+    private fun resumeBlockKey(sourceId: String) = "${KEY_MUSIC032_RESUME_BLOCK}_$sourceId"
 
     private fun migrateLegacySourceState(sourceId: String) {
         val recent = sharedPreferences.getString(KEY_RECENT_PLAYED_ALBUM_KEYS, "").orEmpty()
@@ -353,6 +449,9 @@ class AppPreferences(context: Context) {
         private const val KEY_SERVER_PROFILES = "music_server_profiles_v1"
         private const val KEY_ACTIVE_SERVER_ID = "active_music_server_id"
         private const val KEY_PLEX_CLIENT_IDENTIFIER = "plex_client_identifier_v1"
+        private const val KEY_MUSIC032_CLIENT_ID = "music032_client_id_v1"
+        private const val KEY_MUSIC032_LAST_SESSION = "music032_last_session_v1"
+        private const val KEY_MUSIC032_RESUME_BLOCK = "music032_resume_block_v1"
         private const val KEY_RECENT_PLAYED_ALBUM_KEYS = "recent_played_album_keys"
         private const val KEY_LAST_ALBUM_SYNC_EPOCH_MILLIS = "last_album_sync_epoch_millis"
         private const val KEY_LOCAL_QUALITY_WIFI = "local_stream_quality_wifi_v1"

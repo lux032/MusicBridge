@@ -5,6 +5,8 @@ import com.lux032.musicbridge.music.Music032Client
 import com.lux032.musicbridge.music.Music032Json
 import com.lux032.musicbridge.music.Music032TranscodeUrls
 import com.lux032.musicbridge.music.Music032Warmup
+import com.lux032.musicbridge.music.ReporterEndReason
+import com.lux032.musicbridge.music.ReporterPlayState
 import com.lux032.musicbridge.music.WarmupResult
 import com.lux032.musicbridge.local.LocalAudioCache
 import com.lux032.musicbridge.local.originalCacheKey
@@ -26,6 +28,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -36,6 +39,36 @@ import kotlin.random.Random
 
 internal fun shouldApplyPlexSonosTranscode(isPlexClient: Boolean?, streamUrl: String): Boolean =
     isPlexClient ?: streamUrl.contains("X-Plex-Token", ignoreCase = true)
+
+/**
+ * Honest 032 session state for Sonos-pushed playback. Sonos has no "suppressed" notion;
+ * STOPPED is honestly not playing, so it maps to paused (the session stays alive on the
+ * paused lease while the app decides whether to advance).
+ */
+internal fun sonosReporterPlayState(playbackState: String): ReporterPlayState = when (playbackState) {
+    "playing" -> ReporterPlayState.Playing
+    "buffering" -> ReporterPlayState.Buffering
+    else -> ReporterPlayState.Paused
+}
+
+/**
+ * Repeat-one on Sonos: the speaker (or the sequential push loop) restarts the SAME track,
+ * so the position wraps from near the end back to ~0 without a track change. That wrap is
+ * a genuinely new play. The boundary is deliberately strict — a seek-back from mid-track
+ * must not look like a loop. (Boundary constants not yet verified against hardware; see
+ * implementation notes.)
+ */
+internal fun isSameTrackRepeatWrap(
+    previousPositionMillis: Long,
+    newPositionMillis: Long,
+    durationMillis: Long?,
+    playbackState: String,
+): Boolean {
+    val duration = durationMillis ?: return false
+    if (duration <= 20_000L) return false
+    if (playbackState == "stopped") return false
+    return previousPositionMillis >= duration - 10_000L && newPositionMillis <= 10_000L
+}
 
 internal fun preparePlexSonosTranscode(
     track: PlexTrackStream,
@@ -160,6 +193,7 @@ internal class AppStatePlaybackCoordinator(
         trackIndex: Int,
         room: SonosRoom,
         initialPositionMillis: Long,
+        continueChain: Boolean = false,
     ) {
         val targetTrack = tracks.getOrNull(trackIndex) ?: return
         val resumesLiveTranscodeDirectMp3 = initialPositionMillis > 0L && !is032Source(targetTrack) && targetTrack.isConfiguredDirectMp3()
@@ -253,6 +287,7 @@ internal class AppStatePlaybackCoordinator(
                         trackIndex,
                         initialPositionMillis,
                         autoAdvanceWhenStopped = true,
+                        continueChain = continueChain,
                     )
                     state.actionMessage = sonosPushMessage("已将 ${targetTrack.title} 推送到 ${room.roomName}",
                         is032Source(targetTrack) && current032Fallback)
@@ -294,6 +329,7 @@ internal class AppStatePlaybackCoordinator(
         room: SonosRoom,
         startIndex: Int,
         initialPositionMillis: Long,
+        continueChain: Boolean = false,
     ) {
         val initialTrack = albumTrackResult.tracks.getOrNull(startIndex)
         val resumesLiveTranscodeDirectMp3 = initialPositionMillis > 0L && initialTrack != null && !is032Source(initialTrack) && initialTrack.isConfiguredDirectMp3()
@@ -425,6 +461,7 @@ internal class AppStatePlaybackCoordinator(
                                 index,
                                 startPositionMillis,
                                 autoAdvanceWhenStopped = false,
+                                continueChain = continueChain,
                             )
                         }
                         state.miniPlayerState = state.miniPlayerState?.copy(
@@ -748,8 +785,7 @@ internal class AppStatePlaybackCoordinator(
                                 index,
                                 positionMillis,
                                 autoAdvanceWhenStopped = false,
-                            )
-                        }
+                            )                        }
                         state.miniPlayerState = state.miniPlayerState?.copy(
                             album = resolveAlbumForTrack(track, fakeAlbum),
                             currentIndex = index,
@@ -863,7 +899,8 @@ internal class AppStatePlaybackCoordinator(
                     }
                     restartedPlayback = true
                     Log.i(LOG_TAG, "restart transport at ${latest.currentPositionMillis}ms")
-                    playQueueIndex(latest.currentIndex, latest.currentPositionMillis, PlaybackTarget.Sonos(room))
+                    // STOPPED re-push of the same listen: continue the chain (P2-A).
+                    playQueueIndex(latest.currentIndex, latest.currentPositionMillis, PlaybackTarget.Sonos(room), continueChain = true)
                     return@withLock
                 }
 
@@ -891,7 +928,7 @@ internal class AppStatePlaybackCoordinator(
                             state.miniPlayerState = state.miniPlayerState?.copy(isPaused = !shouldResume)
                         } else if (shouldResume && actualState.equals("STOPPED", ignoreCase = true)) {
                             restartedPlayback = true
-                            playQueueIndex(latest.currentIndex, latest.currentPositionMillis, PlaybackTarget.Sonos(room))
+                            playQueueIndex(latest.currentIndex, latest.currentPositionMillis, PlaybackTarget.Sonos(room), continueChain = true)
                         } else {
                             state.errorMessage = error.message ?: "未知错误"
                         }
@@ -939,7 +976,7 @@ internal class AppStatePlaybackCoordinator(
         if (newIndex != playerState.currentIndex) playQueueIndex(newIndex, 0L, playerState.target)
     }
 
-    fun playQueueIndex(index: Int, positionMillis: Long, target: PlaybackTarget?) {
+    fun playQueueIndex(index: Int, positionMillis: Long, target: PlaybackTarget?, continueChain: Boolean = false) {
         val playerState = state.miniPlayerState ?: return
         val targetIndex = index.coerceIn(0, playerState.tracks.lastIndex)
         when (val resolvedTarget = target ?: playerState.target) {
@@ -951,7 +988,8 @@ internal class AppStatePlaybackCoordinator(
                     state.localPlaybackCoordinator.playLocalIndex(targetIndex, positionMillis)
                 } else {
                     // Renderer switch (Sonos -> this device): stop the speaker and rebuild
-                    // the local queue at the same position.
+                    // the local queue at the same position. continueChain lets the 032
+                    // reporter resume the open session instead of counting a second play.
                     playerState.sonosRoom?.let { room ->
                         state.scope.launch { runCatching { state.sonosController.stop(room) } }
                     }
@@ -960,6 +998,7 @@ internal class AppStatePlaybackCoordinator(
                         tracks = playerState.tracks,
                         startIndex = targetIndex,
                         initialPositionMillis = positionMillis,
+                        continueChain = true,
                     )
                 }
             }
@@ -967,7 +1006,15 @@ internal class AppStatePlaybackCoordinator(
                 if (playerState.target == PlaybackTarget.LocalDevice) {
                     state.localPlaybackCoordinator.stopLocalPlayback()
                 }
-                playSonosQueueIndex(playerState, targetIndex, positionMillis, resolvedTarget.room)
+                // continueChain: explicit param for genuine renderer switches / STOPPED
+                // re-pushes; a queue-panel tap (even on the current item) is a fresh play.
+                playSonosQueueIndex(
+                    playerState,
+                    targetIndex,
+                    positionMillis,
+                    resolvedTarget.room,
+                    continueChain = continueChain || playerState.target == PlaybackTarget.LocalDevice,
+                )
             }
         }
     }
@@ -977,7 +1024,22 @@ internal class AppStatePlaybackCoordinator(
         targetIndex: Int,
         positionMillis: Long,
         targetRoom: SonosRoom,
+        continueChain: Boolean,
     ) {
+        val outgoing = playerState.tracks.getOrNull(playerState.currentIndex)
+        val target = playerState.tracks.getOrNull(targetIndex)
+        val sameTrack = outgoing != null && target != null &&
+            outgoing.ratingKey == target.ratingKey && outgoing.sourceId == target.sourceId
+        // User-initiated track change on Sonos: close the outgoing 032 session as skipped
+        // (the server only counts it when the position sits below its skip threshold). An
+        // auto-advance has already ended its session completed, so this is a no-op there.
+        outgoing
+            ?.takeIf {
+                playerState.target is PlaybackTarget.Sonos && !sameTrack && is032Source(it)
+            }
+            ?.let {
+                state.music032ReporterFor(it.sourceId)?.requestEnd(ReporterEndReason.Skipped)
+            }
         val currentTrackResult = state.trackResult?.takeIf { result ->
             result.album.ratingKey == playerState.album.ratingKey &&
                 result.album.sourceId == playerState.album.sourceId &&
@@ -985,7 +1047,7 @@ internal class AppStatePlaybackCoordinator(
                 playerState.tracks.map { it.sourceId to it.ratingKey }
         }
         if (currentTrackResult != null) {
-            startAlbumPlaybackOnSonos(currentTrackResult, targetRoom, targetIndex, positionMillis)
+            startAlbumPlaybackOnSonos(currentTrackResult, targetRoom, targetIndex, positionMillis, continueChain)
         } else {
             startSingleTrackPlaybackOnSonos(
                 album = resolveAlbumForTrack(playerState.tracks[targetIndex], playerState.album),
@@ -993,6 +1055,7 @@ internal class AppStatePlaybackCoordinator(
                 trackIndex = targetIndex,
                 room = targetRoom,
                 initialPositionMillis = positionMillis,
+                continueChain = continueChain,
             )
         }
     }
@@ -1022,7 +1085,7 @@ internal class AppStatePlaybackCoordinator(
             state.volumeSyncKey += 1
             return
         }
-        playQueueIndex(playerState.currentIndex, playerState.currentPositionMillis, target)
+        playQueueIndex(playerState.currentIndex, playerState.currentPositionMillis, target, continueChain = true)
         state.actionMessage = when (target) {
             PlaybackTarget.LocalDevice -> "正在切换到 ${Strings.localPlayback}"
             is PlaybackTarget.Sonos -> "正在切换到 ${target.room.roomName}"
@@ -1111,6 +1174,12 @@ internal class AppStatePlaybackCoordinator(
                 }
             }.onSuccess {
                 if (seekRequestGeneration.get() == seekGeneration) {
+                    if (is032Source(targetTrack)) {
+                        state.music032ReporterFor(targetTrack.sourceId)?.requestSeek(
+                            targetMillis,
+                            durationMillis,
+                        )
+                    }
                     state.actionMessage = "已跳转到 ${formatDuration(targetMillis)}"
                 }
             }.onFailure { error ->
@@ -1257,10 +1326,12 @@ internal class AppStatePlaybackCoordinator(
         initialTrackIndex: Int,
         initialPositionMillis: Long = 0L,
         autoAdvanceWhenStopped: Boolean,
+        continueChain: Boolean = false,
     ) {
         val normalizedInitialIndex = initialTrackIndex.coerceIn(0, tracks.lastIndex)
         state.playbackReportingJob?.cancel()
         state.playbackReportingJob = state.scope.launch {
+            val thisJob = coroutineContext.job
             val initialTrack = tracks.getOrNull(normalizedInitialIndex) ?: return@launch
             PlaybackForegroundService.onPlaybackAction = { action ->
                 val playerState = state.miniPlayerState
@@ -1282,6 +1353,10 @@ internal class AppStatePlaybackCoordinator(
                 subtitle = "正在推送到 ${room.roomName}",
                 artworkUrl = initialTrack.thumbUrl,
             )
+            // 032 session owned by this reporting loop; the finally block may only end
+            // exactly this session (a takeover chain installs a new id first).
+            var owned032SessionId: String? = null
+            var owned032SourceId: String? = null
             try {
             val scrobbledTrackKeys = mutableSetOf<String>()
             var currentTrack = initialTrack
@@ -1292,15 +1367,41 @@ internal class AppStatePlaybackCoordinator(
             var stoppedPollCount = 0
             var hasObservedPlayback = initialPositionMillis > 0L
 
-            reportTimelineSafely(
-                track = currentTrack,
-                stateName = "playing",
-                timeMillis = currentTrackTimeMillis,
-                durationMillis = currentTrackDurationMillis,
-                continuing = false,
-            )
-            lastReportedState = "playing"
-            lastTimelineReportAt = System.currentTimeMillis()
+            if (is032Source(currentTrack)) {
+                val reporter = state.music032ReporterFor(currentTrack.sourceId)
+                val trackId = currentTrack.ratingKey.toLongOrNull()
+                if (reporter != null && trackId != null) {
+                    // The push has not produced sound yet: the honest initial state is
+                    // buffering. Only a genuine renderer switch (or a same-track re-push)
+                    // takes the chain over; an explicit push is a fresh play (P1-2).
+                    if (continueChain) {
+                        reporter.requestTakeover(
+                            trackId = trackId,
+                            positionMillis = currentTrackTimeMillis,
+                            durationMillis = currentTrackDurationMillis ?: 0L,
+                            initialState = ReporterPlayState.Buffering,
+                        )
+                    } else {
+                        reporter.requestStart(
+                            trackId = trackId,
+                            positionMillis = currentTrackTimeMillis,
+                            durationMillis = currentTrackDurationMillis ?: 0L,
+                            initialState = ReporterPlayState.Buffering,
+                        )
+                    }
+                    owned032SourceId = currentTrack.sourceId
+                }
+            } else {
+                reportTimelineSafely(
+                    track = currentTrack,
+                    stateName = "playing",
+                    timeMillis = currentTrackTimeMillis,
+                    durationMillis = currentTrackDurationMillis,
+                    continuing = false,
+                )
+                lastReportedState = "playing"
+                lastTimelineReportAt = System.currentTimeMillis()
+            }
 
             while (true) {
                 delay(1_000)
@@ -1351,18 +1452,34 @@ internal class AppStatePlaybackCoordinator(
                     activeSonosPlan = activeSonosPlan?.takeIf {
                         retainSonosPlanForTrack(it.sourceId, it.ratingKey, resolvedTrack)
                     }
-                    reportStoppedTrackIfNeeded(
-                        track = currentTrack,
-                        timeMillis = currentTrackTimeMillis,
-                        durationMillis = currentTrackDurationMillis,
-                        continuing = true,
-                    )
-                    scrobbleIfNeeded(
-                        scrobbledTrackKeys = scrobbledTrackKeys,
-                        track = currentTrack,
-                        timeMillis = currentTrackTimeMillis,
-                        durationMillis = currentTrackDurationMillis,
-                    )
+                    // A track change observed by this loop is an auto-advance or an
+                    // external controller switch: end the old 032 session with the real
+                    // last observed position — completed only near the end, otherwise
+                    // replaced, never a fabricated full-duration completion (P3).
+                    if (is032Source(currentTrack)) {
+                        val nearEnd = currentTrackDurationMillis?.let { duration ->
+                            currentTrackTimeMillis >= (duration - 3_000L).coerceAtLeast(0L)
+                        } ?: false
+                        state.music032ReporterFor(currentTrack.sourceId)?.requestEnd(
+                            if (nearEnd) ReporterEndReason.Completed else ReporterEndReason.Replaced,
+                            finalPositionMillis = currentTrackTimeMillis,
+                        )
+                        owned032SessionId = null
+                        owned032SourceId = null
+                    } else {
+                        reportStoppedTrackIfNeeded(
+                            track = currentTrack,
+                            timeMillis = currentTrackTimeMillis,
+                            durationMillis = currentTrackDurationMillis,
+                            continuing = true,
+                        )
+                        scrobbleIfNeeded(
+                            scrobbledTrackKeys = scrobbledTrackKeys,
+                            track = currentTrack,
+                            timeMillis = currentTrackTimeMillis,
+                            durationMillis = currentTrackDurationMillis,
+                        )
+                    }
 
                     currentTrack = resolvedTrack
                     currentTrackTimeMillis = 0L
@@ -1371,12 +1488,52 @@ internal class AppStatePlaybackCoordinator(
                     lastTimelineReportAt = 0L
                     stoppedPollCount = 0
                     hasObservedPlayback = false
+                    if (is032Source(currentTrack)) {
+                        val reporter = state.music032ReporterFor(currentTrack.sourceId)
+                        val trackId = currentTrack.ratingKey.toLongOrNull()
+                        if (reporter != null && trackId != null) {
+                            // Auto-advance inside the queue: an explicit new play.
+                            reporter.requestStart(
+                                trackId = trackId,
+                                positionMillis = 0L,
+                                durationMillis = currentTrackDurationMillis ?: 0L,
+                                initialState = sonosReporterPlayState(playbackState),
+                            )
+                            owned032SourceId = currentTrack.sourceId
+                        }
+                    }
                 }
 
                 // Sonos resets REL_TIME to zero when the transport reaches STOPPED. For an
                 // Opus restart seek, adding the source offset to that zero would resurrect
                 // the last seek position and overwrite the real end-of-track progress.
                 val stoppedAtResetPosition = playbackState == "stopped" && rawPositionMillis == 0L
+
+                // Repeat-one on Sonos restarts the SAME track: the position wraps from
+                // near the end back to ~0 without a track change. That wrap is a genuinely
+                // new play — the completed session closes and a fresh one starts.
+                if (is032Source(currentTrack) && !stoppedAtResetPosition &&
+                    isSameTrackRepeatWrap(currentTrackTimeMillis, positionMillis, currentTrackDurationMillis, playbackState)
+                ) {
+                    val reporter = state.music032ReporterFor(currentTrack.sourceId)
+                    val trackId = currentTrack.ratingKey.toLongOrNull()
+                    if (reporter != null && trackId != null) {
+                        // The completed play ends with the real observed final position.
+                        reporter.requestEnd(
+                            ReporterEndReason.Completed,
+                            finalPositionMillis = currentTrackTimeMillis,
+                        )
+                        // A loop restart is a genuinely new play (fresh chain).
+                        reporter.requestStart(
+                            trackId = trackId,
+                            positionMillis = positionMillis,
+                            durationMillis = currentTrackDurationMillis ?: 0L,
+                            initialState = sonosReporterPlayState(playbackState),
+                        )
+                        owned032SourceId = currentTrack.sourceId
+                    }
+                }
+
                 if (!stoppedAtResetPosition) {
                     currentTrackTimeMillis = positionMillis
                 }
@@ -1405,28 +1562,55 @@ internal class AppStatePlaybackCoordinator(
                     artworkUrl = currentTrack.thumbUrl,
                 )
 
-                val now = System.currentTimeMillis()
-                val shouldReportTimeline = playbackState != lastReportedState ||
-                    now - lastTimelineReportAt >= 10_000L
+                if (is032Source(currentTrack)) {
+                    val reporter = state.music032ReporterFor(currentTrack.sourceId)
+                    val trackId = currentTrack.ratingKey.toLongOrNull()
+                    if (reporter != null && trackId != null) {
+                        // While stopped, the trackFinished logic owns the lifecycle: never
+                        // re-open a session for a track that just ended.
+                        if (playbackState != "stopped" && reporter.openSessionTrackId() != trackId) {
+                            reporter.requestFallbackStart(
+                                trackId = trackId,
+                                positionMillis = currentTrackTimeMillis,
+                                durationMillis = currentTrackDurationMillis ?: 0L,
+                                initialState = sonosReporterPlayState(playbackState),
+                            )
+                        }
+                        // Non-blocking: the reporter actor merges the observation.
+                        reporter.observe(
+                            sonosReporterPlayState(playbackState),
+                            currentTrackTimeMillis,
+                            currentTrackDurationMillis ?: 0L,
+                        )
+                        reporter.ownedSessionId()?.let { sessionId ->
+                            owned032SessionId = sessionId
+                            owned032SourceId = currentTrack.sourceId
+                        }
+                    }
+                } else {
+                    val now = System.currentTimeMillis()
+                    val shouldReportTimeline = playbackState != lastReportedState ||
+                        now - lastTimelineReportAt >= 10_000L
 
-                if (shouldReportTimeline) {
-                    reportTimelineSafely(
+                    if (shouldReportTimeline) {
+                        reportTimelineSafely(
+                            track = currentTrack,
+                            stateName = playbackState,
+                            timeMillis = currentTrackTimeMillis,
+                            durationMillis = currentTrackDurationMillis,
+                            continuing = false,
+                        )
+                        lastReportedState = playbackState
+                        lastTimelineReportAt = now
+                    }
+
+                    scrobbleIfNeeded(
+                        scrobbledTrackKeys = scrobbledTrackKeys,
                         track = currentTrack,
-                        stateName = playbackState,
                         timeMillis = currentTrackTimeMillis,
                         durationMillis = currentTrackDurationMillis,
-                        continuing = false,
                     )
-                    lastReportedState = playbackState
-                    lastTimelineReportAt = now
                 }
-
-                scrobbleIfNeeded(
-                    scrobbledTrackKeys = scrobbledTrackKeys,
-                    track = currentTrack,
-                    timeMillis = currentTrackTimeMillis,
-                    durationMillis = currentTrackDurationMillis,
-                )
 
                 if (playbackState == "stopped") {
                     stoppedPollCount += 1
@@ -1441,18 +1625,30 @@ internal class AppStatePlaybackCoordinator(
                         if (playbackNeverStarted) {
                             state.errorMessage = "Sonos 未能开始播放：${currentTrack.title}"
                         }
-                        reportStoppedTrackIfNeeded(
-                            track = currentTrack,
-                            timeMillis = currentTrackTimeMillis,
-                            durationMillis = currentTrackDurationMillis,
-                            continuing = false,
-                        )
-                        scrobbleIfNeeded(
-                            scrobbledTrackKeys = scrobbledTrackKeys,
-                            track = currentTrack,
-                            timeMillis = currentTrackTimeMillis,
-                            durationMillis = currentTrackDurationMillis,
-                        )
+                        if (is032Source(currentTrack)) {
+                            // trackFinished reached the end of the track: completed with
+                            // the real final position. A push that never produced sound
+                            // is an error, never a skip.
+                            state.music032ReporterFor(currentTrack.sourceId)?.requestEnd(
+                                if (playbackNeverStarted) ReporterEndReason.Error else ReporterEndReason.Completed,
+                                finalPositionMillis = currentTrackTimeMillis,
+                            )
+                            owned032SessionId = null
+                            owned032SourceId = null
+                        } else {
+                            reportStoppedTrackIfNeeded(
+                                track = currentTrack,
+                                timeMillis = currentTrackTimeMillis,
+                                durationMillis = currentTrackDurationMillis,
+                                continuing = false,
+                            )
+                            scrobbleIfNeeded(
+                                scrobbledTrackKeys = scrobbledTrackKeys,
+                                track = currentTrack,
+                                timeMillis = currentTrackTimeMillis,
+                                durationMillis = currentTrackDurationMillis,
+                            )
+                        }
                         if (!autoAdvanceWhenStopped) continue
 
                         // Standalone queues do not have a sequential playback owner.
@@ -1475,8 +1671,27 @@ internal class AppStatePlaybackCoordinator(
                 }
             }
             } finally {
-                PlaybackForegroundService.onPlaybackAction = null
-                PlaybackForegroundService.stop(state.context)
+                // P1-1: service teardown runs synchronously and only while this job is
+                // still the active reporting job (a cancelled old job must never stop the
+                // new playback's notification or wipe its action callback); the bounded
+                // 032 end is fire-and-forget and never gates the teardown on network.
+                val endingSessionId = owned032SessionId
+                val endingSourceId = owned032SourceId
+                ReportingJobCleanup(
+                    isActiveJob = { state.playbackReportingJob === thisJob },
+                    stopPlaybackService = {
+                        PlaybackForegroundService.onPlaybackAction = null
+                        PlaybackForegroundService.stop(state.context)
+                    },
+                    requestSessionEnd = {
+                        if (endingSessionId != null && endingSourceId != null) {
+                            state.music032ReporterFor(endingSourceId)?.requestEnd(
+                                ReporterEndReason.Stopped,
+                                expectedSessionId = endingSessionId,
+                            )
+                        }
+                    },
+                ).onJobFinished()
             }
         }
     }

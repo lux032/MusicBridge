@@ -1,6 +1,7 @@
 package com.lux032.musicbridge
 
 import android.app.Application
+import android.util.Log
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -30,7 +31,12 @@ import com.lux032.musicbridge.local.NetworkQualityMonitor
 import com.lux032.musicbridge.music.MediaTokenProbeResult
 import com.lux032.musicbridge.music.Music032CapabilitiesStore
 import com.lux032.musicbridge.music.Music032Client
+import com.lux032.musicbridge.music.Music032PlaybackReporter
+import com.lux032.musicbridge.music.Music032ReporterApi
 import com.lux032.musicbridge.music.MusicSourceClient
+import com.lux032.musicbridge.music.ReporterEndReason
+import com.lux032.musicbridge.music.ReporterNotice
+import com.lux032.musicbridge.music.ReporterPlayState
 import com.lux032.musicbridge.service.PlaybackForegroundService
 import com.lux032.musicbridge.sonos.SonosController
 import com.lux032.musicbridge.sonos.SonosRoom
@@ -123,7 +129,80 @@ class AppState(
     private val libraryCoordinator = AppStateLibraryCoordinator(this)
     private val playbackCoordinator = AppStatePlaybackCoordinator(this)
     private val musicSourceClients = java.util.concurrent.ConcurrentHashMap<String, CachedMusicSourceClient>()
+    private val music032Reporters = java.util.concurrent.ConcurrentHashMap<String, Music032PlaybackReporter>()
+
+    /**
+     * Process-level scope driving the 032 reporter actors. Deliberately NOT [scope]:
+     * onCleared cancels [scope], and the bounded shutdown ends must still be sent
+     * afterwards (fire-and-forget, deadline-bounded, cancellable transport).
+     */
+    private val playbackReporterScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    /** Sources whose reporter must not be recreated (deleted server / tombstoned edit). */
+    private val tombstoned032SourceIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    /** Per-source reporter generation: bumped on retire so a dying reporter's async
+     *  preference writes (snapshot/resume-block) are dropped instead of clobbering the
+     *  replacement reporter's fresh state (P2-B). */
+    private val music032ReporterGenerations = java.util.concurrent.ConcurrentHashMap<String, Long>()
     internal val localPlaybackCoordinator = AppStateLocalPlaybackCoordinator(this)
+
+    /**
+     * Per-032-source playback session reporter (plan C, apiRevision 3). Reporters own
+     * sessionId/seq/hasPlayed and run a non-blocking actor on [playbackReporterScope];
+     * every exit path ends the open session with a bounded fire-and-forget end.
+     */
+    internal fun music032ReporterFor(sourceId: String): Music032ReporterApi? {
+        if (sourceId in tombstoned032SourceIds) return null
+        val client = runCatching { clientFor(sourceId) }.getOrNull() as? Music032Client ?: return null
+        return music032Reporters.getOrPut(sourceId) {
+            val generation = music032ReporterGenerations[sourceId] ?: 0L
+            Music032PlaybackReporter(
+                transport = client.playbackEventTransport,
+                preferences = AppPreferencesMusic032ReporterPreferences(appPreferences, sourceId) {
+                    (music032ReporterGenerations[sourceId] ?: 0L) == generation
+                },
+                scope = playbackReporterScope,
+                logger = { message -> Log.w("Music032Reporter", message) },
+                notifier = { notice ->
+                    scope.launch {
+                        when (notice) {
+                            is ReporterNotice.ResumeBlocked ->
+                                actionMessage = "播放记录与服务端会话冲突，本次播放不再上报"
+                            is ReporterNotice.StartRejected ->
+                                actionMessage = "播放上报被服务器拒绝（HTTP ${notice.status}），本次播放不再上报"
+                        }
+                    }
+                },
+            )
+        }
+    }
+
+    /**
+     * Ends and drops the reporter of one source; [tombstone] prevents any recreation.
+     * [forget] wipes the persisted resume snapshot SYNCHRONOUSLY (P2-N3): the dying
+     * reporter's async cleanup is generation-guarded and may be dropped, so the clear
+     * cannot be delegated to it. Only used when the source is gone for good or points at
+     * a DIFFERENT library (a track id means nothing across libraries).
+     */
+    private fun retireMusic032Reporter(sourceId: String, tombstone: Boolean, forget: Boolean = true) {
+        if (tombstone) tombstoned032SourceIds += sourceId
+        music032ReporterGenerations.merge(sourceId, 1L, Long::plus)
+        if (forget) {
+            appPreferences.saveMusic032LastSession(sourceId, null)
+            appPreferences.saveMusic032ResumeBlock(sourceId, null)
+        }
+        music032Reporters.remove(sourceId)?.requestShutdown(ReporterEndReason.Stopped, forget = forget)
+    }
+
+    private val music032ProfileChangeHandler = Music032ProfileChangeHandler(
+        retireReporter = { sourceId, forget ->
+            retireMusic032Reporter(sourceId, tombstone = false, forget = forget)
+        },
+        reporterFactory = { sourceId -> music032ReporterFor(sourceId) },
+        blockResume = { sourceId, trackId -> appPreferences.saveMusic032ResumeBlock(sourceId, trackId) },
+        notify = { message -> actionMessage = message },
+    )
 
     val navigationStack = mutableStateListOf(AppSection.Home)
     val serverProfiles = mutableStateListOf<MusicServerProfile>().apply { addAll(initialProfiles) }
@@ -470,14 +549,28 @@ class AppState(
             errorMessage = Strings.music032MissingMediaToken
             return
         }
-        if (index >= 0 && serverProfiles[index].type == MusicServerType.Music032) {
-            val previous = serverProfiles[index]
-            Music032CapabilitiesStore.invalidate(Music032CapabilitiesStore.Key.of(previous.baseUrl, previous.token))
+        val previous032 = if (index >= 0) {
+            serverProfiles[index].takeIf { it.type == MusicServerType.Music032 }
+        } else {
+            null
+        }
+        if (previous032 != null) {
+            Music032CapabilitiesStore.invalidate(
+                Music032CapabilitiesStore.Key.of(previous032.baseUrl, previous032.token),
+            )
         }
         val mediaUrlChanged = normalized.type == MusicServerType.Music032 && index >= 0 &&
             (serverProfiles[index].baseUrl != normalized.baseUrl || serverProfiles[index].mediaToken != normalized.mediaToken)
         musicSourceClients.remove(normalized.id)
         if (index >= 0) serverProfiles[index] = normalized else serverProfiles.add(normalized)
+        // P1-N1: connection-change handling runs STRICTLY AFTER the client cache entry
+        // and the stored profile carry the NEW credentials, so a handover reporter is
+        // built on the new token — never on the revoked old one.
+        if (previous032 != null) {
+            music032ProfileChangeHandler.onProfileSaved(previous032, normalized, miniPlayerState) {
+                localPlaybackEngine.currentPositionMillis
+            }
+        }
         activateServer(normalized, refreshAfterSave || mediaUrlChanged)
         actionMessage = "已保存服务器：${normalized.displayName}"
     }
@@ -492,6 +585,9 @@ class AppState(
         val index = serverProfiles.indexOfFirst { it.id == serverId }
         if (index < 0) return
         val wasActive = connectionPreferences.id == serverId
+        // Tombstone + retire unconditionally (P3): even without local playback a lingering
+        // reporter with an open session must stop heartbeating the deleted server.
+        retireMusic032Reporter(serverId, tombstone = true, forget = true)
         if (miniPlayerState?.tracks?.any { it.sourceId == serverId } == true) {
             albumPlaybackJob?.cancel()
             playbackReportingJob?.cancel()
@@ -790,6 +886,15 @@ class AppState(
     fun cancelSleepTimer() = playbackCoordinator.cancelSleepTimer()
 
     override fun onCleared() {
+        // Fire-and-forget bounded ends on the process-level reporter scope: no runBlocking
+        // on the main thread (ANR/interlock risk), and delivery does not depend on the
+        // scope this method is about to cancel. The transport is genuinely cancellable and
+        // shutdown sends carry their own 1.5s deadline; a force kill or a lost end is
+        // backstopped by the server-side 90s/10min lease. The screen turning off never
+        // reaches here, so background playback keeps heartbeating.
+        music032Reporters.values.forEach { reporter ->
+            reporter.requestShutdown(ReporterEndReason.ClientClosed)
+        }
         LocalPlaybackService.stop(context)
         PlaybackForegroundService.stop(context)
         localPlaybackEngine.release()
