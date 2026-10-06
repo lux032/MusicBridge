@@ -191,14 +191,16 @@ fun PlexAlbumScreen(
     val nowPlayingPalette = rememberAnimatedArtworkPalette(nowPlayingArtworkUrl)
 
     val activeSection = state.activeSection
-    val bottomNavigationHeight = 84.dp
+    // Docked navigation bar (Design D). Section content already sits above the system
+    // navigation inset, so only the bar's own content height counts here.
+    val bottomNavigationHeight = DockedNavigationHeight
     val isNavigationRailVisible = layoutInfo.useNavigationRail && activeSection != AppSection.PlaybackDetail
     val navigationBottomPadding = if (isNavigationRailVisible) 0.dp else bottomNavigationHeight
     val contentBottomPadding = with(density) {
         if (activeSection == AppSection.PlaybackDetail) {
             20.dp
         } else if (hasMiniPlayer) {
-            miniPlayerHeightPx.toDp() + navigationBottomPadding + 28.dp
+            miniPlayerHeightPx.toDp() + navigationBottomPadding + 16.dp
         } else {
             navigationBottomPadding + 20.dp
         }
@@ -207,9 +209,9 @@ fun PlexAlbumScreen(
         if (activeSection == AppSection.PlaybackDetail) {
             24.dp
         } else if (hasMiniPlayer) {
-            miniPlayerHeightPx.toDp() + navigationBottomPadding + 32.dp
+            miniPlayerHeightPx.toDp() + navigationBottomPadding + systemBarBottomPadding + 12.dp
         } else {
-            navigationBottomPadding + 24.dp
+            navigationBottomPadding + systemBarBottomPadding + 12.dp
         }
     }
 
@@ -527,6 +529,11 @@ fun PlexAlbumScreen(
                                 state.startSleepTimer(hours, minutes)
                             },
                             onCancelSleepTimer = state::cancelSleepTimer,
+                            sonosVolume = state.sonosVolume,
+                            hasLoadedSonosVolume = state.hasLoadedSonosVolume,
+                            onVolumeChange = state.miniPlayerState?.sonosRoom?.let { room ->
+                                { newValue: Float -> state.applyVolumeChange(room, newValue) }
+                            },
                         )
                     }
                 } else if (currentSection == AppSection.ArtistAlbums) {
@@ -895,16 +902,16 @@ fun PlexAlbumScreen(
                 targetOffsetY = { it },
             ) + fadeOut(tween(180)),
         ) {
+            // Docked room bar: sits flush on top of the navigation bar (or on the system
+            // navigation inset when the tablet rail replaces the bottom bar).
             BottomMiniPlayerHost(
                 appState = state,
                 modifier = Modifier
                     .padding(
-                        start = layoutInfo.horizontalPadding,
-                        end = layoutInfo.horizontalPadding,
-                        top = 12.dp,
-                        bottom = navigationBottomPadding + 12.dp,
+                        bottom = if (isNavigationRailVisible) 0.dp else navigationBottomPadding + systemBarBottomPadding,
                     )
                     .onSizeChanged { miniPlayerHeightPx = it.height },
+                bottomInset = if (isNavigationRailVisible) systemBarBottomPadding else 0.dp,
                 isPlayerOpen = activeSection == AppSection.PlaybackDetail,
                 onOpenPlayback = state::openPlaybackDetail,
             )

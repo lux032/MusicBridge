@@ -1,6 +1,5 @@
 package com.lux032.musicbridge.ui.settings.components
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -33,6 +32,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.lux032.musicbridge.AppColors
+import com.lux032.musicbridge.KeyColors
 import com.lux032.musicbridge.LocalArtworkPalette
 import java.util.Locale
 
@@ -58,8 +58,7 @@ fun SettingsGroup(
                 if (!title.isNullOrBlank()) {
                     Text(
                         text = title,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
+                        style = MaterialTheme.typography.titleLarge,
                         color = AppColors.TextPrimary,
                     )
                 }
@@ -67,16 +66,17 @@ fun SettingsGroup(
                     Text(
                         text = description,
                         style = MaterialTheme.typography.bodySmall,
-                        color = AppColors.TextSecondary,
+                        color = AppColors.TextTertiary,
                     )
                 }
             }
         }
 
+        // Borderless grouped surface: a quiet translucent fill separates the group from the
+        // tinted field, and hairlines separate the rows.
         Surface(
-            shape = RoundedCornerShape(18.dp),
-            color = AppColors.CardSurface,
-            border = BorderStroke(1.dp, AppColors.Border),
+            shape = RoundedCornerShape(20.dp),
+            color = Color.White.copy(alpha = 0.055f),
         ) {
             Column(
                 modifier = Modifier
@@ -225,8 +225,10 @@ fun SettingsSwitchItem(
             colors = SwitchDefaults.colors(
                 checkedThumbColor = palette.onAccent,
                 checkedTrackColor = palette.accent,
+                checkedBorderColor = Color.Transparent,
                 uncheckedThumbColor = AppColors.TextSecondary,
-                uncheckedTrackColor = AppColors.SurfaceMuted,
+                uncheckedTrackColor = KeyColors.Tonal,
+                uncheckedBorderColor = Color.Transparent,
             ),
         )
     }
@@ -388,8 +390,8 @@ fun DeviceStorageStatus(
 fun SettingsDivider(modifier: Modifier = Modifier) {
     HorizontalDivider(
         modifier = modifier.padding(horizontal = 16.dp),
-        color = AppColors.Border.copy(alpha = 0.5f),
-        thickness = 0.5.dp,
+        color = KeyColors.Line,
+        thickness = 1.dp,
     )
 }
 

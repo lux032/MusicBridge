@@ -21,7 +21,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.lux032.musicbridge.AppColors
 import com.lux032.musicbridge.LocalAppLayoutInfo
+import com.lux032.musicbridge.Strings
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import com.lux032.musicbridge.ui.settings.sections.AboutAndDiagnosticsSection
 import com.lux032.musicbridge.ui.settings.sections.AiSettingsSection
 import com.lux032.musicbridge.ui.settings.sections.AudioPlaybackSection
@@ -81,8 +85,14 @@ fun SettingsScreen(
                     end = layoutInfo.horizontalPadding,
                     bottom = bottomContentPadding,
                 ),
-            verticalArrangement = Arrangement.spacedBy(20.dp),
+            verticalArrangement = Arrangement.spacedBy(28.dp),
         ) {
+            Text(
+                text = Strings.settings,
+                style = MaterialTheme.typography.headlineMedium,
+                color = AppColors.TextPrimary,
+                modifier = Modifier.padding(start = 4.dp),
+            )
             // 1. Music Servers Management
             ServerSection(
                 serverProfiles = state.serverProfiles,

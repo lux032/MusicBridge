@@ -1,5 +1,8 @@
 package com.lux032.musicbridge.ui.settings.sections
 
+import com.lux032.musicbridge.KeyButton
+import com.lux032.musicbridge.KeyStyle
+import androidx.compose.ui.graphics.Color
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -143,13 +146,10 @@ fun AiSettingsSection(
 
                 Spacer(Modifier.height(4.dp))
 
-                Button(
+                KeyButton(
                     onClick = { onSave(draft) },
                     modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = palette.accent,
-                        contentColor = palette.onAccent,
-                    ),
+                    style = KeyStyle.Hi,
                 ) {
                     Text(Strings.saveAiSettings)
                 }
@@ -161,7 +161,7 @@ fun AiSettingsSection(
 @Composable
 private fun textFieldColors() = OutlinedTextFieldDefaults.colors(
     focusedBorderColor = LocalArtworkPalette.current.accent,
-    unfocusedBorderColor = AppColors.BorderStrong,
+    unfocusedBorderColor = Color.White.copy(alpha = 0.14f),
     focusedLabelColor = LocalArtworkPalette.current.accent,
     unfocusedLabelColor = AppColors.TextSecondary,
     cursorColor = LocalArtworkPalette.current.accent,

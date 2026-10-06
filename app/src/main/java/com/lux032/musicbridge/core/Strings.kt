@@ -67,6 +67,18 @@ object Strings {
     val noPlayback get() = if (isZhCN) "当前没有播放中的专辑" else "No Active Playback"
     val noPlaybackDesc get() = if (isZhCN) "先从专辑详情里播放内容，底部栏出现后再进入播放详情。" else "Start playback from album details first. Then access playback details from the bottom bar."
     val nowPlaying get() = if (isZhCN) "正在播放" else "Now Playing"
+    // Design D: the primary play key names its destination ("在 卧室 播放").
+    val playOn get() = { target: String ->
+        if (target == localPlayback) {
+            if (isZhCN) "在本机播放" else "Play here"
+        } else {
+            if (isZhCN) "在 $target 播放" else "Play in $target"
+        }
+    }
+    val fromAlbum get() = if (isZhCN) "来自专辑" else "From album"
+    val queueShort get() = if (isZhCN) "队列" else "Queue"
+    val timerShort get() = if (isZhCN) "定时" else "Timer"
+    val originalQuality get() = if (isZhCN) "原始音质" else "Original"
     val lyrics get() = if (isZhCN) "歌词" else "Lyrics"
     val noLyrics get() = if (isZhCN) "暂无歌词 / 纯音乐" else "No lyrics / Instrumental"
     val playlist get() = if (isZhCN) "播放列表" else "Playlist"
@@ -221,6 +233,7 @@ object Strings {
     val wifiPrecacheTitle get() = if (isZhCN) "WiFi 预缓存" else "WiFi Precache"
     val cellularPrecacheTitle get() = if (isZhCN) "蜂窝网络预缓存" else "Cellular Precache"
     val localCacheTitle get() = if (isZhCN) "本机缓存" else "Local Cache"
+    val clear get() = if (isZhCN) "清除" else "Clear"
     val clearCache get() = if (isZhCN) "清空缓存" else "Clear Cache"
     val localPlaybackSectionDesc get() = if (isZhCN) "手机直接播放时的音质与缓存。未选择 Sonos 房间时默认本机播放。" else "Quality and caching for on-device playback. Used by default when no Sonos room is selected."
     val wifiQualityDesc get() = if (isZhCN) "WiFi 网络下本机播放的音质" else "Playback quality on WiFi"

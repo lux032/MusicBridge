@@ -27,7 +27,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.Sort
@@ -76,32 +78,6 @@ internal fun HomeSection(
     var isOutputDialogVisible by remember { mutableStateOf(false) }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        // Pinned top-right output picker: a small icon button instead of a full-width strip.
-        // The icon mirrors the current target (phone vs speaker) so the state is readable
-        // at a glance without spending a row of feed space on it.
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = layoutInfo.horizontalPadding, top = 8.dp, end = layoutInfo.horizontalPadding),
-            horizontalArrangement = Arrangement.End,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            IconCircleButton(
-                onClick = { isOutputDialogVisible = true },
-                containerColor = Color.White.copy(alpha = 0.10f),
-            ) {
-                Icon(
-                    imageVector = if (playbackTarget is PlaybackTarget.Sonos) {
-                        Icons.Filled.Speaker
-                    } else {
-                        Icons.Filled.PhoneAndroid
-                    },
-                    contentDescription = Strings.selectOutputDevice,
-                    tint = AppColors.TextPrimary,
-                    modifier = Modifier.size(20.dp),
-                )
-            }
-        }
         LazyColumn(
             state = listState,
             modifier = Modifier.weight(1f),
@@ -113,6 +89,28 @@ internal fun HomeSection(
             ),
             verticalArrangement = Arrangement.spacedBy(layoutInfo.contentSpacing),
         ) {
+        // Page header: serif title + the output room key (room-first: where music goes is
+        // always one tap away and always legible).
+        item(key = "home-header", contentType = "header") {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = Strings.home,
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = AppColors.TextPrimary,
+                    modifier = Modifier.weight(1f),
+                )
+                RoomKey(
+                    targetName = playbackTarget.displayName,
+                    isSonos = playbackTarget is PlaybackTarget.Sonos,
+                    onClick = { isOutputDialogVisible = true },
+                )
+            }
+        }
         errorMessage?.let { message ->
             item(key = "home-error", contentType = "message") {
                 MessageCard(label = Strings.error, message = message, tone = MessageTone.Error)
@@ -144,12 +142,12 @@ internal fun HomeSection(
                 }
             }
             if (allAlbums.isNotEmpty()) {
-                item(key = "home-all-albums", contentType = "entry") {
-                    EntryActionCard(
-                        title = Strings.allAlbums,
-                        body = Strings.albumsSynced(allAlbums.size),
-                        actionLabel = Strings.view,
-                        onAction = onOpenAllAlbums,
+                item(key = "home-quick-keys", contentType = "entry") {
+                    HomeQuickKeys(
+                        albumCount = allAlbums.size,
+                        onOpenAllAlbums = onOpenAllAlbums,
+                        onOpenFavorites = onOpenFavorites,
+                        onOpenRecentAdded = onOpenRecentAdded,
                     )
                 }
             }
@@ -221,14 +219,9 @@ private fun RecentPlayedShelfSection(
 
     Column(
         modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text(
-            text = Strings.recentPlayed,
-            style = MaterialTheme.typography.titleLarge,
-            color = AppColors.TextPrimary,
-            fontWeight = FontWeight.SemiBold,
-        )
+        SectionHeader(title = Strings.recentPlayed, modifier = Modifier.padding(top = 8.dp))
 
         LazyRow(
             modifier = Modifier.fillMaxWidth(),
@@ -255,12 +248,9 @@ private fun RecentPlayedShelfSection(
                         modifier = Modifier
                             .fillMaxWidth()
                             .aspectRatio(1f),
-                        shape = RoundedCornerShape(20.dp),
+                        shape = RoundedCornerShape(12.dp),
                         color = AppColors.CardSurface,
-                        border = BorderStroke(
-                            width = if (selectedAlbum?.ratingKey == album.ratingKey) 1.5.dp else 1.dp,
-                            color = if (selectedAlbum?.ratingKey == album.ratingKey) LocalArtworkPalette.current.accent else AppColors.Border,
-                        ),
+                        shadowElevation = 6.dp,
                     ) {
                         AsyncAlbumArtwork(
                             imageUrl = album.thumbUrl,
@@ -274,7 +264,7 @@ private fun RecentPlayedShelfSection(
                         text = album.title,
                         color = AppColors.TextPrimary,
                         style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Bold,
+                        fontWeight = FontWeight.SemiBold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -347,6 +337,92 @@ internal fun EntryActionCard(
 }
 
 /**
+ * Home quick-entry keys (Design D): three real destinations as tonal squircle keys instead of
+ * the old full-width "全部专辑" card. The first key carries the synced album count.
+ */
+@Composable
+private fun HomeQuickKeys(
+    albumCount: Int,
+    onOpenAllAlbums: () -> Unit,
+    onOpenFavorites: () -> Unit,
+    onOpenRecentAdded: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        HomeQuickKey(
+            icon = Icons.Filled.Album,
+            label = Strings.allAlbums,
+            detail = "%,d".format(albumCount),
+            onClick = onOpenAllAlbums,
+            modifier = Modifier.weight(1.35f),
+        )
+        HomeQuickKey(
+            icon = Icons.Filled.Favorite,
+            label = Strings.favoriteAlbums,
+            onClick = onOpenFavorites,
+            modifier = Modifier.weight(1f),
+        )
+        HomeQuickKey(
+            icon = Icons.Filled.LibraryMusic,
+            label = Strings.recentAdded,
+            onClick = onOpenRecentAdded,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+@Composable
+private fun HomeQuickKey(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    detail: String? = null,
+) {
+    Key(
+        onClick = onClick,
+        modifier = modifier.height(72.dp),
+        style = KeyStyle.Tonal,
+        shape = RoundedCornerShape(18.dp),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(12.dp),
+            verticalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = LocalArtworkPalette.current.accent,
+                modifier = Modifier.size(22.dp),
+            )
+            Row(verticalAlignment = Alignment.Bottom) {
+                Text(
+                    text = label,
+                    color = AppColors.TextPrimary,
+                    style = MaterialTheme.typography.labelLarge,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                if (detail != null) {
+                    Text(
+                        text = detail,
+                        color = AppColors.TextSecondary,
+                        style = MaterialTheme.typography.labelMedium,
+                        maxLines = 1,
+                        modifier = Modifier.padding(start = 5.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
  * Emits a preview grid as one item per row instead of a single giant item, so scrolling past
  * it composes a handful of covers per frame rather than the whole grid at once.
  */
@@ -363,26 +439,14 @@ private fun androidx.compose.foundation.lazy.LazyListScope.albumPreviewGridItems
     onPlayAlbum: ((PlexAlbum) -> Unit)? = null,
 ) {
     item(key = "$keyPrefix-header", contentType = "grid-header") {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.Top,
-        ) {
-            Text(
-                text = title,
-                modifier = Modifier.weight(1f),
-                style = MaterialTheme.typography.titleLarge,
-                color = AppColors.TextPrimary,
-                fontWeight = FontWeight.SemiBold,
-            )
-            TextButton(onClick = onAction) {
-                Text(
-                    text = "$actionLabel ›",
-                    color = LocalArtworkPalette.current.accent,
-                    fontWeight = FontWeight.SemiBold,
-                )
-            }
-        }
+        SectionHeader(
+            title = title,
+            actionLabel = actionLabel,
+            onAction = onAction,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 8.dp),
+        )
     }
     albums.chunked(columns).forEachIndexed { rowIndex, rowAlbums ->
         item(key = "$keyPrefix-row-$rowIndex", contentType = "album-row") {
@@ -391,7 +455,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.albumPreviewGridItems
                 modifier = Modifier
                     .fillMaxWidth()
                     .animateItem(fadeInSpec = null, fadeOutSpec = null),
-                horizontalArrangement = Arrangement.spacedBy(layoutInfo.contentSpacing),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 rowAlbums.forEach { album ->
                     Box(modifier = Modifier.weight(1f)) {
@@ -595,21 +659,20 @@ internal fun AllAlbumsSection(
                         text = Strings.allAlbums,
                         style = MaterialTheme.typography.headlineMedium,
                         color = AppColors.TextPrimary,
-                        fontWeight = FontWeight.Bold,
                     )
                     Text(
                         text = heroSubtitle,
-                        color = AppColors.TextSecondary,
+                        color = AppColors.TextTertiary,
+                        style = MaterialTheme.typography.bodyMedium,
                     )
                 }
             }
             item(span = { GridItemSpan(maxLineSpan) }) {
-                OutlinedTextField(
+                TonalSearchField(
                     value = searchQuery,
                     onValueChange = onSearchQueryChange,
+                    placeholder = Strings.searchPlaceholder,
                     modifier = Modifier.fillMaxWidth(),
-                    label = { Text(Strings.searchPlaceholder) },
-                    singleLine = true,
                 )
             }
             item(span = { GridItemSpan(maxLineSpan) }) {
@@ -748,6 +811,7 @@ internal fun AllAlbumsSection(
     }
 }
 
+/** Filter / sort chip: tonal squircle, inverted to the hi fill while active. */
 @Composable
 private fun AlbumControlChip(
     icon: androidx.compose.ui.graphics.vector.ImageVector?,
@@ -755,15 +819,14 @@ private fun AlbumControlChip(
     selected: Boolean,
     onClick: () -> Unit,
 ) {
-    val accent = LocalArtworkPalette.current.accent
-    Surface(
-        modifier = Modifier.clickable(onClick = onClick),
-        shape = RoundedCornerShape(18.dp),
-        color = if (selected) AppColors.CardSurfaceStrong else AppColors.CardSurface,
-        border = BorderStroke(1.dp, if (selected) accent else AppColors.Border),
+    Key(
+        onClick = onClick,
+        style = if (selected) KeyStyle.Hi else KeyStyle.Tonal,
+        shape = RoundedCornerShape(14.dp),
+        modifier = Modifier.height(40.dp),
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            modifier = Modifier.padding(horizontal = 14.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -771,15 +834,12 @@ private fun AlbumControlChip(
                 Icon(
                     imageVector = it,
                     contentDescription = null,
-                    tint = if (selected) accent else AppColors.TextSecondary,
                     modifier = Modifier.size(16.dp),
                 )
             }
             Text(
                 text = label,
-                color = if (selected) accent else AppColors.TextSecondary,
-                style = MaterialTheme.typography.bodySmall,
-                fontWeight = FontWeight.Medium,
+                style = MaterialTheme.typography.labelLarge,
             )
         }
     }
@@ -806,36 +866,17 @@ private fun <T> AlbumOptionPickerDialog(
             )
         },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 options.forEach { option ->
-                    val isSelected = option == selected
-                    Surface(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                onDismiss()
-                                onSelect(option)
-                            },
-                        shape = RoundedCornerShape(14.dp),
-                        color = if (isSelected) AppColors.CardSurfaceStrong else AppColors.CardSurface,
-                        border = BorderStroke(1.dp, if (isSelected) LocalArtworkPalette.current.accent else AppColors.Border),
+                    ChoiceRow(
+                        selected = option == selected,
+                        onClick = {
+                            onDismiss()
+                            onSelect(option)
+                        },
+                        modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 14.dp, vertical = 12.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(labelOf(option), color = AppColors.TextPrimary)
-                            if (isSelected) {
-                                Icon(
-                                    imageVector = Icons.Filled.Check,
-                                    contentDescription = null,
-                                    tint = LocalArtworkPalette.current.accent,
-                                )
-                            }
-                        }
+                        Text(labelOf(option), color = AppColors.TextPrimary, modifier = Modifier.weight(1f))
                     }
                 }
             }
@@ -843,94 +884,3 @@ private fun <T> AlbumOptionPickerDialog(
     )
 }
 
-@Composable
-internal fun SonosSettingsCard(
-    rooms: List<SonosRoom>,
-    selectedRoom: SonosRoom?,
-    isLoading: Boolean,
-    discoveryAttempted: Boolean,
-    onDiscover: () -> Unit,
-    onSelectRoom: (SonosRoom) -> Unit,
-) {
-    val palette = LocalArtworkPalette.current
-    Surface(
-        shape = RoundedCornerShape(26.dp),
-        color = AppColors.CardSurface,
-        border = BorderStroke(1.dp, AppColors.Border),
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(18.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
-        ) {
-            Text(Strings.sonosRooms, style = MaterialTheme.typography.titleLarge, color = AppColors.TextPrimary)
-            Text(Strings.sonosRoomsDesc, color = AppColors.TextSecondary)
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Button(
-                    onClick = onDiscover,
-                    enabled = !isLoading,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = palette.accent,
-                        contentColor = palette.onAccent,
-                    ),
-                ) {
-                    Text(Strings.discoverDevices)
-                }
-            }
-
-            if (discoveryAttempted && rooms.isEmpty() && !isLoading) {
-                Text(Strings.noRoomsFound, color = AppColors.ErrorText)
-            }
-
-            rooms.forEach { room ->
-                val interactionSource = remember { MutableInteractionSource() }
-                val isPressed by interactionSource.collectIsPressedAsState()
-                val scale by animateFloatAsState(
-                    targetValue = if (isPressed) 0.97f else 1f,
-                    label = "room_scale",
-                )
-                Surface(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .graphicsLayer {
-                            scaleX = scale
-                            scaleY = scale
-                        },
-                    shape = RoundedCornerShape(18.dp),
-                    color = if (room.coordinatorUuid == selectedRoom?.coordinatorUuid) AppColors.CardSurfaceStrong else AppColors.CardSurface,
-                    border = BorderStroke(1.dp, if (room.coordinatorUuid == selectedRoom?.coordinatorUuid) AppColors.BorderStrong else AppColors.Border),
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable(
-                                interactionSource = interactionSource,
-                                indication = ripple(bounded = true),
-                                onClick = { onSelectRoom(room) },
-                            )
-                            .padding(14.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column(
-                            modifier = Modifier.weight(1f),
-                            verticalArrangement = Arrangement.spacedBy(4.dp),
-                        ) {
-                            Text(room.roomName, fontWeight = FontWeight.SemiBold, color = AppColors.TextPrimary)
-                            Text(
-                                if (room.memberCount > 1) Strings.members(room.memberCount) else Strings.singleRoom,
-                                color = AppColors.TextSecondary,
-                            )
-                        }
-                        Text(
-                            if (room.coordinatorUuid == selectedRoom?.coordinatorUuid) Strings.currentRoom else Strings.select,
-                            color = AppColors.TextPrimary,
-                            fontWeight = FontWeight.Medium,
-                        )
-                    }
-                }
-            }
-        }
-    }
-}

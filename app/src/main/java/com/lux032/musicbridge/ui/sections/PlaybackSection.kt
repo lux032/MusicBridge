@@ -114,6 +114,9 @@ internal fun PlaybackDetailSection(
     onRefreshRooms: () -> Unit,
     onStartSleepTimer: (Int, Int) -> Unit,
     onCancelSleepTimer: () -> Unit,
+    sonosVolume: Float = 0f,
+    hasLoadedSonosVolume: Boolean = false,
+    onVolumeChange: ((Float) -> Unit)? = null,
     // The playback screen lays out edge-to-edge; these insets keep foreground content inside
     // the safe area while the backdrop paints behind the transparent system bars.
     topSystemBarInset: androidx.compose.ui.unit.Dp = 0.dp,
@@ -179,61 +182,41 @@ internal fun PlaybackDetailSection(
     }
 
     val layoutInfo = LocalAppLayoutInfo.current
+    val isSonosTarget = currentState.target is PlaybackTarget.Sonos
+    val showsVolume = isSonosTarget && onVolumeChange != null
+    // Design D top bar: dismiss chevron · output room key · more. The room lives here once;
+    // the volume row below belongs to it.
     val topBar: @Composable () -> Unit = {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(48.dp),
+                .height(56.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconCircleButton(
+            BareIcon(
+                icon = Icons.Filled.KeyboardArrowDown,
+                contentDescription = Strings.back,
                 onClick = onBack,
-                containerColor = Color.White.copy(alpha = 0.08f),
-                modifier = Modifier.size(40.dp),
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.ArrowBack,
-                    contentDescription = Strings.back,
-                    tint = AppColors.TextPrimary,
-                    modifier = Modifier.size(20.dp),
+                tint = AppColors.TextPrimary,
+                iconSize = 28.dp,
+                modifier = Modifier.offset(x = (-12).dp),
+            )
+            Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                RoomKey(
+                    targetName = currentState.target.displayName,
+                    isSonos = isSonosTarget,
+                    onClick = { isRoomDialogVisible = true },
                 )
             }
-            TabRow(
-                selectedTabIndex = selectedPlayerPage,
-                modifier = Modifier.weight(1f),
-                containerColor = Color.Transparent,
-                contentColor = palette.accent,
-                divider = {},
-                indicator = { tabPositions ->
-                    Box(
-                        Modifier.tabIndicatorOffset(tabPositions[selectedPlayerPage])
-                            .fillMaxWidth()
-                            .wrapContentSize(Alignment.BottomCenter)
-                            .padding(bottom = 2.dp)
-                            .width(28.dp)
-                            .height(3.dp)
-                            .background(palette.accent, CircleShape)
-                    )
-                },
-            ) {
-                listOf(Strings.nowPlaying, Strings.lyrics).forEachIndexed { index, label ->
-                    Tab(
-                        selected = selectedPlayerPage == index,
-                        onClick = { selectedPlayerPage = index },
-                        text = { Text(label, fontWeight = FontWeight.SemiBold) },
-                    )
-                }
-            }
-            IconCircleButton(
+            BareIcon(
+                icon = Icons.Filled.MoreVert,
+                contentDescription = Strings.more,
                 onClick = { isMoreSheetVisible = true },
-                containerColor = Color.White.copy(alpha = 0.08f),
-                modifier = Modifier.size(40.dp),
-            ) {
-                Icon(Icons.Filled.MoreHoriz, contentDescription = Strings.more, tint = AppColors.TextPrimary, modifier = Modifier.size(20.dp))
-            }
+                modifier = Modifier.offset(x = 12.dp),
+            )
         }
     }
-    val artworkShape = RoundedCornerShape(28.dp)
+    val artworkShape = RoundedCornerShape(14.dp)
     val artworkContent: @Composable (androidx.compose.ui.unit.Dp) -> Unit = { maximumSize ->
         AsyncAlbumArtwork(
             imageUrl = displayAlbum.thumbUrl,
@@ -243,9 +226,7 @@ internal fun PlaybackDetailSection(
                 .widthIn(max = maximumSize)
                 .fillMaxWidth()
                 .aspectRatio(1f)
-                // Subtle black depth shadow only — the blurred backdrop already provides the
-                // ambiance, and a strong colored glow reads as a dark band above the cover.
-                .shadow(10.dp, artworkShape, clip = false)
+                .shadow(16.dp, artworkShape, clip = false)
                 .clip(artworkShape),
             contentScale = ContentScale.Crop,
             thumbnailSize = maximumSize,
@@ -253,265 +234,399 @@ internal fun PlaybackDetailSection(
             placeholderThumbnailSize = 52.dp,
         )
     }
-    val playerDetails: @Composable ColumnScope.(Boolean, Boolean) -> Unit = { compact, useFullTransport ->
-        Column(
-            modifier = Modifier
-                .widthIn(max = 560.dp)
-                .fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(if (compact) 8.dp else 16.dp),
-        ) {
+
+    // ── Group 1: track meta (title + favourite key, artist · album, signal path) ──
+    val playerMeta: @Composable (Boolean) -> Unit = { compact ->
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .staggeredPlayerEnter(0),
-            verticalArrangement = Arrangement.spacedBy(if (compact) 3.dp else 6.dp),
+            verticalArrangement = Arrangement.spacedBy(if (compact) 4.dp else 6.dp),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.Top,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Text(
-                    currentTrack.title,
-                    modifier = Modifier.weight(1f).basicMarquee(),
-                    style = MaterialTheme.typography.headlineSmall,
-                    color = AppColors.TextPrimary,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                IconButton(
-                    enabled = !isFavoriteLoading,
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(if (compact) 4.dp else 6.dp),
+                ) {
+                    Text(
+                        currentTrack.title,
+                        modifier = Modifier.basicMarquee(),
+                        style = if (compact) MaterialTheme.typography.headlineSmall else MaterialTheme.typography.headlineMedium,
+                        color = AppColors.TextPrimary,
+                        maxLines = 1,
+                    )
+                    // "Artist · Album (year)": artist in the accent opens the artist page, the
+                    // album part opens the album page when it is a real album.
+                    val hasRealAlbum = !currentTrack.albumTitle.isNullOrBlank() ||
+                        (displayAlbum.title.isNotBlank() && !displayAlbum.title.equals(currentTrack.title, ignoreCase = true))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = displayAlbum.artistName ?: Strings.unknownArtist,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = palette.accent,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier
+                                .weight(1f, fill = false)
+                                .clip(RoundedCornerShape(6.dp))
+                                .clickable { onArtistClick(displayAlbum.artistName) },
+                        )
+                        if (hasRealAlbum) {
+                            val albumLabel = buildString {
+                                append(" · ")
+                                append(displayAlbum.title)
+                                displayAlbumYear?.let { append(" (").append(it).append(")") }
+                            }
+                            Text(
+                                text = albumLabel,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = AppColors.TextSecondary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier
+                                    .weight(1f, fill = false)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .then(
+                                        if (canOpenAlbum) Modifier.clickable { onAlbumClick(displayAlbum) } else Modifier,
+                                    ),
+                            )
+                        }
+                    }
+                }
+                Key(
                     onClick = {
                         optimisticFavorite = !optimisticFavorite
                         onToggleTrackFavorite(currentTrack)
                     },
+                    modifier = Modifier.size(48.dp),
+                    style = if (optimisticFavorite) KeyStyle.Hi else KeyStyle.Tonal,
+                    enabled = !isFavoriteLoading,
+                    contentDescription = if (optimisticFavorite) Strings.favorited else Strings.notFavorited,
                 ) {
                     FavoriteIconGraphic(
                         isFavorite = optimisticFavorite,
-                        tint = if (optimisticFavorite) palette.accent else AppColors.TextSecondary,
-                        baseSize = 28.dp,
-                        selectedSize = 32.dp,
+                        tint = if (optimisticFavorite) keyHiInk() else AppColors.TextPrimary,
+                        baseSize = 22.dp,
+                        selectedSize = 22.dp,
                     )
                 }
             }
+            // Signal path: where the audio comes from and which room it goes to.
+            val qualityBadges = remember(currentTrack, currentState.target, localPlaybackPolicy, cachedOriginalTrackKeys) {
+                currentTrack.outputQualityBadges(currentState.target, localPlaybackPolicy, cachedOriginalTrackKeys)
+            }
             Row(
-                modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Row(
+                Box(
                     modifier = Modifier
-                        .weight(1f, fill = false)
-                        .clip(RoundedCornerShape(8.dp))
-                        .clickable { onArtistClick(displayAlbum.artistName) }
-                        .padding(vertical = 2.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
+                        .size(7.dp)
+                        .clip(CircleShape)
+                        .background(palette.accent),
+                )
+                if (qualityBadges.isNotEmpty()) {
                     Text(
-                        text = displayAlbum.artistName ?: Strings.unknownArtist,
-                        style = MaterialTheme.typography.titleMedium,
-                        color = AppColors.TextPrimary,
-                        fontWeight = FontWeight.SemiBold,
+                        text = qualityBadges.joinToString(" · "),
+                        color = AppColors.TextSecondary,
+                        style = MaterialTheme.typography.labelMedium,
                         maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
                     )
                     Icon(
-                        imageVector = Icons.Filled.ChevronRight,
+                        Icons.Filled.ChevronRight,
                         contentDescription = null,
-                        tint = palette.accent,
-                        modifier = Modifier.size(16.dp),
+                        tint = AppColors.TextTertiary,
+                        modifier = Modifier.size(14.dp),
                     )
                 }
+                Text(
+                    text = currentState.target.displayName,
+                    color = AppColors.TextSecondary,
+                    style = MaterialTheme.typography.labelMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
-            // Album line: `专辑名 (年份) >`. Real-album guard: same-title EPs (e.g. Amore)
-            // must still render their album row; playlist placeholders without album metadata don't.
-            val hasRealAlbum = !currentTrack.albumTitle.isNullOrBlank() ||
-                (displayAlbum.title.isNotBlank() && !displayAlbum.title.equals(currentTrack.title, ignoreCase = true))
-            if (hasRealAlbum) {
-                val albumLabel = buildString {
-                    append(displayAlbum.title)
-                    displayAlbumYear?.let { append(" (").append(it).append(")") }
-                }
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
-                        .then(
-                            if (canOpenAlbum) Modifier.clickable { onAlbumClick(displayAlbum) } else Modifier,
-                        )
-                        .padding(vertical = 2.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = albumLabel,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = AppColors.TextSecondary,
-                        fontWeight = FontWeight.Medium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false),
+        }
+    }
+
+    // ── Group 2: seek + transport ──
+    val playerTransport: @Composable (Boolean) -> Unit = { compact ->
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .staggeredPlayerEnter(1),
+            verticalArrangement = Arrangement.spacedBy(if (compact) 4.dp else 8.dp),
+        ) {
+            trackDurationMillis?.let { durationMillis ->
+                val clampedDuration = durationMillis.coerceAtLeast(1L)
+                val clampedSliderValue = sliderPositionMillis.coerceIn(0f, clampedDuration.toFloat())
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Slider(
+                        value = clampedSliderValue,
+                        onValueChange = {
+                            isSeeking = true
+                            sliderPositionMillis = it
+                        },
+                        onValueChangeFinished = {
+                            isSeeking = false
+                            onSeek(currentState, sliderPositionMillis.roundToLong())
+                        },
+                        valueRange = 0f..clampedDuration.toFloat(),
+                        modifier = Modifier.height(28.dp),
+                        thumb = {
+                            // Thumb only appears while scrubbing; at rest the bar is the control.
+                            val thumbSize by androidx.compose.animation.core.animateDpAsState(
+                                if (isSeeking) 16.dp else 0.dp,
+                                label = "seek_thumb",
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .size(thumbSize)
+                                    .background(Color.White, CircleShape),
+                            )
+                        },
+                        track = { sliderState ->
+                            val range = sliderState.valueRange.endInclusive - sliderState.valueRange.start
+                            val fraction = if (range == 0f) 0f else (sliderState.value - sliderState.valueRange.start) / range
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(6.dp)
+                                    .clip(RoundedCornerShape(3.dp))
+                                    .background(Color.Black.copy(alpha = 0.28f)),
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth(fraction)
+                                        .height(6.dp)
+                                        .clip(RoundedCornerShape(3.dp))
+                                        .background(palette.accent),
+                                )
+                            }
+                        },
                     )
-                    if (canOpenAlbum) {
-                        Icon(
-                            imageVector = Icons.Filled.ChevronRight,
-                            contentDescription = null,
-                            tint = AppColors.TextSecondary,
-                            modifier = Modifier.size(16.dp),
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text(
+                            text = formatDuration(clampedSliderValue.roundToLong()),
+                            color = AppColors.TextTertiary,
+                            style = MaterialTheme.typography.labelMedium,
+                        )
+                        Text(
+                            text = formatDuration(clampedDuration),
+                            color = AppColors.TextTertiary,
+                            style = MaterialTheme.typography.labelMedium,
                         )
                     }
                 }
             }
-            val qualityBadges = remember(currentTrack, currentState.target, localPlaybackPolicy, cachedOriginalTrackKeys) {
-                currentTrack.outputQualityBadges(currentState.target, localPlaybackPolicy, cachedOriginalTrackKeys)
-            }
-            if (qualityBadges.isNotEmpty()) {
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    qualityBadges.forEach { badge -> AudioQualityBadge(badge) }
+            // Mode toggles flank the transport: shuffle on the left, repeat (all → one → off)
+            // on the right. Both invert to the hi fill while on.
+            val isShuffle = playbackMode == PlaybackMode.Shuffle
+            val isRepeat = playbackMode == PlaybackMode.RepeatAll || playbackMode == PlaybackMode.RepeatOne
+            val skipSize = if (compact) 52.dp else 60.dp
+            val playSize = if (compact) 68.dp else 84.dp
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                ToggleKey(
+                    checked = isShuffle,
+                    icon = Icons.Filled.Shuffle,
+                    contentDescription = PlaybackMode.Shuffle.label,
+                    onClick = {
+                        onSelectPlaybackMode(if (isShuffle) PlaybackMode.Sequential else PlaybackMode.Shuffle)
+                    },
+                    bareWhenOff = true,
+                )
+                Key(
+                    onClick = onPrevious,
+                    // Local playback's previous also means "restart this track", so it stays
+                    // tappable even on the first/only track.
+                    enabled = currentState.target == PlaybackTarget.LocalDevice || currentState.currentIndex > 0,
+                    modifier = Modifier.size(skipSize),
+                    shape = RoundedCornerShape(skipSize / 3),
+                    contentDescription = Strings.previous,
+                ) {
+                    PlayerIconGraphic(
+                        icon = PlayerIcon.Previous,
+                        tint = LocalContentColor.current,
+                        modifier = Modifier.size(if (compact) 26.dp else 30.dp),
+                    )
                 }
+                Key(
+                    // Always tappable, like the mini player's button — gating play/pause on an
+                    // in-flight network command made the button silently dead for seconds.
+                    onClick = { onTogglePause(currentState) },
+                    style = KeyStyle.Hi,
+                    modifier = Modifier.size(playSize),
+                    shape = RoundedCornerShape(playSize / 3),
+                    contentDescription = if (currentState.isPaused) Strings.play else Strings.pause,
+                ) {
+                    if (currentState.isBuffering) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(if (compact) 28.dp else 34.dp),
+                            color = LocalContentColor.current,
+                            strokeWidth = 3.dp,
+                        )
+                    } else {
+                        PlayerIconGraphic(
+                            icon = if (currentState.isPaused) PlayerIcon.Play else PlayerIcon.Pause,
+                            tint = LocalContentColor.current,
+                            modifier = Modifier.size(if (compact) 34.dp else 42.dp),
+                        )
+                    }
+                }
+                Key(
+                    onClick = onNext,
+                    enabled = currentState.currentIndex < currentState.tracks.lastIndex ||
+                        (currentState.tracks.isNotEmpty() && playbackMode in setOf(PlaybackMode.RepeatAll, PlaybackMode.Shuffle)),
+                    modifier = Modifier.size(skipSize),
+                    shape = RoundedCornerShape(skipSize / 3),
+                    contentDescription = Strings.next,
+                ) {
+                    PlayerIconGraphic(
+                        icon = PlayerIcon.Next,
+                        tint = LocalContentColor.current,
+                        modifier = Modifier.size(if (compact) 26.dp else 30.dp),
+                    )
+                }
+                ToggleKey(
+                    checked = isRepeat,
+                    icon = Icons.Filled.Repeat,
+                    checkedIcon = if (playbackMode == PlaybackMode.RepeatOne) Icons.Filled.RepeatOne else Icons.Filled.Repeat,
+                    contentDescription = playbackMode.label,
+                    onClick = {
+                        onSelectPlaybackMode(
+                            when (playbackMode) {
+                                PlaybackMode.RepeatAll -> PlaybackMode.RepeatOne
+                                PlaybackMode.RepeatOne -> PlaybackMode.Sequential
+                                else -> PlaybackMode.RepeatAll
+                            }
+                        )
+                    },
+                    bareWhenOff = true,
+                )
             }
         }
-        trackDurationMillis?.let { durationMillis ->
-            val clampedDuration = durationMillis.coerceAtLeast(1L)
-            val clampedSliderValue = sliderPositionMillis.coerceIn(0f, clampedDuration.toFloat())
-            Column(
+    }
+
+    // ── Group 3: output (room volume) + tools ──
+    val playerVolume: @Composable () -> Unit = {
+        if (showsVolume) {
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .staggeredPlayerEnter(1),
-                verticalArrangement = Arrangement.spacedBy(if (compact) 2.dp else 6.dp),
+                    .staggeredPlayerEnter(2),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
+                Icon(
+                    Icons.Filled.VolumeUp,
+                    contentDescription = Strings.volume,
+                    tint = AppColors.TextSecondary,
+                    modifier = Modifier.size(20.dp),
+                )
                 Slider(
-                    value = clampedSliderValue,
-                    onValueChange = {
-                        isSeeking = true
-                        sliderPositionMillis = it
-                    },
-                    onValueChangeFinished = {
-                        isSeeking = false
-                        onSeek(currentState, sliderPositionMillis.roundToLong())
-                    },
-                    valueRange = 0f..clampedDuration.toFloat(),
-                    // Not gated on isLoading: transport controls must stay responsive while a
-                    // playback command is in flight — the seek generation logic resolves races.
-                    colors = SliderDefaults.colors(
-                        thumbColor = palette.accent,
-                        activeTrackColor = palette.accent,
-                        inactiveTrackColor = Color.White.copy(alpha = 0.14f),
-                        disabledThumbColor = AppColors.TextTertiary,
-                        disabledActiveTrackColor = AppColors.TextTertiary,
-                        disabledInactiveTrackColor = Color.White.copy(alpha = 0.14f),
-                    ),
+                    value = sonosVolume.coerceIn(0f, 100f),
+                    onValueChange = { onVolumeChange?.invoke(it) },
+                    valueRange = 0f..100f,
+                    enabled = hasLoadedSonosVolume,
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(28.dp),
                     thumb = {
                         Box(
                             modifier = Modifier
                                 .size(14.dp)
-                                .background(Color.White, CircleShape),
+                                .background(if (hasLoadedSonosVolume) Color.White else AppColors.TextTertiary, CircleShape),
                         )
                     },
                     track = { sliderState ->
-                        val fraction = if (sliderState.valueRange.endInclusive - sliderState.valueRange.start == 0f) 0f
-                            else (sliderState.value - sliderState.valueRange.start) / (sliderState.valueRange.endInclusive - sliderState.valueRange.start)
+                        val fraction = sliderState.value / 100f
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(4.dp)
                                 .clip(RoundedCornerShape(2.dp))
-                                .background(Color.White.copy(alpha = 0.14f)),
+                                .background(Color.Black.copy(alpha = 0.28f)),
                         ) {
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth(fraction)
                                     .height(4.dp)
-                                    .clip(RoundedCornerShape(2.dp))
-                                    .background(palette.accent),
+                                    .background(Color.White.copy(alpha = 0.92f)),
                             )
                         }
                     },
                 )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = formatDuration(clampedSliderValue.roundToLong()),
-                        color = AppColors.TextSecondary,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    Text(
-                        text = formatDuration(clampedDuration),
-                        color = AppColors.TextSecondary,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
+                Text(
+                    text = if (hasLoadedSonosVolume) "${sonosVolume.toInt()}" else "--",
+                    color = AppColors.TextSecondary,
+                    style = MaterialTheme.typography.labelLarge,
+                    textAlign = TextAlign.End,
+                    modifier = Modifier.width(28.dp),
+                )
             }
         }
+    }
+    val playerTools: @Composable () -> Unit = {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .staggeredPlayerEnter(2),
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            PlayerControlButton(
-                icon = PlayerIcon.Previous,
-                onClick = onPrevious,
-                // Local playback's previous also means "restart this track" (standard
-                // behavior), so it must stay tappable even on the first/only track.
-                enabled = currentState.target == PlaybackTarget.LocalDevice ||
-                    currentState.currentIndex > 0,
-                sizeOverride = if (useFullTransport) 56.dp else 46.dp,
-                iconSizeOverride = if (useFullTransport) 24.dp else 20.dp,
-                unhighlightedContainerColor = Color.White.copy(alpha = 0.08f),
-                unhighlightedBorderColor = Color.White.copy(alpha = 0.12f),
-            )
-            Spacer(modifier = Modifier.width(if (useFullTransport) 28.dp else 20.dp))
-            GlowPlayerControlButton(
-                icon = if (currentState.isPaused) PlayerIcon.Play else PlayerIcon.Pause,
-                isLoading = currentState.isBuffering,
-                onClick = { onTogglePause(currentState) },
-                // Always tappable, like the mini player's button — gating play/pause on an
-                // in-flight network command made the button silently dead for seconds.
-                enabled = true,
-                accent = palette.accent,
-                onAccent = palette.onAccent,
-                buttonSize = if (useFullTransport) 72.dp else 54.dp,
-                iconSize = if (useFullTransport) 32.dp else 24.dp,
-            )
-            Spacer(modifier = Modifier.width(if (useFullTransport) 28.dp else 20.dp))
-            PlayerControlButton(
-                icon = PlayerIcon.Next,
-                onClick = onNext,
-                enabled = currentState.currentIndex < currentState.tracks.lastIndex ||
-                    (currentState.tracks.isNotEmpty() && playbackMode in setOf(PlaybackMode.RepeatAll, PlaybackMode.Shuffle)),
-                sizeOverride = if (useFullTransport) 56.dp else 46.dp,
-                iconSizeOverride = if (useFullTransport) 24.dp else 20.dp,
-                unhighlightedContainerColor = Color.White.copy(alpha = 0.08f),
-                unhighlightedBorderColor = Color.White.copy(alpha = 0.12f),
-            )
-        }
-        Spacer(Modifier.height(if (compact) 4.dp else 6.dp))
-        PlaybackActionBar(
-            playbackMode = playbackMode,
-            palette = palette,
-            compact = compact,
-            useFullTransport = useFullTransport,
-            modifier = Modifier
-                .fillMaxWidth()
                 .staggeredPlayerEnter(3),
-            onShowPlaylist = { isPlaylistSheetVisible = true },
-            onShowModePicker = { isModeDialogVisible = true },
-            onShowRoomPicker = { isRoomDialogVisible = true },
-            onShowMore = { isMoreSheetVisible = true },
-        )
-        if (sleepTimerState.isActive) {
-            Text(
-                text = Strings.sleepTimerRemaining(formatSleepTimerCountdown(sleepTimerState.remainingMillis)),
-                color = palette.accent,
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.SemiBold,
+            horizontalArrangement = Arrangement.SpaceEvenly,
+        ) {
+            PlayerToolButton(
+                icon = Icons.Filled.QueueMusic,
+                label = Strings.queueShort,
+                onClick = { isPlaylistSheetVisible = true },
+            )
+            PlayerToolButton(
+                icon = Icons.Filled.Subject,
+                label = Strings.lyrics,
+                selected = selectedPlayerPage == 1,
+                onClick = { selectedPlayerPage = if (selectedPlayerPage == 1) 0 else 1 },
+            )
+            PlayerToolButton(
+                icon = Icons.Filled.Bedtime,
+                label = if (sleepTimerState.isActive) {
+                    formatSleepTimerCountdown(sleepTimerState.remainingMillis)
+                } else {
+                    Strings.timerShort
+                },
+                selected = sleepTimerState.isActive,
+                onClick = {
+                    val totalMinutes = ((sleepTimerState.remainingMillis + 59_999L) / 60_000L).toInt()
+                    sleepTimerHours = if (sleepTimerState.isActive) totalMinutes / 60 else 0
+                    sleepTimerMinutes = if (sleepTimerState.isActive) totalMinutes % 60 else 30
+                    sleepTimerInputError = null
+                    isSleepTimerDialogVisible = true
+                },
             )
         }
+    }
+    // Landscape / fixed-rhythm variant of the details column.
+    val playerDetails: @Composable ColumnScope.(Boolean, Boolean) -> Unit = { compact, _ ->
+        Column(
+            modifier = Modifier
+                .widthIn(max = 560.dp)
+                .fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(if (compact) 10.dp else 18.dp),
+        ) {
+            playerMeta(compact)
+            playerTransport(compact)
+            playerVolume()
+            playerTools()
         }
     }
 
@@ -588,16 +703,15 @@ internal fun PlaybackDetailSection(
             .onSizeChanged { dismissHeightPx = it.height.toFloat().coerceAtLeast(1f) }
             .then(dismissModifier),
     ) {
-        val topBarHeight = 48.dp
+        val topBarHeight = 56.dp
         val availableWidth = maxWidth
         val bodyHeight = (maxHeight - topBarHeight).coerceAtLeast(0.dp)
         val portraitViewportHeight = (
             maxHeight - topBarHeight - topSystemBarInset - bottomSystemBarInset - 20.dp
         ).coerceAtLeast(0.dp)
         val compactLandscape = layoutInfo.isLandscape && maxHeight < 500.dp
-        val compactPortrait = !layoutInfo.isLandscape && (!layoutInfo.isTablet || maxHeight < 780.dp)
-        // Transport sizing is decoupled from compact: tall phones get the full-size buttons.
-        val useFullTransport = !layoutInfo.isLandscape && maxHeight >= 680.dp
+        val compactPortrait = !layoutInfo.isLandscape && maxHeight < 700.dp
+        val playerHorizontalPadding = if (layoutInfo.isTablet) 32.dp else 24.dp
 
         // Full-bleed background: the same plain palette gradient the home page uses, so the
         // player and every other page share one consistent colouring. The section is laid out
@@ -617,9 +731,9 @@ internal fun PlaybackDetailSection(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(
-                    start = layoutInfo.horizontalPadding,
-                    top = 6.dp + topSystemBarInset,
-                    end = layoutInfo.horizontalPadding,
+                    start = playerHorizontalPadding,
+                    top = 4.dp + topSystemBarInset,
+                    end = playerHorizontalPadding,
                     bottom = 16.dp + bottomSystemBarInset,
                 ),
         ) {
@@ -636,6 +750,8 @@ internal fun PlaybackDetailSection(
                     onSeekLine = { line -> onSeek(currentState, line.timeMillis) },
                     modifier = Modifier.fillMaxWidth().weight(1f),
                 )
+                Spacer(Modifier.height(12.dp))
+                playerTools()
             } else if (layoutInfo.isLandscape) {
                 val verticalPadding = if (compactLandscape) 4.dp else 16.dp
                 val columnSpacing = if (compactLandscape) 16.dp else 40.dp
@@ -683,25 +799,35 @@ internal fun PlaybackDetailSection(
                     }
                 }
             } else {
+                // Height reserved for everything that is not the cover; the cover takes the
+                // rest (up to the content width) so tall phones get a big cover rather than
+                // empty bands.
+                val nonArtworkHeight = (if (showsVolume) 392.dp else 352.dp) - (if (compactPortrait) 64.dp else 0.dp)
                 val artworkSize = minOf(
-                    availableWidth - 36.dp,
-                    portraitViewportHeight * 0.38f,
-                    340.dp,
-                ).coerceAtLeast(200.dp)
+                    availableWidth - playerHorizontalPadding * 2,
+                    portraitViewportHeight - nonArtworkHeight,
+                    440.dp,
+                ).coerceAtLeast(140.dp)
 
-                Box(
+                // Groups: cover → meta → seek/transport → volume + tools. Leftover height is
+                // shared evenly by the weighted spacers between groups (never pooled in one
+                // place), while the tools row stays attached to the volume row.
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f),
-                    contentAlignment = Alignment.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
-                    PortraitPlayerContent(
-                        artworkSize = artworkSize,
-                        compact = compactPortrait,
-                        useFullTransport = useFullTransport,
-                        artworkContent = artworkContent,
-                        playerDetails = playerDetails,
-                    )
+                    Spacer(Modifier.weight(1f).heightIn(min = 4.dp))
+                    Box(modifier = Modifier.width(artworkSize)) { artworkContent(artworkSize) }
+                    Spacer(Modifier.weight(1f).heightIn(min = 14.dp))
+                    playerMeta(compactPortrait)
+                    Spacer(Modifier.weight(1f).heightIn(min = 12.dp))
+                    playerTransport(compactPortrait)
+                    Spacer(Modifier.weight(1f).heightIn(min = 12.dp))
+                    playerVolume()
+                    if (showsVolume) Spacer(Modifier.height(18.dp))
+                    playerTools()
                 }
             }
         }
@@ -753,15 +879,15 @@ internal fun PlaybackDetailSection(
             LazyColumn(
                 state = queueListState,
                 modifier = Modifier.fillMaxWidth(),
-                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 32.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 32.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
                 item(key = "queue-title", contentType = "queue-title") {
                     Text(
                         text = Strings.playlist,
                         style = MaterialTheme.typography.titleLarge,
                         color = AppColors.TextPrimary,
-                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(start = 6.dp, bottom = 10.dp),
                     )
                 }
                 itemsIndexed(
@@ -770,49 +896,53 @@ internal fun PlaybackDetailSection(
                     contentType = { _, _ -> "queue-track" },
                 ) { index, track ->
                     val isCurrent = index == currentState.currentIndex
-                    Surface(
+                    ChoiceRow(
+                        selected = isCurrent,
+                        showCheck = false,
+                        onClick = {
+                            isPlaylistSheetVisible = false
+                            onSelectTrack(index)
+                        },
                         modifier = Modifier
                             .animateItem(fadeInSpec = null, fadeOutSpec = null)
-                            .fillMaxWidth()
-                            .clickable {
-                                isPlaylistSheetVisible = false
-                                onSelectTrack(index)
-                            },
-                        shape = RoundedCornerShape(14.dp),
-                        color = if (isCurrent) AppColors.CardSurfaceStrong else AppColors.CardSurface,
-                        border = BorderStroke(1.dp, if (isCurrent) LocalArtworkPalette.current.accent else AppColors.Border),
+                            .fillMaxWidth(),
                     ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 14.dp, vertical = 12.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Column(
-                                modifier = Modifier.weight(1f),
-                                verticalArrangement = Arrangement.spacedBy(4.dp),
-                            ) {
+                        Box(modifier = Modifier.width(24.dp), contentAlignment = Alignment.Center) {
+                            if (isCurrent) {
+                                LiveDot()
+                            } else {
                                 Text(
-                                    text = "${index + 1}. ${track.title}",
-                                    color = AppColors.TextPrimary,
-                                    fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                                Text(
-                                    text = if (isCurrent) Strings.nowPlaying else (track.albumTitle ?: currentState.album.title),
-                                    color = if (isCurrent) LocalArtworkPalette.current.accent else AppColors.TextSecondary,
-                                    style = MaterialTheme.typography.bodySmall,
-                                )
-                            }
-                            track.durationMillis?.let {
-                                Text(
-                                    text = formatDuration(it),
+                                    text = "${index + 1}",
                                     color = AppColors.TextTertiary,
-                                    style = MaterialTheme.typography.bodySmall,
+                                    style = MaterialTheme.typography.labelLarge,
                                 )
                             }
+                        }
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            Text(
+                                text = track.title,
+                                color = if (isCurrent) LocalArtworkPalette.current.accent else AppColors.TextPrimary,
+                                fontWeight = if (isCurrent) FontWeight.SemiBold else FontWeight.Medium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                text = track.albumTitle ?: currentState.album.title,
+                                color = AppColors.TextSecondary,
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        track.durationMillis?.let {
+                            Text(
+                                text = formatDuration(it),
+                                color = AppColors.TextTertiary,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
                         }
                     }
                 }
@@ -832,38 +962,17 @@ internal fun PlaybackDetailSection(
                 )
             },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     PlaybackMode.entries.forEach { mode ->
-                        Surface(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .selectable(
-                                    selected = playbackMode == mode,
-                                    onClick = {
-                                        isModeDialogVisible = false
-                                        onSelectPlaybackMode(mode)
-                                    },
-                                ),
-                            shape = RoundedCornerShape(14.dp),
-                            color = if (playbackMode == mode) AppColors.CardSurfaceStrong else AppColors.CardSurface,
-                            border = BorderStroke(1.dp, if (playbackMode == mode) LocalArtworkPalette.current.accent else AppColors.Border),
+                        ChoiceRow(
+                            selected = playbackMode == mode,
+                            onClick = {
+                                isModeDialogVisible = false
+                                onSelectPlaybackMode(mode)
+                            },
+                            modifier = Modifier.fillMaxWidth(),
                         ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 14.dp, vertical = 12.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Text(mode.label, color = AppColors.TextPrimary)
-                                if (playbackMode == mode) {
-                                    Icon(
-                                        imageVector = Icons.Filled.Check,
-                                        contentDescription = null,
-                                        tint = LocalArtworkPalette.current.accent,
-                                    )
-                                }
-                            }
+                            Text(mode.label, color = AppColors.TextPrimary, modifier = Modifier.weight(1f))
                         }
                     }
                 }
@@ -1008,10 +1117,11 @@ internal fun OutputTargetDialog(
             }
         },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 OutputTargetOption(
                     title = Strings.localPlayback,
                     subtitle = null,
+                    isSonos = false,
                     isCurrent = currentTarget == PlaybackTarget.LocalDevice,
                     onClick = {
                         onDismiss()
@@ -1047,69 +1157,32 @@ private fun OutputTargetOption(
     subtitle: String?,
     isCurrent: Boolean,
     onClick: () -> Unit,
+    isSonos: Boolean = true,
 ) {
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick),
-        shape = RoundedCornerShape(14.dp),
-        color = if (isCurrent) AppColors.CardSurfaceStrong else AppColors.CardSurface,
-        border = BorderStroke(1.dp, if (isCurrent) LocalArtworkPalette.current.accent else AppColors.Border),
+    ChoiceRow(
+        selected = isCurrent,
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth(),
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
+        Icon(
+            imageVector = if (isSonos) Icons.Filled.Speaker else Icons.Filled.PhoneAndroid,
+            contentDescription = null,
+            tint = if (isCurrent) LocalArtworkPalette.current.accent else AppColors.TextSecondary,
+            modifier = Modifier.size(22.dp),
+        )
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(title, color = AppColors.TextPrimary, fontWeight = FontWeight.Medium)
-                subtitle?.let {
-                    Text(
-                        text = it,
-                        color = AppColors.TextSecondary,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
-            }
-            if (isCurrent) {
-                Icon(
-                    imageVector = Icons.Filled.CheckCircle,
-                    contentDescription = null,
-                    tint = AppColors.Accent,
+            Text(title, color = AppColors.TextPrimary, fontWeight = FontWeight.Medium)
+            subtitle?.let {
+                Text(
+                    text = it,
+                    color = AppColors.TextSecondary,
+                    style = MaterialTheme.typography.bodySmall,
                 )
             }
         }
-    }
-}
-
-@Composable
-private fun PortraitPlayerContent(
-    artworkSize: androidx.compose.ui.unit.Dp,
-    compact: Boolean,
-    useFullTransport: Boolean,
-    artworkContent: @Composable (androidx.compose.ui.unit.Dp) -> Unit,
-    playerDetails: @Composable ColumnScope.(Boolean, Boolean) -> Unit,
-) {
-    Column(
-        modifier = Modifier.fillMaxSize(),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        // Elastic top gap: keeps the artwork at least 16.dp below the top bar and lets extra
-        // height on tall screens breathe above the cover instead of below it.
-        Spacer(Modifier.weight(1f).heightIn(min = 16.dp))
-
-        Box(modifier = Modifier.width(artworkSize)) { artworkContent(artworkSize) }
-
-        // Fixed rhythm between the cover and the metadata block (matches the reference).
-        Spacer(Modifier.height(if (compact) 12.dp else 14.dp))
-
-        Column(modifier = Modifier.fillMaxWidth()) { playerDetails(compact, useFullTransport) }
-
-        // Elastic bottom gap: guarantees the Dock always floats >= 12.dp above the safe edge
-        // while any surplus space is absorbed here, never between interior sections.
-        Spacer(Modifier.weight(1f).heightIn(min = if (compact) 12.dp else 16.dp))
     }
 }
 
@@ -1188,17 +1261,6 @@ private fun LyricsView(
     }
 }
 
-@Composable
-private fun AudioQualityBadge(text: String) {
-    Surface(
-        shape = RoundedCornerShape(7.dp),
-        color = Color.Transparent,
-        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.18f)),
-    ) {
-        Text(text, modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp), color = AppColors.TextSecondary, style = MaterialTheme.typography.labelMedium)
-    }
-}
-
 internal fun originalAudioQualityBadges(codec: String?, bitDepth: Int?, sampleRate: Int?): List<String> = buildList {
     codec?.takeIf { it.isNotBlank() }?.let { add(it.uppercase(Locale.ROOT)) }
     bitDepth?.takeIf { it > 0 }?.let { add("${it}bit") }
@@ -1252,299 +1314,34 @@ private fun MoreSheetAction(icon: androidx.compose.ui.graphics.vector.ImageVecto
     }
 }
 
+/** Player tools row item: icon over a small label (queue / lyrics / timer). */
 @Composable
-private fun PlaybackActionBar(
-    playbackMode: PlaybackMode,
-    palette: ArtworkPalette,
-    compact: Boolean = false,
-    useFullTransport: Boolean = false,
-    modifier: Modifier = Modifier,
-    onShowPlaylist: () -> Unit,
-    onShowModePicker: () -> Unit,
-    onShowRoomPicker: () -> Unit,
-    onShowMore: () -> Unit,
-) {
-    val actionIconSize = if (useFullTransport) 23.dp else if (compact) 20.dp else 22.dp
-    val actionSlotHeight = if (useFullTransport) 62.dp else if (compact) 50.dp else 58.dp
-    // Glassy pill container with icon + label items, mirroring the reference player UI.
-    Surface(
-        modifier = modifier.fillMaxWidth(),
-        shape = CircleShape,
-        color = Color.White.copy(alpha = 0.07f),
-        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.10f)),
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = if (useFullTransport) 5.dp else if (compact) 2.dp else 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(0.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            PlaybackActionButton(
-                icon = when (playbackMode) {
-                    PlaybackMode.Sequential -> Icons.Filled.ArrowForward
-                    PlaybackMode.RepeatAll -> Icons.Filled.Repeat
-                    PlaybackMode.RepeatOne -> Icons.Filled.RepeatOne
-                    PlaybackMode.Shuffle -> Icons.Filled.Shuffle
-                },
-                label = Strings.playbackModeShort,
-                contentDescription = playbackMode.label,
-                modifier = Modifier.weight(1f),
-                isSelected = playbackMode != PlaybackMode.Sequential,
-                accent = palette.accent,
-                iconSize = actionIconSize,
-                slotHeight = actionSlotHeight,
-                onClick = onShowModePicker,
-            )
-            PlaybackActionButton(
-                icon = Icons.Filled.QueueMusic,
-                label = Strings.playlistLabel,
-                contentDescription = Strings.playlistLabel,
-                modifier = Modifier.weight(1f),
-                isSelected = false,
-                accent = palette.accent,
-                iconSize = actionIconSize,
-                slotHeight = actionSlotHeight,
-                onClick = onShowPlaylist,
-            )
-            PlaybackActionButton(
-                icon = Icons.Filled.Speaker,
-                label = Strings.deviceShort,
-                contentDescription = Strings.castRoom,
-                modifier = Modifier.weight(1f),
-                isSelected = false,
-                accent = palette.accent,
-                iconSize = actionIconSize,
-                slotHeight = actionSlotHeight,
-                onClick = onShowRoomPicker,
-            )
-            PlaybackActionButton(
-                icon = Icons.Filled.MoreHoriz,
-                label = Strings.more,
-                contentDescription = Strings.more,
-                modifier = Modifier.weight(1f),
-                isSelected = false,
-                accent = palette.accent,
-                iconSize = actionIconSize,
-                slotHeight = actionSlotHeight,
-                onClick = onShowMore,
-            )
-        }
-    }
-}
-
-@Composable
-private fun PlaybackActionButton(
+private fun PlayerToolButton(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     label: String,
-    contentDescription: String,
-    modifier: Modifier = Modifier,
-    isSelected: Boolean,
-    accent: Color,
-    iconSize: androidx.compose.ui.unit.Dp = 30.dp,
-    slotHeight: androidx.compose.ui.unit.Dp = 48.dp,
     onClick: () -> Unit,
+    selected: Boolean = false,
 ) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val isPressed by interactionSource.collectIsPressedAsState()
-    val scale by animateFloatAsState(
-        targetValue = if (isPressed) 0.85f else 1f,
-        label = "action_button_scale",
-    )
-    val animatedTint by animateColorAsState(
-        targetValue = if (isSelected) accent else AppColors.TextSecondary,
-        label = "action_button_tint",
+    val tint by animateColorAsState(
+        targetValue = if (selected) LocalArtworkPalette.current.accent else AppColors.TextSecondary,
+        label = "player_tool_tint",
     )
     Column(
-        modifier = modifier
-            .clickable(
-                interactionSource = interactionSource,
-                indication = ripple(bounded = true),
-                onClick = onClick,
-            )
-            .graphicsLayer {
-                scaleX = scale
-                scaleY = scale
-            }
-            .fillMaxWidth()
-            .heightIn(min = slotHeight),
+        modifier = Modifier
+            .widthIn(min = 72.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 6.dp, horizontal = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
+        verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = contentDescription,
-            tint = animatedTint,
-            modifier = Modifier.size(iconSize),
-        )
+        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(22.dp))
         Text(
             text = label,
-            color = animatedTint,
+            color = tint,
             style = MaterialTheme.typography.labelSmall,
             maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
         )
-    }
-}
-
-/**
- * Play/pause button with a soft accent-colored halo, matching the glowing transport button
- * in the reference design. The halo fades out when the action is unavailable.
- */
-@Composable
-private fun GlowPlayerControlButton(
-    icon: PlayerIcon,
-    isLoading: Boolean = false,
-    onClick: () -> Unit,
-    enabled: Boolean,
-    accent: Color,
-    onAccent: Color,
-    buttonSize: androidx.compose.ui.unit.Dp,
-    iconSize: androidx.compose.ui.unit.Dp,
-    modifier: Modifier = Modifier,
-) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val isPressed by interactionSource.collectIsPressedAsState()
-    val scale by animateFloatAsState(
-        targetValue = if (isPressed) 0.9f else 1f,
-        label = "glow_button_scale",
-    )
-    // The glow layers are scaled past the button's layout bounds via graphicsLayer, so they
-    // never inflate the surrounding row — that previously pushed the page into scrolling.
-    Box(
-        modifier = modifier.size(buttonSize),
-        contentAlignment = Alignment.Center,
-    ) {
-        // Soft ambient halo spilling onto the background — kept weak so the top arc reads
-        // as the dominant glow element, like the reference design.
-        Box(
-            modifier = Modifier
-                .matchParentSize()
-                .graphicsLayer {
-                    scaleX = 1.9f
-                    scaleY = 1.9f
-                }
-                .background(
-                    Brush.radialGradient(
-                        colorStops = arrayOf(
-                            0.0f to accent.copy(alpha = if (enabled) 0.06f else 0.02f),
-                            0.52f to accent.copy(alpha = if (enabled) 0.14f else 0.04f),
-                            1.0f to Color.Transparent,
-                        ),
-                    )
-                ),
-        )
-        // Luminous arc hugging the top of the button edge, like the reference design — the
-        // glow is brightest above the button and fades out towards the bottom.
-        Box(
-            modifier = Modifier
-                .matchParentSize()
-                .graphicsLayer {
-                    scaleX = 1.6f
-                    scaleY = 1.6f
-                }
-                .background(ArcRingGlowBrush(color = accent, enabled = enabled)),
-        )
-        Box(
-            modifier = Modifier
-                .size(buttonSize)
-                .graphicsLayer {
-                    scaleX = scale
-                    scaleY = scale
-                }
-                .clip(CircleShape)
-                // White -> accent vertical gradient reads as a lit glass disc, closer to the
-                // reference than a flat accent fill.
-                .background(
-                    Brush.verticalGradient(
-                        colors = listOf(
-                            Color.White.copy(alpha = if (enabled) 1f else 0.35f),
-                            accent.copy(alpha = if (enabled) 1f else 0.35f),
-                        ),
-                    )
-                )
-                .clickable(
-                    enabled = enabled && !isLoading,
-                    interactionSource = interactionSource,
-                    indication = ripple(bounded = true),
-                    onClick = onClick,
-                ),
-            contentAlignment = Alignment.Center,
-        ) {
-            if (isLoading) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(iconSize),
-                    color = onAccent,
-                    strokeWidth = 2.5.dp,
-                )
-            } else {
-                PlayerIconGraphic(
-                    icon = icon,
-                    tint = onAccent.copy(alpha = if (enabled) 1f else 0.35f),
-                    modifier = Modifier.size(iconSize),
-                )
-            }
-        }
-    }
-}
-
-/**
- * Top-arc ring glow for the play button. A radial band profile (ring shape peaking just
- * outside the button edge) multiplied by an angular falloff (brightest at 12 o'clock, fading
- * to nothing at the bottom) produces the reference design's half-ring halo.
- *
- * SweepGradient angles run clockwise from 3 o'clock, so fraction 0.75 is straight up.
- */
-private class ArcRingGlowBrush(
-    private val color: Color,
-    private val enabled: Boolean,
-) : androidx.compose.ui.graphics.ShaderBrush() {
-    override fun createShader(size: androidx.compose.ui.geometry.Size): android.graphics.Shader {
-        val cx = size.width / 2f
-        val cy = size.height / 2f
-        val radius = size.minDimension / 2f
-        val strength = if (enabled) 1f else 0.25f
-
-        fun withAlpha(argb: Int, alpha: Float): Int =
-            androidx.core.graphics.ColorUtils.setAlphaComponent(
-                argb,
-                (alpha.coerceIn(0f, 1f) * 255).toInt(),
-            )
-
-        val ringColor = color.toArgb()
-        val white = android.graphics.Color.WHITE
-        val transparent = android.graphics.Color.TRANSPARENT
-
-        // Ring band: the button covers the inner 1/1.6 ≈ 0.62 of this box's radius; a narrow,
-        // bright peak just outside the edge reads as a crisp arc line rather than a fog ring.
-        val radial = android.graphics.RadialGradient(
-            cx, cy, radius,
-            intArrayOf(
-                transparent,
-                transparent,
-                withAlpha(ringColor, 0.90f * strength),
-                withAlpha(ringColor, 0.28f * strength),
-                transparent,
-            ),
-            floatArrayOf(0.00f, 0.59f, 0.645f, 0.72f, 0.82f),
-            android.graphics.Shader.TileMode.CLAMP,
-        )
-        // Angular falloff: full strength at the top (0.75), fully gone around the bottom.
-        val sweep = android.graphics.SweepGradient(
-            cx, cy,
-            intArrayOf(
-                withAlpha(white, 0.10f),
-                withAlpha(white, 0.00f),
-                withAlpha(white, 0.00f),
-                withAlpha(white, 0.10f),
-                withAlpha(white, 0.55f),
-                withAlpha(white, 1.00f),
-                withAlpha(white, 0.55f),
-                withAlpha(white, 0.10f),
-            ),
-            floatArrayOf(0.00f, 0.13f, 0.25f, 0.37f, 0.63f, 0.75f, 0.87f, 1.00f),
-        )
-        return android.graphics.ComposeShader(radial, sweep, android.graphics.PorterDuff.Mode.MULTIPLY)
     }
 }
 
@@ -1639,7 +1436,6 @@ internal fun AlbumDetailSection(
                     .weight(1.18f)
                     .fillMaxHeight(),
                 contentPadding = PaddingValues(bottom = bottomContentPadding),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 itemsIndexed(
                     items = currentTrackResult.tracks,
@@ -1675,11 +1471,11 @@ internal fun AlbumDetailSection(
                 end = layoutInfo.horizontalPadding,
                 bottom = bottomContentPadding,
             ),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             item(key = "album-summary", contentType = "album-summary") {
                 AlbumDetailHeroCompact(
                     trackResult = currentTrackResult,
+                    outputTargetName = outputTargetName,
                     isPlaybackLoading = isPlaybackLoading,
                     isFavoriteLoading = isFavoriteLoading,
                     showAlbumQueueMenu = showAlbumQueueMenu,
@@ -1764,7 +1560,8 @@ private fun AlbumDetailHeroWide(
                 .widthIn(max = 300.dp)
                 .fillMaxWidth()
                 .aspectRatio(1f)
-                .clip(RoundedCornerShape(16.dp))
+                .shadow(14.dp, RoundedCornerShape(14.dp), clip = false)
+                .clip(RoundedCornerShape(14.dp))
                 .semantics { contentDescription = "${album.title}. ${Strings.longPressQueueHint}" }
                 .combinedClickable(
                     onClick = {},
@@ -1806,15 +1603,17 @@ private fun AlbumDetailHeroWide(
             text = album.title,
             style = MaterialTheme.typography.headlineMedium,
             color = AppColors.TextPrimary,
-            fontWeight = FontWeight.Bold,
         )
         Text(
             text = artistName,
-            color = AppColors.TextSecondary,
+            color = palette.accent,
+            style = MaterialTheme.typography.bodyLarge,
             fontWeight = FontWeight.SemiBold,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.clickable { onArtistClick(album.artistName) },
+            modifier = Modifier
+                .clip(RoundedCornerShape(6.dp))
+                .clickable { onArtistClick(album.artistName) },
         )
         Text(
             text = buildString {
@@ -1824,97 +1623,126 @@ private fun AlbumDetailHeroWide(
                 }
                 append(Strings.tracks(trackResult.tracks.size))
             },
-            color = AppColors.TextSecondary,
+            color = AppColors.TextTertiary,
             style = MaterialTheme.typography.bodyMedium,
         )
-        Text(
-            text = Strings.outputTargetDesc(outputTargetName),
-            color = AppColors.TextTertiary,
+        Spacer(Modifier.height(8.dp))
+        AlbumActionRow(
+            trackResult = trackResult,
+            outputTargetName = outputTargetName,
+            isPlaybackLoading = isPlaybackLoading,
+            isFavoriteLoading = isFavoriteLoading,
+            isAllDownloaded = isAllDownloaded,
+            isAnyDownloading = isAnyDownloading,
+            onPlayAlbum = onPlayAlbum,
+            onToggleAlbumFavorite = onToggleAlbumFavorite,
+            onDownloadAlbum = onDownloadAlbum,
+            onRequestDeleteDownload = { showDeleteAlbumDialog = true },
+            onQueueAlbum = onQueueAlbum,
+            onBeforeQueueMenu = { onShowAlbumQueueMenuChange(false) },
         )
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            FavoriteIconButton(
-                isFavorite = album.isFavorite,
-                isLoading = isFavoriteLoading,
-                onClick = { onToggleAlbumFavorite(album) },
-            )
-            val playEnabled = !isPlaybackLoading && trackResult.tracks.isNotEmpty()
-            IconCircleButton(
-                onClick = { onPlayAlbum(trackResult) },
-                enabled = playEnabled,
-                containerColor = if (playEnabled) palette.accent else palette.accent.copy(alpha = 0.35f),
-                modifier = Modifier.semantics { contentDescription = Strings.playAll },
-            ) {
-                PlayerIconGraphic(
-                    icon = PlayerIcon.Play,
-                    tint = palette.onAccent.copy(alpha = if (playEnabled) 1f else 0.6f),
-                    modifier = Modifier.size(22.dp),
-                )
-            }
-            if (isAllDownloaded) {
-                IconCircleButton(
-                    onClick = { showDeleteAlbumDialog = true },
-                    modifier = Modifier.semantics { contentDescription = Strings.deleteAlbumDownload },
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.CheckCircle,
-                        contentDescription = Strings.deleteAlbumDownload,
-                        tint = palette.accent,
-                        modifier = Modifier.size(22.dp),
-                    )
-                }
-            } else if (isAnyDownloading) {
-                Box(
-                    modifier = Modifier.size(44.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(22.dp),
-                        strokeWidth = 2.5.dp,
-                        color = palette.accent,
-                    )
-                }
-            } else {
-                IconCircleButton(
-                    onClick = { onDownloadAlbum(album, trackResult.tracks) },
-                    modifier = Modifier.semantics { contentDescription = Strings.downloadAlbumOriginal },
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Download,
-                        contentDescription = Strings.downloadAlbumOriginal,
-                        tint = AppColors.TextPrimary,
-                        modifier = Modifier.size(22.dp),
-                    )
-                }
-            }
-        }
     }
 
     if (showDeleteAlbumDialog) {
-        AlertDialog(
-            onDismissRequest = { showDeleteAlbumDialog = false },
-            title = { Text(Strings.deleteAlbumDownload) },
-            text = { Text(Strings.confirmDeleteAlbumDownload) },
-            confirmButton = {
-                TextButton(onClick = {
-                    showDeleteAlbumDialog = false
-                    onDeleteDownloadedAlbum(album)
-                }) {
-                    Text(Strings.confirmDelete, color = AppColors.ErrorText)
-                }
+        DeleteAlbumDownloadDialog(
+            onConfirm = {
+                showDeleteAlbumDialog = false
+                onDeleteDownloadedAlbum(album)
             },
-            dismissButton = {
-                TextButton(onClick = { showDeleteAlbumDialog = false }) {
-                    Text(Strings.cancel, color = AppColors.TextSecondary)
-                }
-            },
-            containerColor = AppColors.CardSurface,
-            titleContentColor = AppColors.TextPrimary,
-            textContentColor = AppColors.TextSecondary,
+            onDismiss = { showDeleteAlbumDialog = false },
         )
+    }
+}
+
+/**
+ * Album action row (design D): one light primary key naming the room, then tonal keys for
+ * favourite / download / add-to-queue.
+ */
+@Composable
+private fun AlbumActionRow(
+    trackResult: PlexAlbumTracksResult,
+    outputTargetName: String,
+    isPlaybackLoading: Boolean,
+    isFavoriteLoading: Boolean,
+    isAllDownloaded: Boolean,
+    isAnyDownloading: Boolean,
+    onPlayAlbum: (PlexAlbumTracksResult) -> Unit,
+    onToggleAlbumFavorite: (PlexAlbum) -> Unit,
+    onDownloadAlbum: (PlexAlbum, List<PlexTrackStream>) -> Unit,
+    onRequestDeleteDownload: () -> Unit,
+    onQueueAlbum: (PlexAlbum, QueuePlacement) -> Unit,
+    onBeforeQueueMenu: () -> Unit = {},
+) {
+    val palette = LocalArtworkPalette.current
+    val album = trackResult.album
+    var showActionQueueMenu by remember(album.sourceId, album.ratingKey) { mutableStateOf(false) }
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        SplitPlayKey(
+            label = Strings.playOn(outputTargetName),
+            onPlay = { onPlayAlbum(trackResult) },
+            onShuffle = null,
+            enabled = !isPlaybackLoading && trackResult.tracks.isNotEmpty(),
+            isLoading = isPlaybackLoading,
+            modifier = Modifier.weight(1f),
+        )
+        FavoriteIconButton(
+            isFavorite = album.isFavorite,
+            isLoading = isFavoriteLoading,
+            onClick = { onToggleAlbumFavorite(album) },
+        )
+        when {
+            isAllDownloaded -> Key(
+                onClick = onRequestDeleteDownload,
+                modifier = Modifier.size(48.dp),
+                contentDescription = Strings.deleteAlbumDownload,
+            ) {
+                Icon(
+                    Icons.Filled.DownloadDone,
+                    contentDescription = null,
+                    tint = palette.accent,
+                    modifier = Modifier.size(22.dp),
+                )
+            }
+            isAnyDownloading -> Key(
+                onClick = {},
+                enabled = false,
+                modifier = Modifier.size(48.dp),
+                contentDescription = Strings.downloadAlbumOriginal,
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(20.dp),
+                    strokeWidth = 2.dp,
+                    color = palette.accent,
+                )
+            }
+            else -> IconKey(
+                icon = Icons.Filled.Download,
+                contentDescription = Strings.downloadAlbumOriginal,
+                onClick = { onDownloadAlbum(album, trackResult.tracks) },
+            )
+        }
+        Box {
+            IconKey(
+                icon = Icons.Filled.PlaylistAdd,
+                contentDescription = Strings.addToPlaybackQueue,
+                onClick = {
+                    onBeforeQueueMenu()
+                    showActionQueueMenu = true
+                },
+            )
+            QueueActionMenu(
+                expanded = showActionQueueMenu,
+                onDismiss = { showActionQueueMenu = false },
+                onAction = { placement ->
+                    showActionQueueMenu = false
+                    onQueueAlbum(album, placement)
+                },
+            )
+        }
     }
 }
 
@@ -1922,6 +1750,7 @@ private fun AlbumDetailHeroWide(
 @Composable
 private fun AlbumDetailHeroCompact(
     trackResult: PlexAlbumTracksResult,
+    outputTargetName: String,
     isPlaybackLoading: Boolean,
     isFavoriteLoading: Boolean,
     showAlbumQueueMenu: Boolean,
@@ -1935,15 +1764,12 @@ private fun AlbumDetailHeroCompact(
     onDownloadAlbum: (PlexAlbum, List<PlexTrackStream>) -> Unit = { _, _ -> },
     onDeleteDownloadedAlbum: (PlexAlbum) -> Unit = {},
 ) {
-    val layoutInfo = LocalAppLayoutInfo.current
     val palette = LocalArtworkPalette.current
     val album = trackResult.album
     val codec = trackResult.tracks.firstOrNull()
         ?.sourceAudioCodec
         ?.takeIf { it.isNotBlank() }
         ?.uppercase(Locale.ROOT)
-    val playEnabled = !isPlaybackLoading && trackResult.tracks.isNotEmpty()
-    var showActionQueueMenu by remember(album.sourceId, album.ratingKey) { mutableStateOf(false) }
     val totalTracks = trackResult.tracks.size
     val downloadedCount = trackResult.tracks.count { track ->
         "${track.sourceId}:${track.ratingKey}" in downloadedTrackKeys || track.ratingKey in downloadedTrackKeys
@@ -1953,29 +1779,34 @@ private fun AlbumDetailHeroCompact(
     }
     val isAllDownloaded = totalTracks > 0 && downloadedCount == totalTracks
     var showDeleteAlbumDialog by remember { mutableStateOf(false) }
+    val totalDurationMillis = trackResult.tracks.sumOf { it.durationMillis ?: 0L }
 
-    Row(
+    Column(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
-        verticalAlignment = Alignment.CenterVertically,
+        horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Box {
+        Box(
+            modifier = Modifier
+                .padding(top = 4.dp)
+                .fillMaxWidth(0.72f)
+                .widthIn(max = 320.dp),
+        ) {
+            val coverShape = RoundedCornerShape(14.dp)
             AsyncAlbumArtwork(
                 imageUrl = album.thumbUrl,
                 title = album.title,
                 modifier = Modifier
-                    .size(layoutInfo.albumDetailCompactArtworkSize)
-                    .clip(RoundedCornerShape(14.dp))
+                    .fillMaxWidth()
+                    .aspectRatio(1f)
+                    .shadow(14.dp, coverShape, clip = false)
+                    .clip(coverShape)
                     .semantics { contentDescription = "${album.title}. ${Strings.longPressQueueHint}" }
                     .combinedClickable(
                         onClick = {},
-                        onLongClick = {
-                            showActionQueueMenu = false
-                            onShowAlbumQueueMenuChange(true)
-                        },
+                        onLongClick = { onShowAlbumQueueMenuChange(true) },
                     ),
                 contentScale = ContentScale.Crop,
-                thumbnailSize = layoutInfo.albumGridMinimumWidth * 1.1f,
+                thumbnailSize = 320.dp,
                 placeholderThumbnailSize = null,
             )
             QueueActionMenu(
@@ -2001,147 +1832,90 @@ private fun AlbumDetailHeroCompact(
             )
         }
 
-        Column(
-            modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(5.dp),
-        ) {
-            Text(
-                text = album.title,
-                style = MaterialTheme.typography.titleMedium,
-                color = AppColors.TextPrimary,
-                fontWeight = FontWeight.Bold,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                text = album.artistName ?: Strings.unknownArtist,
-                style = MaterialTheme.typography.bodyMedium,
-                color = AppColors.TextSecondary,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.clickable { onArtistClick(album.artistName) },
-            )
-            Text(
-                text = buildString {
-                    album.year?.let { append("$it · ") }
-                    append(Strings.tracks(trackResult.tracks.size))
-                    codec?.let { append(" · $it") }
-                },
-                color = AppColors.TextSecondary,
-                style = MaterialTheme.typography.bodySmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                IconCircleButton(
-                    onClick = { onPlayAlbum(trackResult) },
-                    enabled = playEnabled,
-                    containerColor = if (playEnabled) palette.accent else palette.accent.copy(alpha = 0.35f),
-                    modifier = Modifier.semantics { contentDescription = Strings.playAll },
-                ) {
-                    PlayerIconGraphic(
-                        icon = PlayerIcon.Play,
-                        tint = palette.onAccent.copy(alpha = if (playEnabled) 1f else 0.6f),
-                        modifier = Modifier.size(20.dp),
-                    )
-                }
-                FavoriteIconButton(
-                    isFavorite = album.isFavorite,
-                    isLoading = isFavoriteLoading,
-                    onClick = { onToggleAlbumFavorite(album) },
-                )
-                if (isAllDownloaded) {
-                    IconCircleButton(
-                        onClick = { showDeleteAlbumDialog = true },
-                        modifier = Modifier.semantics { contentDescription = Strings.deleteAlbumDownload },
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.CheckCircle,
-                            contentDescription = Strings.deleteAlbumDownload,
-                            tint = palette.accent,
-                            modifier = Modifier.size(20.dp),
-                        )
-                    }
-                } else if (isAnyDownloading) {
-                    Box(
-                        modifier = Modifier.size(40.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(20.dp),
-                            strokeWidth = 2.dp,
-                            color = palette.accent,
-                        )
-                    }
-                } else {
-                    IconCircleButton(
-                        onClick = { onDownloadAlbum(album, trackResult.tracks) },
-                        modifier = Modifier.semantics { contentDescription = Strings.downloadAlbumOriginal },
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.Download,
-                            contentDescription = Strings.downloadAlbumOriginal,
-                            tint = AppColors.TextPrimary,
-                            modifier = Modifier.size(20.dp),
-                        )
-                    }
-                }
-                Box {
-                    IconCircleButton(
-                        onClick = {
-                            onShowAlbumQueueMenuChange(false)
-                            showActionQueueMenu = true
-                        },
-                        containerColor = AppColors.CardSurfaceStrong,
-                        modifier = Modifier.semantics { contentDescription = Strings.addToPlaybackQueue },
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.PlaylistAdd,
-                            contentDescription = null,
-                            tint = AppColors.TextPrimary,
-                            modifier = Modifier.size(20.dp),
-                        )
-                    }
-                    QueueActionMenu(
-                        expanded = showActionQueueMenu,
-                        onDismiss = { showActionQueueMenu = false },
-                        onAction = { placement ->
-                            showActionQueueMenu = false
-                            onQueueAlbum(album, placement)
-                        },
-                    )
-                }
-            }
-        }
+        Spacer(Modifier.height(20.dp))
+        Text(
+            text = album.title,
+            style = MaterialTheme.typography.headlineSmall,
+            color = AppColors.TextPrimary,
+            textAlign = TextAlign.Center,
+            maxLines = 3,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Spacer(Modifier.height(6.dp))
+        Text(
+            text = album.artistName ?: Strings.unknownArtist,
+            style = MaterialTheme.typography.bodyLarge,
+            color = palette.accent,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier
+                .clip(RoundedCornerShape(6.dp))
+                .clickable { onArtistClick(album.artistName) }
+                .padding(horizontal = 4.dp, vertical = 2.dp),
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = buildString {
+                album.year?.let { append("$it · ") }
+                append(Strings.tracks(totalTracks))
+                if (totalDurationMillis > 0L) append(" · ").append(formatDuration(totalDurationMillis))
+                codec?.let { append(" · $it") }
+            },
+            color = AppColors.TextTertiary,
+            style = MaterialTheme.typography.bodySmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Spacer(Modifier.height(18.dp))
+        AlbumActionRow(
+            trackResult = trackResult,
+            outputTargetName = outputTargetName,
+            isPlaybackLoading = isPlaybackLoading,
+            isFavoriteLoading = isFavoriteLoading,
+            isAllDownloaded = isAllDownloaded,
+            isAnyDownloading = isAnyDownloading,
+            onPlayAlbum = onPlayAlbum,
+            onToggleAlbumFavorite = onToggleAlbumFavorite,
+            onDownloadAlbum = onDownloadAlbum,
+            onRequestDeleteDownload = { showDeleteAlbumDialog = true },
+            onQueueAlbum = onQueueAlbum,
+            onBeforeQueueMenu = { onShowAlbumQueueMenuChange(false) },
+        )
+        Spacer(Modifier.height(8.dp))
     }
 
     if (showDeleteAlbumDialog) {
-        AlertDialog(
-            onDismissRequest = { showDeleteAlbumDialog = false },
-            title = { Text(Strings.deleteAlbumDownload) },
-            text = { Text(Strings.confirmDeleteAlbumDownload) },
-            confirmButton = {
-                TextButton(onClick = {
-                    showDeleteAlbumDialog = false
-                    onDeleteDownloadedAlbum(album)
-                }) {
-                    Text(Strings.confirmDelete, color = AppColors.ErrorText)
-                }
+        DeleteAlbumDownloadDialog(
+            onConfirm = {
+                showDeleteAlbumDialog = false
+                onDeleteDownloadedAlbum(album)
             },
-            dismissButton = {
-                TextButton(onClick = { showDeleteAlbumDialog = false }) {
-                    Text(Strings.cancel, color = AppColors.TextSecondary)
-                }
-            },
-            containerColor = AppColors.CardSurface,
-            titleContentColor = AppColors.TextPrimary,
-            textContentColor = AppColors.TextSecondary,
+            onDismiss = { showDeleteAlbumDialog = false },
         )
     }
+}
+
+@Composable
+private fun DeleteAlbumDownloadDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(Strings.deleteAlbumDownload) },
+        text = { Text(Strings.confirmDeleteAlbumDownload) },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text(Strings.confirmDelete, color = AppColors.ErrorText)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(Strings.cancel, color = AppColors.TextSecondary)
+            }
+        },
+        containerColor = AppColors.CardSurface,
+        titleContentColor = AppColors.TextPrimary,
+        textContentColor = AppColors.TextSecondary,
+    )
 }
 
 
@@ -2166,80 +1940,99 @@ private fun AlbumTrackRow(
         "${track.sourceId}:${track.ratingKey}" in downloadedTrackKeys || track.ratingKey in downloadedTrackKeys
     }
     val progress = downloadProgress["${track.sourceId}:${track.ratingKey}"]
+    val palette = LocalArtworkPalette.current
 
+    // Editorial hairline row: number · title/duration · favourite · more. Tap plays, long-press
+    // or ⋯ opens the queue menu.
     Box {
-    Surface(
-        modifier = Modifier.combinedClickable(
-            enabled = !isPlaybackLoading,
-            onClick = { onPlayTrack(album, track) },
-            onLongClick = { showQueueMenu = true },
-        ),
-        shape = RoundedCornerShape(12.dp),
-        color = AppColors.CardSurface,
-        border = BorderStroke(1.dp, AppColors.Border),
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(3.dp),
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    Text(
-                        text = "${index + 1}. ${track.title}",
-                        color = AppColors.TextPrimary,
-                        fontWeight = FontWeight.Medium,
-                    )
-                    if (isDownloaded) {
-                        Icon(
-                            imageVector = Icons.Filled.CheckCircle,
-                            contentDescription = null,
-                            tint = AppColors.Success,
-                            modifier = Modifier.size(16.dp),
-                        )
-                    } else if (progress != null) {
-                        CircularProgressIndicator(
-                            progress = { progress },
-                            modifier = Modifier.size(14.dp),
-                            strokeWidth = 2.dp,
-                            color = LocalArtworkPalette.current.accent,
-                        )
-                    }
-                }
-                track.durationMillis?.let { duration ->
-                    Text(formatDuration(duration), color = AppColors.TextTertiary)
-                }
-            }
+        Column {
             Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 60.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .combinedClickable(
+                        enabled = !isPlaybackLoading,
+                        onClick = { onPlayTrack(album, track) },
+                        onLongClick = { showQueueMenu = true },
+                    )
+                    .padding(start = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                FavoriteIconButton(
-                    isFavorite = track.isFavorite,
-                    isLoading = isFavoriteLoading,
-                    onClick = { onToggleTrackFavorite(track) },
+                Text(
+                    text = "${index + 1}",
+                    color = AppColors.TextTertiary,
+                    style = MaterialTheme.typography.labelLarge,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.width(24.dp),
                 )
-                IconCircleButton(
-                    onClick = { onPlayTrack(album, track) },
-                    enabled = !isPlaybackLoading,
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
-                    PlayerIconGraphic(
-                        icon = PlayerIcon.Play,
-                        tint = AppColors.TextPrimary,
-                        modifier = Modifier.size(16.dp),
+                    Text(
+                        text = track.title,
+                        color = AppColors.TextPrimary,
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        if (isDownloaded) {
+                            Icon(
+                                imageVector = Icons.Filled.DownloadDone,
+                                contentDescription = null,
+                                tint = palette.accent,
+                                modifier = Modifier.size(14.dp),
+                            )
+                        } else if (progress != null) {
+                            CircularProgressIndicator(
+                                progress = { progress },
+                                modifier = Modifier.size(12.dp),
+                                strokeWidth = 2.dp,
+                                color = palette.accent,
+                            )
+                        }
+                        track.durationMillis?.let { duration ->
+                            Text(
+                                formatDuration(duration),
+                                color = AppColors.TextTertiary,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                    }
+                }
+                Key(
+                    onClick = { onToggleTrackFavorite(track) },
+                    style = KeyStyle.Bare,
+                    enabled = !isFavoriteLoading,
+                    modifier = Modifier.size(44.dp),
+                    contentDescription = if (track.isFavorite) Strings.favorited else Strings.notFavorited,
+                ) {
+                    FavoriteIconGraphic(
+                        isFavorite = track.isFavorite,
+                        tint = if (track.isFavorite) palette.accent else AppColors.TextTertiary,
+                        baseSize = 20.dp,
+                        selectedSize = 20.dp,
                     )
                 }
+                BareIcon(
+                    icon = Icons.Filled.MoreVert,
+                    contentDescription = Strings.more,
+                    onClick = { showQueueMenu = true },
+                    tint = AppColors.TextTertiary,
+                    size = 44.dp,
+                    iconSize = 20.dp,
+                    modifier = Modifier.offset(x = 6.dp),
+                )
             }
+            Hairline(modifier = Modifier.fillMaxWidth().padding(start = 40.dp))
         }
-    }
         QueueActionMenu(
             expanded = showQueueMenu,
             onDismiss = { showQueueMenu = false },
@@ -2254,7 +2047,6 @@ private fun AlbumTrackRow(
         )
     }
 }
-
 
 @Composable
 private fun WheelPickerField(
@@ -2351,7 +2143,7 @@ private fun WheelPickerField(
                     .fillMaxWidth()
                     .height(itemHeight)
                     .padding(horizontal = 8.dp)
-                    .border(BorderStroke(1.dp, Color.White.copy(alpha = 0.95f)), RoundedCornerShape(12.dp))
+                    .background(KeyColors.Tonal, RoundedCornerShape(12.dp))
             )
         }
     }
@@ -2374,12 +2166,13 @@ internal fun BottomMiniPlayer(
     state: MiniPlayerState,
     modifier: Modifier = Modifier,
     isPlayerOpen: Boolean = false,
+    volume: Int? = null,
+    bottomInset: androidx.compose.ui.unit.Dp = 0.dp,
     onArtworkClick: () -> Unit,
     onTogglePause: () -> Unit,
 ) {
     val currentTrack = state.tracks.getOrNull(state.currentIndex) ?: return
     val displayAlbum = currentTrack.toDisplayAlbum(state.album)
-    // Subtle bridge to the immersive player: tint the bar with a dimmed cover color.
     val palette = rememberAnimatedArtworkPalette(displayAlbum.thumbUrl)
     val artistName = currentTrack.artistName ?: displayAlbum.artistName ?: Strings.unknownArtist
     val durationMillis = state.durationMillis ?: currentTrack.durationMillis
@@ -2388,162 +2181,126 @@ internal fun BottomMiniPlayer(
     } else {
         0f
     }
-    Surface(
+    val isSonos = state.target is PlaybackTarget.Sonos
+    val outputLine = buildString {
+        append(state.target.displayName)
+        if (volume != null) append(" · ").append(Strings.volume).append(' ').append(volume)
+    }
+    // Design D docked room bar: flush with the navigation bar below it, same deep dock colour,
+    // progress as a hairline along its top edge, and the output room always legible.
+    Box(
         modifier = modifier
             .fillMaxWidth()
-            // Caller-managed: while the full player is open the pill hands itself to the
-            // transition overlay (morphing into the player backdrop) instead of drawing.
-            .miniSharedBounds(PlayerSharedKeys.Container, visible = !isPlayerOpen),
-        shape = RoundedCornerShape(24.dp),
-        color = palette.backgroundTop,
-        border = BorderStroke(1.dp, AppColors.BorderStrong),
-        shadowElevation = 10.dp,
+            .miniSharedBounds(PlayerSharedKeys.Container, visible = !isPlayerOpen)
+            .background(dockColor())
+            .then(
+                if (isPlayerOpen) Modifier
+                else Modifier.clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = ripple(bounded = true),
+                    onClick = onArtworkClick,
+                )
+            )
+            .padding(bottom = bottomInset),
     ) {
-        Column(
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
-                // While the player is open the pill is invisible (its shared elements live
-                // in the transition overlay); strip the click target so the hidden pill can
-                // never swallow touches meant for the page beneath it.
-                .then(
-                    if (isPlayerOpen) Modifier
-                    else Modifier.clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = ripple(bounded = true),
-                        onClick = onArtworkClick,
-                    )
-                ),
+                .height(2.dp)
+                .background(KeyColors.Line),
         ) {
-            Row(
+            Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(start = 14.dp, end = 14.dp, top = 12.dp, bottom = 10.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically,
+                    .fillMaxWidth(progress)
+                    .height(2.dp)
+                    .background(palette.accent),
+            )
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(64.dp)
+                .padding(start = 14.dp, end = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .miniSharedElement(PlayerSharedKeys.artwork(currentTrack), visible = !isPlayerOpen)
+                    .clip(RoundedCornerShape(8.dp)),
             ) {
-                Box(
-                    modifier = Modifier
-                        .miniSharedElement(PlayerSharedKeys.artwork(currentTrack), visible = !isPlayerOpen)
-                        .clip(RoundedCornerShape(14.dp)),
+                AsyncAlbumArtwork(
+                    imageUrl = displayAlbum.thumbUrl,
+                    title = displayAlbum.title,
+                    modifier = Modifier.size(44.dp),
+                    thumbnailSize = 52.dp,
+                )
+            }
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(3.dp),
+            ) {
+                Text(
+                    text = "${currentTrack.title} — $artistName",
+                    color = AppColors.TextPrimary,
+                    fontWeight = FontWeight.SemiBold,
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    AsyncAlbumArtwork(
-                        imageUrl = displayAlbum.thumbUrl,
-                        title = displayAlbum.title,
-                        modifier = Modifier.size(52.dp),
-                        thumbnailSize = 52.dp,
-                    )
-                }
-                Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(2.dp),
-                ) {
+                    if (isSonos) {
+                        Box(
+                            modifier = Modifier
+                                .size(6.dp)
+                                .clip(CircleShape)
+                                .background(palette.accent),
+                        )
+                    } else {
+                        Icon(
+                            Icons.Filled.PhoneAndroid,
+                            contentDescription = null,
+                            tint = palette.accent,
+                            modifier = Modifier.size(12.dp),
+                        )
+                    }
                     Text(
-                        text = currentTrack.title,
-                        color = AppColors.TextPrimary,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        text = artistName,
+                        text = outputLine,
                         color = AppColors.TextSecondary,
                         style = MaterialTheme.typography.bodySmall,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                PlayerControlButton(
-                    icon = if (state.isPaused) PlayerIcon.Play else PlayerIcon.Pause,
-                    isLoading = state.isBuffering,
-                    onClick = onTogglePause,
-                    enabled = !isPlayerOpen && !state.isBuffering,
-                    highlighted = true,
-                    sizeOverride = 54.dp,
-                    iconSizeOverride = 24.dp,
-                    highlightedContainerColor = palette.accent,
-                    highlightedContentColor = palette.onAccent,
-                )
             }
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(start = 16.dp, end = 16.dp, bottom = 12.dp)
-                    .height(3.dp)
-                    .clip(RoundedCornerShape(2.dp))
-                    .background(Color.White.copy(alpha = 0.14f)),
+            Key(
+                onClick = onTogglePause,
+                modifier = Modifier.size(48.dp),
+                style = KeyStyle.Bare,
+                enabled = !isPlayerOpen && !state.isBuffering,
+                contentColor = AppColors.TextPrimary,
+                contentDescription = if (state.isPaused) Strings.play else Strings.pause,
             ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth(progress)
-                        .height(3.dp)
-                        .clip(RoundedCornerShape(2.dp))
-                        .background(palette.accent),
-                )
+                if (state.isBuffering) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(22.dp),
+                        color = AppColors.TextPrimary,
+                        strokeWidth = 2.5.dp,
+                    )
+                } else {
+                    PlayerIconGraphic(
+                        icon = if (state.isPaused) PlayerIcon.Play else PlayerIcon.Pause,
+                        tint = AppColors.TextPrimary,
+                        modifier = Modifier.size(30.dp),
+                    )
+                }
             }
         }
     }
-}
-
-@Composable
-internal fun PlayerControlButton(
-    icon: PlayerIcon,
-    isLoading: Boolean = false,
-    onClick: () -> Unit,
-    enabled: Boolean,
-    highlighted: Boolean = false,
-    sizeOverride: androidx.compose.ui.unit.Dp? = null,
-    iconSizeOverride: androidx.compose.ui.unit.Dp? = null,
-    highlightedContainerColor: Color = AppColors.Accent,
-    highlightedContentColor: Color = AppColors.SurfaceStrong,
-    unhighlightedContainerColor: Color = AppColors.SurfaceMuted,
-    unhighlightedBorderColor: Color = AppColors.Border,
-    modifier: Modifier = Modifier,
-) {
-    val containerColor = if (highlighted) highlightedContainerColor else unhighlightedContainerColor
-    val contentColor = if (highlighted) highlightedContentColor else AppColors.TextPrimary
-    val borderColor = if (highlighted) Color.Transparent else unhighlightedBorderColor
-    val buttonSize = sizeOverride ?: if (highlighted) 64.dp else 52.dp
-    val iconSize = iconSizeOverride ?: if (highlighted) 26.dp else 22.dp
-    val interactionSource = remember { MutableInteractionSource() }
-    val isPressed by interactionSource.collectIsPressedAsState()
-    val scale by animateFloatAsState(
-        targetValue = if (isPressed) 0.9f else 1f,
-        label = "button_scale",
-    )
-
-    Surface(
-        modifier = modifier
-            .size(buttonSize)
-            .graphicsLayer {
-                scaleX = scale
-                scaleY = scale
-            }
-            .clickable(
-                enabled = enabled && !isLoading,
-                interactionSource = interactionSource,
-                indication = ripple(bounded = true),
-                onClick = onClick,
-            ),
-        shape = CircleShape,
-        color = containerColor,
-        border = BorderStroke(1.dp, borderColor.copy(alpha = if (enabled) 1f else 0.35f)),
-        shadowElevation = if (highlighted) 2.dp else 0.dp,
-    ) {
-        Box(contentAlignment = Alignment.Center) {
-            if (isLoading) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(iconSize),
-                    color = contentColor,
-                    strokeWidth = 2.5.dp,
-                )
-            } else {
-                PlayerIconGraphic(
-                    icon = icon,
-                    tint = contentColor.copy(alpha = if (enabled) 1f else 0.35f),
-                    modifier = Modifier.size(iconSize),
-                )
-            }
-        }
     }
 }
 

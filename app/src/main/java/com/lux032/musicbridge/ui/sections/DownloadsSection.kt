@@ -5,7 +5,6 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -16,6 +15,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.Sort
 import androidx.compose.material3.AlertDialog
@@ -116,21 +117,17 @@ internal fun DownloadsSection(
             ) {
                 // Sort Menu Button
                 Box {
-                    IconCircleButton(
+                    BareIcon(
+                        icon = Icons.Filled.Sort,
+                        contentDescription = Strings.sortFieldTitle,
                         onClick = { isSortMenuExpanded = true },
-                        containerColor = AppColors.CardSurface,
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.Sort,
-                            contentDescription = Strings.sortFieldTitle,
-                            tint = AppColors.TextPrimary,
-                            modifier = Modifier.size(20.dp),
-                        )
-                    }
+                        modifier = Modifier.offset(x = 12.dp),
+                    )
 
                     DropdownMenu(
                         expanded = isSortMenuExpanded,
                         onDismissRequest = { isSortMenuExpanded = false },
+                        shape = RoundedCornerShape(16.dp),
                     ) {
                         DropdownMenuItem(
                             text = {
@@ -171,20 +168,6 @@ internal fun DownloadsSection(
                     }
                 }
 
-                // Shuffle All Button
-                val shuffleEnabled = albums.isNotEmpty()
-                IconCircleButton(
-                    onClick = onShuffleAll,
-                    enabled = shuffleEnabled,
-                    containerColor = if (shuffleEnabled) palette.accent else palette.accent.copy(alpha = 0.35f),
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Shuffle,
-                        contentDescription = Strings.shuffleAllOffline,
-                        tint = palette.onAccent.copy(alpha = if (shuffleEnabled) 1f else 0.5f),
-                        modifier = Modifier.size(20.dp),
-                    )
-                }
             }
         }
 
@@ -199,14 +182,21 @@ internal fun DownloadsSection(
                 text = Strings.offlineDownloadsTitle,
                 style = MaterialTheme.typography.headlineMedium,
                 color = AppColors.TextPrimary,
-                fontWeight = FontWeight.Bold,
             )
             if (albums.isNotEmpty()) {
                 val statsText = "${albums.size} 张专辑 · $totalTracks 首单曲 · 共 ${formatFileSize(totalBytes)}"
                 Text(
                     text = statsText,
                     style = MaterialTheme.typography.bodyMedium,
-                    color = AppColors.TextSecondary,
+                    color = AppColors.TextTertiary,
+                )
+                Spacer(Modifier.height(12.dp))
+                LabelKey(
+                    text = Strings.shuffleAllOffline,
+                    icon = Icons.Filled.Shuffle,
+                    onClick = onShuffleAll,
+                    style = KeyStyle.Hi,
+                    modifier = Modifier.fillMaxWidth(),
                 )
             }
         }
@@ -227,7 +217,6 @@ internal fun DownloadsSection(
                     top = 8.dp,
                     bottom = bottomContentPadding,
                 ),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
                 items(
                     items = sortedAlbums,
@@ -259,19 +248,15 @@ private fun DownloadedAlbumCard(
     var showDeleteConfirmDialog by remember { mutableStateOf(false) }
     val palette = LocalArtworkPalette.current
 
-    Surface(
-        shape = RoundedCornerShape(16.dp),
-        color = AppColors.CardSurface,
-        border = BorderStroke(1.dp, AppColors.Border),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
+    Column(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.fillMaxWidth()) {
             // Album summary row
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
                     .clickable { isExpanded = !isExpanded }
-                    .padding(14.dp),
+                    .padding(vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(14.dp),
             ) {
@@ -280,7 +265,7 @@ private fun DownloadedAlbumCard(
                     imageUrl = group.thumbPath?.let { "file://$it" },
                     title = group.albumTitle,
                     modifier = Modifier
-                        .size(68.dp)
+                        .size(60.dp)
                         .clip(RoundedCornerShape(10.dp)),
                     contentScale = ContentScale.Crop,
                     thumbnailSize = 72.dp,
@@ -296,7 +281,6 @@ private fun DownloadedAlbumCard(
                         text = group.albumTitle,
                         style = MaterialTheme.typography.titleMedium,
                         color = AppColors.TextPrimary,
-                        fontWeight = FontWeight.Bold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -319,49 +303,32 @@ private fun DownloadedAlbumCard(
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    // Play Album
-                    IconCircleButton(
+                    IconKey(
+                        icon = Icons.Filled.PlayArrow,
+                        contentDescription = Strings.play,
                         onClick = onPlayAlbum,
-                        modifier = Modifier.size(36.dp),
-                        containerColor = palette.accent,
-                    ) {
-                        PlayerIconGraphic(
-                            icon = PlayerIcon.Play,
-                            tint = palette.onAccent,
-                            modifier = Modifier.size(16.dp),
-                        )
-                    }
-
-                    // Expand / Collapse Arrow
-                    IconButton(
+                        size = 44.dp,
+                    )
+                    BareIcon(
+                        icon = if (isExpanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                        contentDescription = if (isExpanded) "折叠" else "展开",
                         onClick = { isExpanded = !isExpanded },
-                        modifier = Modifier.size(36.dp),
-                    ) {
-                        Icon(
-                            imageVector = if (isExpanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
-                            contentDescription = if (isExpanded) "折叠" else "展开",
-                            tint = AppColors.TextSecondary,
-                            modifier = Modifier.size(22.dp),
-                        )
-                    }
-
-                    // Overflow Menu
+                        size = 44.dp,
+                    )
                     Box {
-                        IconButton(
+                        BareIcon(
+                            icon = Icons.Filled.MoreVert,
+                            contentDescription = Strings.more,
                             onClick = { isMenuExpanded = true },
-                            modifier = Modifier.size(36.dp),
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.MoreVert,
-                                contentDescription = "更多",
-                                tint = AppColors.TextSecondary,
-                                modifier = Modifier.size(20.dp),
-                            )
-                        }
+                            size = 44.dp,
+                            iconSize = 20.dp,
+                            modifier = Modifier.offset(x = 8.dp),
+                        )
 
                         DropdownMenu(
                             expanded = isMenuExpanded,
                             onDismissRequest = { isMenuExpanded = false },
+                            shape = RoundedCornerShape(16.dp),
                         ) {
                             DropdownMenuItem(
                                 text = { Text(Strings.deleteAlbumDownload, color = AppColors.ErrorText) },
@@ -391,10 +358,8 @@ private fun DownloadedAlbumCard(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 14.dp, vertical = 4.dp),
+                        .padding(start = 66.dp, bottom = 4.dp),
                 ) {
-                    HorizontalDivider(color = AppColors.Border.copy(alpha = 0.6f))
-                    Spacer(modifier = Modifier.height(6.dp))
 
                     val hasMultipleDiscs = group.tracks.mapNotNull { it.discNumber }.distinct().size > 1
                     group.tracks.forEachIndexed { index, track ->
@@ -416,6 +381,7 @@ private fun DownloadedAlbumCard(
                 }
             }
         }
+        Hairline(modifier = Modifier.fillMaxWidth().padding(start = 74.dp))
     }
 
     if (showDeleteConfirmDialog) {
@@ -457,7 +423,7 @@ private fun DownloadedTrackItem(
             .fillMaxWidth()
             .clip(RoundedCornerShape(8.dp))
             .clickable(onClick = onPlay)
-            .padding(horizontal = 8.dp, vertical = 10.dp),
+            .padding(start = 8.dp, top = 2.dp, bottom = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
@@ -514,17 +480,15 @@ private fun DownloadedTrackItem(
             }
         }
 
-        IconButton(
+        BareIcon(
+            icon = Icons.Filled.Delete,
+            contentDescription = Strings.deleteDownloaded,
             onClick = { showTrackDeleteDialog = true },
-            modifier = Modifier.size(32.dp),
-        ) {
-            Icon(
-                imageVector = Icons.Filled.Delete,
-                contentDescription = Strings.deleteDownloaded,
-                tint = AppColors.TextTertiary,
-                modifier = Modifier.size(18.dp),
-            )
-        }
+            tint = AppColors.TextTertiary,
+            size = 44.dp,
+            iconSize = 18.dp,
+            modifier = Modifier.offset(x = 10.dp),
+        )
     }
 
     if (showTrackDeleteDialog) {

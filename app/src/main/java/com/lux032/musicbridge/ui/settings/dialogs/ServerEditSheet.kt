@@ -1,6 +1,8 @@
 package com.lux032.musicbridge.ui.settings.dialogs
 
-import androidx.compose.foundation.BorderStroke
+import com.lux032.musicbridge.KeyButton
+import com.lux032.musicbridge.KeyStyle
+import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -24,8 +26,6 @@ import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -93,36 +93,27 @@ fun ServerEditSheet(
             Text(
                 text = if (isNew) "添加音乐服务器" else "编辑音乐服务器",
                 style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
                 color = AppColors.TextPrimary,
             )
 
             // Server type chips
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 MusicServerType.entries.forEach { type ->
                     val isSelected = draft.type == type
-                    FilterChip(
-                        selected = isSelected,
-                        enabled = isNew,
+                    // Segmented choice: the selected type inverts to the hi fill.
+                    KeyButton(
                         onClick = {
                             if (draft.type != type) draft = draft.freshDraftForType(type)
                         },
-                        label = { Text(type.label) },
-                        leadingIcon = if (isSelected) {
-                            {
-                                Icon(
-                                    imageVector = Icons.Filled.Check,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(18.dp),
-                                )
-                            }
-                        } else null,
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = palette.accent.copy(alpha = 0.2f),
-                            selectedLabelColor = palette.accent,
-                            selectedLeadingIconColor = palette.accent,
-                        ),
-                    )
+                        enabled = isNew || isSelected,
+                        style = if (isSelected) KeyStyle.Hi else KeyStyle.Tonal,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text(type.label, maxLines = 1)
+                    }
                 }
             }
 
@@ -303,30 +294,25 @@ fun ServerEditSheet(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                Button(
+                KeyButton(
                     enabled = draft.type != MusicServerType.Music032 || draft.mediaToken.isNotBlank(),
                     onClick = {
                         onSave(draft, false)
                         onDismiss()
                     },
                     modifier = Modifier.weight(1f),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = palette.accent,
-                        contentColor = palette.onAccent,
-                    ),
+                    style = KeyStyle.Hi,
                 ) {
                     Text(Strings.save)
                 }
 
-                OutlinedButton(
+                KeyButton(
                     enabled = draft.type != MusicServerType.Music032 || draft.mediaToken.isNotBlank(),
                     onClick = {
                         onSave(draft, true)
                         onDismiss()
                     },
                     modifier = Modifier.weight(1f),
-                    border = BorderStroke(1.dp, AppColors.BorderStrong),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = AppColors.TextPrimary),
                 ) {
                     Text(Strings.saveAndRefresh)
                 }
@@ -340,7 +326,7 @@ fun ServerEditSheet(
 @Composable
 private fun textFieldColors() = OutlinedTextFieldDefaults.colors(
     focusedBorderColor = LocalArtworkPalette.current.accent,
-    unfocusedBorderColor = AppColors.BorderStrong,
+    unfocusedBorderColor = Color.White.copy(alpha = 0.14f),
     focusedLabelColor = LocalArtworkPalette.current.accent,
     unfocusedLabelColor = AppColors.TextSecondary,
     cursorColor = LocalArtworkPalette.current.accent,

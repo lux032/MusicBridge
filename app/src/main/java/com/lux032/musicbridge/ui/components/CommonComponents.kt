@@ -60,15 +60,18 @@ internal fun FavoriteIconButton(
     modifier: Modifier = Modifier,
     isLoading: Boolean = false,
 ) {
-    IconCircleButton(
+    // Toggle key: tonal while off, inverted to the light hi fill while favourited.
+    Key(
         onClick = onClick,
-        modifier = modifier,
+        modifier = modifier.size(48.dp),
+        style = if (isFavorite) KeyStyle.Hi else KeyStyle.Tonal,
         enabled = !isLoading,
-        highlighted = isFavorite,
     ) {
         FavoriteIconGraphic(
             isFavorite = isFavorite,
-            tint = if (isFavorite) LocalArtworkPalette.current.accent else AppColors.TextSecondary,
+            tint = if (isFavorite) keyHiInk() else AppColors.TextPrimary,
+            baseSize = 22.dp,
+            selectedSize = 22.dp,
         )
     }
 }
@@ -88,17 +91,14 @@ internal fun BackCircleButton(
         modifier = modifier.fillMaxWidth(),
         contentAlignment = Alignment.CenterStart,
     ) {
-        IconCircleButton(
+        // Bare glyph (utility tier): offset so the arrow optically aligns with the content edge.
+        BareIcon(
+            icon = Icons.AutoMirrored.Filled.ArrowBack,
+            contentDescription = contentDescription,
             onClick = onClick,
-            containerColor = Color.White.copy(alpha = 0.10f),
-        ) {
-            Icon(
-                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                contentDescription = contentDescription,
-                tint = AppColors.TextPrimary,
-                modifier = Modifier.size(20.dp),
-            )
-        }
+            tint = AppColors.TextPrimary,
+            modifier = Modifier.offset(x = (-12).dp),
+        )
     }
 }
 
@@ -111,39 +111,20 @@ internal fun IconCircleButton(
     containerColor: Color? = null,
     content: @Composable BoxScope.() -> Unit,
 ) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val isPressed by interactionSource.collectIsPressedAsState()
-    val scale by animateFloatAsState(
-        targetValue = if (isPressed) 0.9f else 1f,
-        label = "icon_button_scale",
+    // Legacy entry point, now a borderless squircle key (48dp). Callers that passed a custom
+    // container keep it; everything else is the tonal secondary key.
+    Key(
+        onClick = onClick,
+        modifier = modifier.size(48.dp),
+        style = if (highlighted) KeyStyle.Hi else KeyStyle.Tonal,
+        enabled = enabled,
+        containerColor = if (highlighted) null else containerColor,
+        content = content,
     )
-    Surface(
-        modifier = modifier
-            .size(42.dp)
-            .graphicsLayer {
-                scaleX = scale
-                scaleY = scale
-            }
-            .clickable(
-                enabled = enabled,
-                interactionSource = interactionSource,
-                indication = ripple(bounded = true),
-                onClick = onClick,
-            ),
-        shape = CircleShape,
-        color = if (highlighted) AppColors.CardSurfaceStrong else (containerColor ?: AppColors.CardSurface),
-        border = BorderStroke(
-            1.dp,
-            if (highlighted) AppColors.BorderStrong else AppColors.Border,
-        ),
-    ) {
-        Box(
-            modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center,
-            content = content,
-        )
-    }
 }
+
+/** Height of the docked navigation bar's content (system navigation inset is added below it). */
+internal val DockedNavigationHeight = 72.dp
 
 @Composable
 internal fun BottomNavigationBar(
@@ -154,77 +135,29 @@ internal fun BottomNavigationBar(
     val navigationBarBottomInset = WindowInsets.navigationBars
         .asPaddingValues()
         .calculateBottomPadding()
-    val palette = LocalArtworkPalette.current
     val sections = listOf(AppSection.Home, AppSection.Artists, AppSection.Playlists, AppSection.Settings)
-    val selectedIndex = sections.indexOf(primarySection).coerceAtLeast(0)
 
-    // The capsule's two edges follow the selection with springs of different stiffness, so the
-    // faster edge leads and the slower one trails: the pill stretches while it travels
-    // (位移+形变) and settles once both edges arrive.
-    val leadingEdge by animateFloatAsState(
-        targetValue = selectedIndex.toFloat(),
-        animationSpec = spring(dampingRatio = 0.85f, stiffness = 500f),
-        label = "nav_pill_leading_edge",
-    )
-    val trailingEdge by animateFloatAsState(
-        targetValue = selectedIndex.toFloat(),
-        animationSpec = spring(dampingRatio = 0.92f, stiffness = Spring.StiffnessLow),
-        label = "nav_pill_trailing_edge",
-    )
-
-    // Floating dark-glass pill: nearly opaque palette base with a light hairline border.
-    // The bar floats above scrolling artwork/text, so it must be opaque enough that content
-    // sliding underneath never bleeds through and collides with the tab labels.
-    Surface(
+    // Docked Material navigation bar (Design D): it shares the deep dock colour with the room
+    // bar above it, so the two read as one bottom block instead of two floating pills.
+    Row(
         modifier = modifier
             .fillMaxWidth()
-            .padding(
-                start = 16.dp,
-                end = 16.dp,
-                bottom = navigationBarBottomInset + 10.dp,
-            ),
-        shape = RoundedCornerShape(28.dp),
-        color = palette.backgroundBottom.copy(alpha = 0.94f),
-        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.10f)),
+            .background(dockColor())
+            .padding(bottom = navigationBarBottomInset)
+            .height(DockedNavigationHeight)
+            .padding(horizontal = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        var rowSize by remember { mutableStateOf(IntSize.Zero) }
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 8.dp, vertical = 6.dp),
-        ) {
-            if (rowSize.width > 0 && rowSize.height > 0) {
-                val density = LocalDensity.current
-                val cellWidth = with(density) { (rowSize.width / sections.size).toDp() }
-                val leftEdge = minOf(leadingEdge, trailingEdge)
-                val rightEdge = maxOf(leadingEdge, trailingEdge) + 1f
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.CenterStart)
-                        .offset(x = cellWidth * leftEdge + 4.dp)
-                        .width(cellWidth * (rightEdge - leftEdge) - 8.dp)
-                        .height(with(density) { rowSize.height.toDp() } - 8.dp)
-                        .clip(RoundedCornerShape(18.dp))
-                        .background(palette.accent.copy(alpha = 0.16f)),
-                )
-            }
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .onSizeChanged { rowSize = it },
+        sections.forEach { section ->
+            Box(
+                modifier = Modifier.weight(1f),
+                contentAlignment = Alignment.Center,
             ) {
-                sections.forEach { section ->
-                    Box(
-                        modifier = Modifier.weight(1f),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        BottomNavButton(
-                            section = section,
-                            isSelected = primarySection == section,
-                            onClick = { onSectionChange(section) },
-                        )
-                    }
-                }
+                BottomNavButton(
+                    section = section,
+                    isSelected = primarySection == section,
+                    onClick = { onSectionChange(section) },
+                )
             }
         }
     }
@@ -236,13 +169,21 @@ internal fun BottomMiniPlayerHost(
     appState: AppState,
     modifier: Modifier = Modifier,
     isPlayerOpen: Boolean = false,
+    bottomInset: Dp = 0.dp,
     onOpenPlayback: () -> Unit,
 ) {
     val playerState = appState.miniPlayerState ?: return
+    val volume = if (playerState.target is PlaybackTarget.Sonos && appState.hasLoadedSonosVolume) {
+        appState.sonosVolume.toInt()
+    } else {
+        null
+    }
     BottomMiniPlayer(
         state = playerState,
         modifier = modifier,
         isPlayerOpen = isPlayerOpen,
+        volume = volume,
+        bottomInset = bottomInset,
         onArtworkClick = onOpenPlayback,
         onTogglePause = { appState.togglePause(playerState) },
     )
@@ -260,8 +201,8 @@ internal fun AppNavigationRail(
         modifier = modifier
             .fillMaxHeight()
             .width(104.dp),
-        color = LocalArtworkPalette.current.backgroundBottom.copy(alpha = 0.94f),
-        shadowElevation = 8.dp,
+        color = dockColor(),
+        shadowElevation = 0.dp,
     ) {
         Column(
             modifier = Modifier
@@ -312,36 +253,57 @@ internal fun BottomNavButton(
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
     val scale by animateFloatAsState(
-        targetValue = if (isPressed) 0.9f else 1f,
+        targetValue = if (isPressed) 0.92f else 1f,
         label = "nav_button_scale",
     )
-    val animatedTint by animateColorAsState(
-        targetValue = if (isSelected) LocalArtworkPalette.current.accent else AppColors.TextSecondary,
-        label = "nav_tint",
+    // Selected destination: the squircle indicator inverts to the light hi key with a dark
+    // glyph (Design D toggle language); the label brightens and bolds.
+    val indicatorColor by animateColorAsState(
+        targetValue = if (isSelected) KeyColors.Hi else Color.Transparent,
+        label = "nav_indicator",
+    )
+    val iconTint by animateColorAsState(
+        targetValue = if (isSelected) keyHiInk() else AppColors.TextTertiary,
+        label = "nav_icon_tint",
+    )
+    val labelColor by animateColorAsState(
+        targetValue = if (isSelected) AppColors.TextPrimary else AppColors.TextTertiary,
+        label = "nav_label_tint",
     )
     Column(
         modifier = Modifier
+            .clip(RoundedCornerShape(16.dp))
             .clickable(
                 interactionSource = interactionSource,
-                indication = ripple(bounded = true),
+                indication = null,
                 onClick = onClick,
             )
             .graphicsLayer {
                 scaleX = scale
                 scaleY = scale
             }
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            .padding(horizontal = 6.dp, vertical = 4.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        NavIconGraphic(
-            icon = icon,
-            tint = animatedTint,
-        )
+        Box(
+            modifier = Modifier
+                .size(width = 56.dp, height = 32.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(indicatorColor),
+            contentAlignment = Alignment.Center,
+        ) {
+            NavIconGraphic(
+                icon = icon,
+                tint = iconTint,
+                modifier = Modifier.size(22.dp),
+            )
+        }
         Text(
             text = label,
-            color = animatedTint,
+            color = labelColor,
             style = MaterialTheme.typography.labelSmall,
+            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
         )
     }
 }
@@ -355,7 +317,6 @@ internal fun MessageCard(label: String, message: String, tone: MessageTone) {
     Surface(
         shape = RoundedCornerShape(20.dp),
         color = backgroundColor,
-        border = BorderStroke(1.dp, AppColors.Border),
     ) {
         Column(
             modifier = Modifier.padding(16.dp),
@@ -372,7 +333,6 @@ internal fun LoadingCard(message: String) {
     Surface(
         shape = RoundedCornerShape(20.dp),
         color = AppColors.CardSurface,
-        border = BorderStroke(1.dp, AppColors.Border),
     ) {
         Row(
             modifier = Modifier.padding(16.dp),
@@ -381,7 +341,7 @@ internal fun LoadingCard(message: String) {
         ) {
             CircularProgressIndicator(
                 modifier = Modifier.size(24.dp),
-                color = AppColors.Accent,
+                color = LocalArtworkPalette.current.accent,
                 strokeWidth = 3.dp,
             )
             Text(text = message, color = AppColors.TextSecondary)
@@ -399,8 +359,6 @@ internal fun EmptyStateCard(
     Surface(
         shape = RoundedCornerShape(22.dp),
         color = AppColors.CardSurface,
-        border = BorderStroke(1.dp, AppColors.Border),
-        shadowElevation = 4.dp,
     ) {
         Column(
             modifier = Modifier.padding(20.dp),
@@ -413,9 +371,7 @@ internal fun EmptyStateCard(
                 fontWeight = FontWeight.Bold,
             )
             Text(text = body, color = AppColors.TextSecondary)
-            Button(onClick = onAction) {
-                Text(actionLabel)
-            }
+            LabelKey(text = actionLabel, onClick = onAction, style = KeyStyle.Hi)
         }
     }
 }
@@ -456,7 +412,7 @@ internal fun AlbumCoverCard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .aspectRatio(1f)
-                    .clip(RoundedCornerShape(18.dp)),
+                    .clip(RoundedCornerShape(12.dp)),
                 contentScale = ContentScale.Crop,
                 thumbnailSize = layoutInfo.albumGridMinimumWidth * 1.1f,
             )
@@ -470,7 +426,7 @@ internal fun AlbumCoverCard(
                     modifier = Modifier
                         .fillMaxWidth()
                         .aspectRatio(1f)
-                        .clip(RoundedCornerShape(16.dp)),
+                        .clip(RoundedCornerShape(12.dp)),
                     contentScale = ContentScale.Crop,
                     thumbnailSize = layoutInfo.albumGridMinimumWidth * 1.1f,
                 )
@@ -528,8 +484,9 @@ internal fun QueueActionMenu(
     isDownloaded: Boolean = false,
     downloadLabel: String? = null,
     onDownloadAction: (() -> Unit)? = null,
+    onSonicRadio: (() -> Unit)? = null,
 ) {
-    DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
+    DropdownMenu(expanded = expanded, onDismissRequest = onDismiss, shape = RoundedCornerShape(16.dp)) {
         if (onPlay != null) {
             DropdownMenuItem(
                 text = { Text(Strings.play) },
@@ -540,7 +497,7 @@ internal fun QueueActionMenu(
                 },
             )
             HorizontalDivider(
-                color = AppColors.Border,
+                color = KeyColors.Line,
                 modifier = Modifier.padding(vertical = 4.dp),
             )
         }
@@ -560,7 +517,21 @@ internal fun QueueActionMenu(
                 },
             )
             HorizontalDivider(
-                color = AppColors.Border,
+                color = KeyColors.Line,
+                modifier = Modifier.padding(vertical = 4.dp),
+            )
+        }
+        if (onSonicRadio != null) {
+            DropdownMenuItem(
+                text = { Text(Strings.sonicRadio) },
+                leadingIcon = { Icon(Icons.Filled.Radio, contentDescription = null) },
+                onClick = {
+                    onDismiss()
+                    onSonicRadio()
+                },
+            )
+            HorizontalDivider(
+                color = KeyColors.Line,
                 modifier = Modifier.padding(vertical = 4.dp),
             )
         }
@@ -690,9 +661,9 @@ internal fun GlobalVolumeOverlay(
     Surface(
         modifier = modifier.widthIn(max = 360.dp),
         shape = RoundedCornerShape(24.dp),
-        color = AppColors.SurfaceStrong,
-        border = BorderStroke(1.dp, AppColors.BorderStrong),
-        shadowElevation = 10.dp,
+        // Docked chrome tone, no outline: reads as the same family as the room bar.
+        color = dockColor(),
+        shadowElevation = 12.dp,
     ) {
         Column(
             modifier = Modifier

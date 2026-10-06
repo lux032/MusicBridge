@@ -162,16 +162,20 @@ private fun paletteFromBitmap(bitmap: android.graphics.Bitmap): ArtworkPalette {
 
     ColorUtils.colorToHSL(seedRgb, hsl)
     val seedHue = hsl[0]
-    val topSaturation = hsl[1].coerceIn(0.30f, 0.55f)
+    // Design D "适中" field: the cover hue stays clearly visible at the top of the page (a
+    // little brighter and more saturated than the old near-black tint), settling into a deep
+    // tinted base where lists and the docked bars live. The luminance cap still guarantees
+    // secondary-text contrast for bright yellow/green/cyan covers.
+    val topSaturation = hsl[1].coerceIn(0.34f, 0.60f)
     val extractedBackgroundTop = capLuminance(
         hue = seedHue,
         saturation = topSaturation,
-        initialLightness = 0.32f,
-        maxLuminance = 0.06,
+        initialLightness = 0.36f,
+        maxLuminance = 0.075,
     )
     val extractedBackgroundBottom = Color(
         ColorUtils.HSLToColor(
-            floatArrayOf(seedHue, (topSaturation * 0.8f).coerceIn(0.25f, 0.50f), 0.14f)
+            floatArrayOf(seedHue, (topSaturation * 0.75f).coerceIn(0.25f, 0.50f), 0.12f)
         )
     )
 

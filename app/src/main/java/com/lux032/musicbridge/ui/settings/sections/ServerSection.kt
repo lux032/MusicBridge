@@ -1,6 +1,12 @@
 package com.lux032.musicbridge.ui.settings.sections
 
-import androidx.compose.foundation.BorderStroke
+import com.lux032.musicbridge.LabelKey
+import com.lux032.musicbridge.KeyStyle
+import com.lux032.musicbridge.KeyColors
+import com.lux032.musicbridge.BareIcon
+import com.lux032.musicbridge.LiveDot
+import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -20,8 +26,6 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.AssistChip
-import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
@@ -115,35 +119,28 @@ fun ServerSection(
                 Text(
                     text = "音乐服务器",
                     style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
                     color = AppColors.TextPrimary,
                 )
                 Text(
                     text = "支持管理多个 Plex 或 032 Music Server 并随时切换",
                     style = MaterialTheme.typography.bodySmall,
-                    color = AppColors.TextSecondary,
+                    color = AppColors.TextTertiary,
                 )
             }
 
-            FilledTonalButton(
+            LabelKey(
+                text = "添加",
+                icon = Icons.Filled.Add,
                 onClick = { editingProfile = MusicServerProfile(type = MusicServerType.Music032) },
-                colors = ButtonDefaults.filledTonalButtonColors(
-                    containerColor = palette.accent.copy(alpha = 0.15f),
-                    contentColor = palette.accent,
-                ),
-            ) {
-                Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(4.dp))
-                Text("添加")
-            }
+                height = 40.dp,
+            )
         }
 
         // Server Cards
         if (serverProfiles.isEmpty()) {
             Surface(
-                shape = RoundedCornerShape(18.dp),
-                color = AppColors.CardSurface,
-                border = BorderStroke(1.dp, AppColors.Border),
+                shape = RoundedCornerShape(20.dp),
+                color = Color.White.copy(alpha = 0.055f),
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Column(
@@ -156,12 +153,12 @@ fun ServerSection(
                         style = MaterialTheme.typography.bodyLarge,
                         color = AppColors.TextSecondary,
                     )
-                    OutlinedButton(
+                    LabelKey(
+                        text = "立即添加服务器",
+                        icon = Icons.Filled.Add,
                         onClick = { editingProfile = MusicServerProfile(type = MusicServerType.Music032) },
-                        border = BorderStroke(1.dp, palette.accent),
-                    ) {
-                        Text("立即添加服务器", color = palette.accent)
-                    }
+                        style = KeyStyle.Hi,
+                    )
                 }
             }
         } else {
@@ -175,11 +172,7 @@ fun ServerSection(
                             .clip(RoundedCornerShape(18.dp))
                             .clickable { onSwitchServer(profile.id) },
                         shape = RoundedCornerShape(18.dp),
-                        color = if (isActive) palette.accent.copy(alpha = 0.12f) else AppColors.CardSurface,
-                        border = BorderStroke(
-                            1.dp,
-                            if (isActive) palette.accent.copy(alpha = 0.6f) else AppColors.Border,
-                        ),
+                        color = if (isActive) KeyColors.Tonal else Color.White.copy(alpha = 0.04f),
                     ) {
                         Row(
                             modifier = Modifier
@@ -207,15 +200,11 @@ fun ServerSection(
                                         fontWeight = FontWeight.SemiBold,
                                     )
                                     if (isActive) {
-                                        AssistChip(
-                                            onClick = {},
-                                            label = { Text("当前", style = MaterialTheme.typography.labelSmall) },
-                                            colors = AssistChipDefaults.assistChipColors(
-                                                containerColor = palette.accent.copy(alpha = 0.2f),
-                                                labelColor = palette.accent,
-                                            ),
-                                            border = null,
-                                            modifier = Modifier.height(24.dp),
+                                        LiveDot()
+                                        Text(
+                                            text = "当前",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = palette.accent,
                                         )
                                     }
                                 }
@@ -228,23 +217,19 @@ fun ServerSection(
                                 )
                             }
 
-                            IconButton(onClick = { editingProfile = profile }) {
-                                Icon(
-                                    imageVector = Icons.Filled.Edit,
-                                    contentDescription = "编辑服务器",
-                                    tint = AppColors.TextSecondary,
-                                    modifier = Modifier.size(20.dp),
-                                )
-                            }
-
-                            IconButton(onClick = { pendingDeleteProfile = profile }) {
-                                Icon(
-                                    imageVector = Icons.Filled.DeleteOutline,
-                                    contentDescription = "移除服务器",
-                                    tint = AppColors.TextSecondary,
-                                    modifier = Modifier.size(20.dp),
-                                )
-                            }
+                            BareIcon(
+                                icon = Icons.Filled.Edit,
+                                contentDescription = "编辑服务器",
+                                onClick = { editingProfile = profile },
+                                iconSize = 20.dp,
+                            )
+                            BareIcon(
+                                icon = Icons.Filled.DeleteOutline,
+                                contentDescription = "移除服务器",
+                                onClick = { pendingDeleteProfile = profile },
+                                iconSize = 20.dp,
+                                modifier = Modifier.offset(x = 6.dp),
+                            )
                         }
                     }
                 }
@@ -252,16 +237,11 @@ fun ServerSection(
         }
 
         // Refresh home button
-        OutlinedButton(
+        LabelKey(
+            text = Strings.refreshHome,
+            icon = Icons.Filled.Refresh,
             onClick = onRefreshHome,
             modifier = Modifier.fillMaxWidth(),
-            border = BorderStroke(1.dp, AppColors.BorderStrong),
-            colors = ButtonDefaults.outlinedButtonColors(contentColor = AppColors.TextPrimary),
-            shape = RoundedCornerShape(14.dp),
-        ) {
-            Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
-            Spacer(Modifier.width(6.dp))
-            Text(Strings.refreshHome)
-        }
+        )
     }
 }

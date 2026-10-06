@@ -112,11 +112,11 @@ internal fun ArtistsSection(
                                     text = Strings.artists,
                                     style = MaterialTheme.typography.headlineMedium,
                                     color = AppColors.TextPrimary,
-                                    fontWeight = FontWeight.Bold,
                                 )
                                 Text(
                                     text = Strings.artistsDesc,
-                                    color = AppColors.TextSecondary,
+                                    color = AppColors.TextTertiary,
+                                    style = MaterialTheme.typography.bodySmall,
                                 )
                             }
                             ArtistPresentationToggle(
@@ -193,11 +193,11 @@ internal fun ArtistsSection(
                                     text = Strings.artists,
                                     style = MaterialTheme.typography.headlineMedium,
                                     color = AppColors.TextPrimary,
-                                    fontWeight = FontWeight.Bold,
                                 )
                                 Text(
                                     text = Strings.artistsDesc,
-                                    color = AppColors.TextSecondary,
+                                    color = AppColors.TextTertiary,
+                                    style = MaterialTheme.typography.bodySmall,
                                 )
                             }
                             ArtistPresentationToggle(
@@ -249,62 +249,59 @@ internal fun ArtistCoverCard(
     compact: Boolean = false,
     onClick: () -> Unit,
 ) {
-    val cornerRadius = if (compact) 18.dp else 24.dp
-    Surface(
+    // Design D: no card container — the photo carries the tile, the caption sits on the field.
+    Column(
         modifier = Modifier
-            .clickable(onClick = onClick),
-        shape = RoundedCornerShape(cornerRadius),
-        color = AppColors.CardSurface,
-        border = BorderStroke(1.dp, AppColors.Border),
-        shadowElevation = 0.dp,
+            .clip(RoundedCornerShape(14.dp))
+            .clickable(onClick = onClick)
+            .padding(bottom = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(if (compact) 8.dp else 10.dp),
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(if (compact) 7.dp else 10.dp)) {
-            if (artist.coverUrl != null) {
-                AsyncAlbumArtwork(
-                    imageUrl = artist.coverUrl,
-                    title = artist.name,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(1.05f)
-                        .clip(RoundedCornerShape(topStart = cornerRadius, topEnd = cornerRadius)),
-                    thumbnailSize = LocalAppLayoutInfo.current.artistGridMinimumWidth * 1.1f,
-                )
-            } else {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(1.05f)
-                        .background(AppColors.SurfaceMuted, RoundedCornerShape(topStart = cornerRadius, topEnd = cornerRadius)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Person,
-                        contentDescription = null,
-                        tint = AppColors.TextSecondary,
-                        modifier = Modifier.size(if (compact) 44.dp else 64.dp)
-                    )
-                }
-            }
-            Column(
-                modifier = Modifier.padding(
-                    start = if (compact) 10.dp else 14.dp,
-                    end = if (compact) 10.dp else 14.dp,
-                    bottom = if (compact) 10.dp else 14.dp,
-                ),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
+        if (artist.coverUrl != null) {
+            AsyncAlbumArtwork(
+                imageUrl = artist.coverUrl,
+                title = artist.name,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(1f)
+                    .clip(RoundedCornerShape(14.dp)),
+                contentScale = ContentScale.Crop,
+                thumbnailSize = LocalAppLayoutInfo.current.artistGridMinimumWidth * 1.1f,
+            )
+        } else {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(1f)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(KeyColors.Tonal),
+                contentAlignment = Alignment.Center,
             ) {
-                Text(
-                    text = artist.name,
-                    color = AppColors.TextPrimary,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = Strings.albumsCount(artist.albumCount),
-                    color = AppColors.TextSecondary,
+                Icon(
+                    imageVector = Icons.Filled.Person,
+                    contentDescription = null,
+                    tint = AppColors.TextTertiary,
+                    modifier = Modifier.size(if (compact) 44.dp else 60.dp),
                 )
             }
+        }
+        Column(
+            modifier = Modifier.padding(horizontal = 2.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(
+                text = artist.name,
+                color = AppColors.TextPrimary,
+                fontWeight = FontWeight.SemiBold,
+                style = MaterialTheme.typography.bodyLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = Strings.albumsCount(artist.albumCount),
+                color = AppColors.TextTertiary,
+                style = MaterialTheme.typography.bodySmall,
+            )
         }
     }
 }
@@ -314,50 +311,68 @@ internal fun ArtistListRow(
     artist: ArtistSummary,
     onClick: () -> Unit,
 ) {
-    Surface(
-        modifier = Modifier
-            .clickable(onClick = onClick),
-        shape = RoundedCornerShape(20.dp),
-        color = AppColors.CardSurface,
-        border = BorderStroke(1.dp, AppColors.Border),
-    ) {
+    // Editorial list row: round portrait, name, count, hairline below. No card.
+    Column {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(12.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                .clickable(onClick = onClick)
+                .padding(vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            AsyncAlbumArtwork(
-                imageUrl = artist.coverUrl,
-                title = artist.name,
-                modifier = Modifier
-                    .size(68.dp)
-                    .clip(RoundedCornerShape(18.dp)),
-                thumbnailSize = 68.dp,
-            )
+            if (artist.coverUrl != null) {
+                AsyncAlbumArtwork(
+                    imageUrl = artist.coverUrl,
+                    title = artist.name,
+                    modifier = Modifier
+                        .size(52.dp)
+                        .clip(CircleShape),
+                    contentScale = ContentScale.Crop,
+                    thumbnailSize = 56.dp,
+                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .size(52.dp)
+                        .clip(CircleShape)
+                        .background(KeyColors.Tonal),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Person,
+                        contentDescription = null,
+                        tint = AppColors.TextTertiary,
+                        modifier = Modifier.size(26.dp),
+                    )
+                }
+            }
             Column(
                 modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
                 Text(
                     text = artist.name,
                     color = AppColors.TextPrimary,
-                    fontWeight = FontWeight.Bold,
+                    fontWeight = FontWeight.SemiBold,
+                    style = MaterialTheme.typography.bodyLarge,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
                     text = Strings.albumsCount(artist.albumCount),
-                    color = AppColors.TextSecondary,
+                    color = AppColors.TextTertiary,
+                    style = MaterialTheme.typography.bodySmall,
                 )
             }
-            NavIconGraphic(
-                icon = NavIcon.Artists,
+            Icon(
+                imageVector = Icons.Filled.ChevronRight,
+                contentDescription = null,
                 tint = AppColors.TextTertiary,
-                modifier = Modifier.size(18.dp),
+                modifier = Modifier.size(20.dp),
             )
         }
+        Hairline(Modifier.fillMaxWidth())
     }
 }
 
@@ -372,8 +387,7 @@ internal fun IndexSectionHeader(
             .fillMaxWidth()
             .padding(top = 6.dp, bottom = 2.dp),
         color = AppColors.TextSecondary,
-        style = MaterialTheme.typography.titleMedium,
-        fontWeight = FontWeight.Bold,
+        style = MaterialTheme.typography.titleLarge,
     )
 }
 
@@ -416,10 +430,9 @@ internal fun BoxScope.VerticalIndexBar(
                     onDragCancel = { activeLabel = null },
                 )
             },
-        shape = RoundedCornerShape(if (compact) 16.dp else 20.dp),
-        color = LocalArtworkPalette.current.backgroundBottom.copy(alpha = 0.88f),
-        border = BorderStroke(1.dp, AppColors.Border),
-        shadowElevation = 6.dp,
+        shape = RoundedCornerShape(if (compact) 14.dp else 18.dp),
+        color = dockColor().copy(alpha = 0.92f),
+        shadowElevation = 0.dp,
     ) {
         Column(
             modifier = Modifier.padding(
@@ -519,158 +532,88 @@ internal fun ArtistAlbumsSection(
         }
 
         item(contentType = "hero") {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 12.dp, bottom = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+            // Design D header: avatar + serif name, then one action row — the split primary key
+            // names the output room, favourite is a toggle key beside it.
+            Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(18.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(
-                        text = currentArtist.name,
-                        style = MaterialTheme.typography.headlineMedium,
-                        color = AppColors.TextPrimary,
-                        fontWeight = FontWeight.Bold,
-                    )
-                    Text(
-                        text = Strings.albumsCount(currentArtist.albumCount),
-                        color = AppColors.TextSecondary,
-                    )
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        FavoriteIconButton(
-                            isFavorite = currentArtist.isFavorite,
-                            isLoading = isFavoriteLoading,
-                            onClick = { onToggleArtistFavorite(currentArtist) },
+                    if (currentArtist.coverUrl != null) {
+                        AsyncAlbumArtwork(
+                            imageUrl = currentArtist.coverUrl,
+                            title = currentArtist.name,
+                            modifier = Modifier
+                                .size(104.dp)
+                                .clip(CircleShape),
+                            contentScale = ContentScale.Crop,
+                            thumbnailSize = 104.dp,
                         )
-                        val playAllEnabled = artistTracks.isNotEmpty() && !isPlaybackLoading
-                        IconCircleButton(
-                            onClick = {
-                                artistTracks.firstOrNull()?.let { onPlayTrack(currentArtist, it, 0) }
-                            },
-                            enabled = playAllEnabled,
-                            containerColor = if (playAllEnabled) palette.accent else palette.accent.copy(alpha = 0.35f),
-                            modifier = Modifier.semantics { contentDescription = Strings.playAll },
-                        ) {
-                            PlayerIconGraphic(
-                                icon = PlayerIcon.Play,
-                                tint = palette.onAccent.copy(alpha = if (playAllEnabled) 1f else 0.6f),
-                                modifier = Modifier.size(18.dp),
-                            )
-                        }
-                        val shuffleEnabled = currentArtist.albums.isNotEmpty() && !isPlaybackLoading
-                        IconCircleButton(
-                            onClick = { onShuffleArtist(currentArtist) },
-                            enabled = shuffleEnabled,
-                            containerColor = AppColors.CardSurfaceStrong,
-                            modifier = Modifier.semantics { contentDescription = Strings.shuffleShort },
+                    } else {
+                        Box(
+                            modifier = Modifier
+                                .size(104.dp)
+                                .clip(CircleShape)
+                                .background(AppColors.SurfaceMuted),
+                            contentAlignment = Alignment.Center,
                         ) {
                             Icon(
-                                imageVector = Icons.Filled.Shuffle,
+                                imageVector = Icons.Filled.Person,
                                 contentDescription = null,
-                                tint = if (shuffleEnabled) AppColors.TextPrimary else AppColors.TextTertiary,
-                                modifier = Modifier.size(18.dp),
+                                tint = AppColors.TextSecondary,
+                                modifier = Modifier.size(44.dp),
                             )
                         }
                     }
-                    Text(
-                        text = Strings.outputTargetDesc(outputTargetName),
-                        color = AppColors.TextTertiary,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
-                if (currentArtist.coverUrl != null) {
-                    AsyncAlbumArtwork(
-                        imageUrl = currentArtist.coverUrl,
-                        title = currentArtist.name,
-                        modifier = Modifier
-                            .size(104.dp)
-                            .border(BorderStroke(1.dp, AppColors.BorderStrong), CircleShape)
-                            .clip(CircleShape),
-                        contentScale = ContentScale.Crop,
-                        thumbnailSize = 104.dp,
-                    )
-                } else {
-                    Box(
-                        modifier = Modifier
-                            .size(104.dp)
-                            .border(BorderStroke(1.dp, AppColors.BorderStrong), CircleShape)
-                            .clip(CircleShape)
-                            .background(AppColors.SurfaceMuted),
-                        contentAlignment = Alignment.Center,
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
-                        Icon(
-                            imageVector = Icons.Filled.Person,
-                            contentDescription = null,
-                            tint = AppColors.TextSecondary,
-                            modifier = Modifier.size(44.dp),
+                        Text(
+                            text = currentArtist.name,
+                            style = MaterialTheme.typography.headlineMedium,
+                            color = AppColors.TextPrimary,
+                            maxLines = 3,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            text = Strings.albumsCount(currentArtist.albumCount),
+                            color = AppColors.TextSecondary,
+                            style = MaterialTheme.typography.bodyMedium,
                         )
                     }
                 }
-            }
-        }
-
-        val categories = listOf(
-            ArtistAlbumCategory.Album to Strings.studioAlbums,
-            ArtistAlbumCategory.SingleEp to Strings.singlesAndEps,
-            ArtistAlbumCategory.CompilationLive to Strings.compilationsAndLive,
-        )
-        categories.forEach { (category, title) ->
-            val rows = albumSections[category].orEmpty()
-            if (rows.isNotEmpty()) {
-                item(key = "artist-album-header-$category", contentType = "albums-header") {
-                    Text(
-                        text = title,
-                        style = MaterialTheme.typography.titleLarge,
-                        color = AppColors.TextPrimary,
-                        fontWeight = FontWeight.SemiBold,
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    val playAllEnabled = artistTracks.isNotEmpty() && !isPlaybackLoading
+                    val shuffleEnabled = currentArtist.albums.isNotEmpty() && !isPlaybackLoading
+                    SplitPlayKey(
+                        label = Strings.playOn(outputTargetName),
+                        onPlay = {
+                            artistTracks.firstOrNull()?.let { onPlayTrack(currentArtist, it, 0) }
+                        },
+                        onShuffle = { onShuffleArtist(currentArtist) },
+                        enabled = playAllEnabled,
+                        shuffleEnabled = shuffleEnabled,
+                        modifier = Modifier.weight(1f),
+                    )
+                    FavoriteIconButton(
+                        isFavorite = currentArtist.isFavorite,
+                        isLoading = isFavoriteLoading,
+                        onClick = { onToggleArtistFavorite(currentArtist) },
                     )
                 }
-                itemsIndexed(
-                    rows,
-                    key = { _, row -> "artist-album-row-$category-${row.first().album.ratingKey}" },
-                    contentType = { _, _ -> "album-row" },
-                ) { _, row ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth().animateItem(fadeInSpec = null, fadeOutSpec = null),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        row.forEach { classified ->
-                            val album = classified.album
-                            Box(modifier = Modifier.weight(1f)) {
-                                AlbumCoverCard(
-                                    album = album,
-                                    selected = selectedAlbum?.ratingKey == album.ratingKey,
-                                    onClick = { onAlbumClick(album) },
-                                    onQueueAction = { onAlbumQueueAction(album, it) },
-                                    onPlay = { onPlayAlbum(album) },
-                                    compact = true,
-                                    subtitleOverride = artistAlbumSubtitle(classified),
-                                )
-                            }
-                        }
-                        repeat(layoutInfo.albumGridColumns - row.size) {
-                            Spacer(modifier = Modifier.weight(1f))
-                        }
-                    }
-                }
             }
         }
 
+        // Top tracks lead (what people play from an artist page), the discography follows.
         if (isArtistTracksLoading || topTracks.isNotEmpty()) {
             item(contentType = "tracks-header") {
-                Text(
-                    text = Strings.topTracks,
-                    style = MaterialTheme.typography.titleLarge,
-                    color = AppColors.TextPrimary,
-                    fontWeight = FontWeight.SemiBold,
-                )
+                SectionHeader(title = Strings.topTracks, modifier = Modifier.padding(top = 12.dp))
             }
         }
         if (isArtistTracksLoading) {
@@ -705,8 +648,50 @@ internal fun ArtistAlbumsSection(
                     onQueueTrack = onQueueTrack,
                 )
             }
-
         }
+
+        val categories = listOf(
+            ArtistAlbumCategory.Album to Strings.studioAlbums,
+            ArtistAlbumCategory.SingleEp to Strings.singlesAndEps,
+            ArtistAlbumCategory.CompilationLive to Strings.compilationsAndLive,
+        )
+        categories.forEach { (category, title) ->
+            val rows = albumSections[category].orEmpty()
+            if (rows.isNotEmpty()) {
+                item(key = "artist-album-header-$category", contentType = "albums-header") {
+                    SectionHeader(title = title, modifier = Modifier.padding(top = 12.dp))
+                }
+                itemsIndexed(
+                    rows,
+                    key = { _, row -> "artist-album-row-$category-${row.first().album.ratingKey}" },
+                    contentType = { _, _ -> "album-row" },
+                ) { _, row ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().animateItem(fadeInSpec = null, fadeOutSpec = null),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        row.forEach { classified ->
+                            val album = classified.album
+                            Box(modifier = Modifier.weight(1f)) {
+                                AlbumCoverCard(
+                                    album = album,
+                                    selected = selectedAlbum?.ratingKey == album.ratingKey,
+                                    onClick = { onAlbumClick(album) },
+                                    onQueueAction = { onAlbumQueueAction(album, it) },
+                                    onPlay = { onPlayAlbum(album) },
+                                    compact = true,
+                                    subtitleOverride = artistAlbumSubtitle(classified),
+                                )
+                            }
+                        }
+                        repeat(layoutInfo.albumGridColumns - row.size) {
+                            Spacer(modifier = Modifier.weight(1f))
+                        }
+                    }
+                }
+            }
+        }
+
     }
 }
 
@@ -747,17 +732,18 @@ private fun ArtistTrackRow(
     val progress = downloadProgress["${track.sourceId}:${track.ratingKey}"]
 
     Box {
+        Column {
         Row(
-            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+            modifier = Modifier.fillMaxWidth()
                 .clickable(enabled = !isPlaybackLoading) { onPlayTrack(artist, track, index) }
-                .padding(vertical = 4.dp),
+                .padding(vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             AsyncAlbumArtwork(
                 imageUrl = track.thumbUrl,
                 title = track.title,
-                modifier = Modifier.size(48.dp).clip(RoundedCornerShape(10.dp)),
+                modifier = Modifier.size(44.dp).clip(RoundedCornerShape(6.dp)),
                 thumbnailSize = 48.dp,
             )
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
@@ -787,9 +773,16 @@ private fun ArtistTrackRow(
             track.durationMillis?.let {
                 Text(formatDuration(it), color = AppColors.TextTertiary, style = MaterialTheme.typography.bodySmall)
             }
-            IconCircleButton(onClick = { showQueueMenu = true }) {
-                Icon(Icons.Filled.MoreVert, contentDescription = null, tint = AppColors.TextTertiary, modifier = Modifier.size(18.dp))
-            }
+            BareIcon(
+                icon = Icons.Filled.MoreVert,
+                contentDescription = Strings.more,
+                onClick = { showQueueMenu = true },
+                tint = AppColors.TextTertiary,
+                iconSize = 20.dp,
+                modifier = Modifier.offset(x = 10.dp),
+            )
+        }
+        Hairline(Modifier.fillMaxWidth())
         }
         QueueActionMenu(
             expanded = showQueueMenu,
@@ -812,28 +805,22 @@ internal fun ArtistPresentationToggle(
     presentation: ArtistPresentation,
     onPresentationChange: (ArtistPresentation) -> Unit,
 ) {
-    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        IconCircleButton(
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        ToggleKey(
+            checked = presentation == ArtistPresentation.Covers,
+            icon = Icons.Filled.GridView,
+            contentDescription = "Covers",
             onClick = { onPresentationChange(ArtistPresentation.Covers) },
-            enabled = presentation != ArtistPresentation.Covers,
-            highlighted = presentation == ArtistPresentation.Covers,
-        ) {
-            NavIconGraphic(
-                icon = NavIcon.Covers,
-                tint = if (presentation == ArtistPresentation.Covers) AppColors.Accent else AppColors.TextPrimary,
-                modifier = Modifier.size(18.dp),
-            )
-        }
-        IconCircleButton(
+            bareWhenOff = true,
+            iconSize = 20.dp,
+        )
+        ToggleKey(
+            checked = presentation == ArtistPresentation.List,
+            icon = Icons.Filled.List,
+            contentDescription = "List",
             onClick = { onPresentationChange(ArtistPresentation.List) },
-            enabled = presentation != ArtistPresentation.List,
-            highlighted = presentation == ArtistPresentation.List,
-        ) {
-            NavIconGraphic(
-                icon = NavIcon.List,
-                tint = if (presentation == ArtistPresentation.List) AppColors.Accent else AppColors.TextPrimary,
-                modifier = Modifier.size(18.dp),
-            )
-        }
+            bareWhenOff = true,
+            iconSize = 20.dp,
+        )
     }
 }

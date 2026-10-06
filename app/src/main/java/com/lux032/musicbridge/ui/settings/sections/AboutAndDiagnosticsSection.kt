@@ -1,5 +1,7 @@
 package com.lux032.musicbridge.ui.settings.sections
 
+import com.lux032.musicbridge.KeyButton
+import com.lux032.musicbridge.KeyStyle
 import android.content.Intent
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
@@ -147,7 +149,8 @@ fun AboutAndDiagnosticsSection(
                     style = MaterialTheme.typography.bodySmall,
                 )
 
-                Button(
+                KeyButton(
+                    style = KeyStyle.Hi,
                     onClick = {
                         scope.launch {
                             val result = withContext(Dispatchers.IO) {
@@ -164,17 +167,13 @@ fun AboutAndDiagnosticsSection(
                         }
                     },
                     modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = palette.accent,
-                        contentColor = palette.onAccent,
-                    ),
                 ) {
                     Text("抓取卡顿诊断快照")
                 }
 
-                OutlinedButton(
+                KeyButton(
                     onClick = {
-                        if (isOffsetProbeRunning) return@OutlinedButton
+                        if (isOffsetProbeRunning) return@KeyButton
                         isOffsetProbeRunning = true
                         scope.launch {
                             val result = onRunPlexOffsetProbe()
@@ -197,7 +196,7 @@ fun AboutAndDiagnosticsSection(
                     )
                 }
 
-                OutlinedButton(
+                KeyButton(
                     onClick = {
                         scope.launch {
                             val latest = withContext(Dispatchers.IO) {

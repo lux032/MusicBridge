@@ -1,6 +1,7 @@
 package com.lux032.musicbridge.ui.settings.dialogs
 
-import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import com.lux032.musicbridge.ChoiceRow
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -16,8 +17,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material3.AssistChip
-import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -65,12 +64,12 @@ fun <T> SettingOptionSheet(
                 .navigationBarsPadding()
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             Text(
                 text = title,
                 style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(start = 6.dp),
                 color = AppColors.TextPrimary,
             )
 
@@ -81,74 +80,45 @@ fun <T> SettingOptionSheet(
                 val itemBadge = badge?.invoke(option)
                 val itemDesc = description?.invoke(option)
 
-                Surface(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(14.dp))
-                        .clickable {
-                            onSelect(option)
-                            onDismiss()
-                        },
-                    shape = RoundedCornerShape(14.dp),
-                    color = if (isSelected) AppColors.CardSurfaceStrong else AppColors.CardSurface,
-                    border = BorderStroke(
-                        1.dp,
-                        if (isSelected) palette.accent else AppColors.Border,
-                    ),
+                ChoiceRow(
+                    selected = isSelected,
+                    onClick = {
+                        onSelect(option)
+                        onDismiss()
+                    },
+                    modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 13.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(3.dp),
                     ) {
-                        Column(
-                            modifier = Modifier.weight(1f),
-                            verticalArrangement = Arrangement.spacedBy(3.dp),
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
+                            Text(
+                                text = label(option),
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                                color = AppColors.TextPrimary,
+                            )
+                            if (!itemBadge.isNullOrBlank()) {
                                 Text(
-                                    text = label(option),
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-                                    color = AppColors.TextPrimary,
-                                )
-                                if (!itemBadge.isNullOrBlank()) {
-                                    AssistChip(
-                                        onClick = {
-                                            onSelect(option)
-                                            onDismiss()
-                                        },
-                                        label = { Text(itemBadge) },
-                                        colors = AssistChipDefaults.assistChipColors(
-                                            labelColor = palette.accent,
-                                        ),
-                                        border = AssistChipDefaults.assistChipBorder(
-                                            enabled = true,
-                                            borderColor = palette.accent.copy(alpha = 0.5f),
-                                        ),
-                                    )
-                                }
-                            }
-                            if (!itemDesc.isNullOrBlank()) {
-                                Text(
-                                    text = itemDesc,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = AppColors.TextSecondary,
+                                    text = itemBadge,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = palette.accent,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(palette.accent.copy(alpha = 0.16f))
+                                        .padding(horizontal = 6.dp, vertical = 2.dp),
                                 )
                             }
                         }
-
-                        if (isSelected) {
-                            Icon(
-                                imageVector = Icons.Filled.Check,
-                                contentDescription = null,
-                                tint = palette.accent,
-                                modifier = Modifier.size(20.dp),
+                        if (!itemDesc.isNullOrBlank()) {
+                            Text(
+                                text = itemDesc,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = AppColors.TextSecondary,
                             )
                         }
                     }

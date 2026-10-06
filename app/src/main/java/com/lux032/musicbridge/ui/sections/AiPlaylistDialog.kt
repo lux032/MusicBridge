@@ -28,19 +28,40 @@ internal fun AiPlaylistDialog(
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     presets.forEach { (label, presetPrompt) ->
-                        SuggestionChip(
+                        Key(
                             onClick = { prompt = presetPrompt },
-                            label = { Text(label) },
-                        )
+                            style = if (prompt == presetPrompt) KeyStyle.Hi else KeyStyle.Tonal,
+                            shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+                            modifier = Modifier.heightIn(min = 36.dp),
+                        ) {
+                            Text(
+                                label,
+                                style = MaterialTheme.typography.labelLarge,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            )
+                        }
                     }
                 }
-                OutlinedTextField(prompt, { prompt = it }, Modifier.fillMaxWidth(), label = { Text(Strings.aiPromptHint) }, minLines = 3)
-                if (generating) { LinearProgressIndicator(Modifier.fillMaxWidth()); Text(Strings.aiGenerating) }
+                OutlinedTextField(
+                    prompt,
+                    { prompt = it },
+                    Modifier.fillMaxWidth(),
+                    label = { Text(Strings.aiPromptHint) },
+                    minLines = 3,
+                    shape = KeyShape,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = LocalArtworkPalette.current.accent,
+                        unfocusedBorderColor = KeyColors.Tonal,
+                        focusedLabelColor = LocalArtworkPalette.current.accent,
+                        cursorColor = LocalArtworkPalette.current.accent,
+                    ),
+                )
+                if (generating) { LinearProgressIndicator(Modifier.fillMaxWidth(), color = LocalArtworkPalette.current.accent); Text(Strings.aiGenerating) }
             }
         },
         confirmButton = {
             if (generating) TextButton(onClick = onCancel) { Text(Strings.cancel) }
-            else Button(onClick = { onGenerate(prompt) }, enabled = prompt.isNotBlank()) { Text(Strings.aiGenerate) }
+            else KeyButton(onClick = { onGenerate(prompt) }, enabled = prompt.isNotBlank(), style = KeyStyle.Hi) { Text(Strings.aiGenerate) }
         },
         dismissButton = { if (!generating) TextButton(onClick = onDismiss) { Text(Strings.cancel) } },
     )
