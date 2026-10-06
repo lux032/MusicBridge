@@ -610,46 +610,6 @@ internal fun ArtistAlbumsSection(
             }
         }
 
-        // Top tracks lead (what people play from an artist page), the discography follows.
-        if (isArtistTracksLoading || topTracks.isNotEmpty()) {
-            item(contentType = "tracks-header") {
-                SectionHeader(title = Strings.topTracks, modifier = Modifier.padding(top = 12.dp))
-            }
-        }
-        if (isArtistTracksLoading) {
-            item(contentType = "tracks-loading") {
-                Box(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    CircularProgressIndicator(
-                        color = palette.accent,
-                        modifier = Modifier.size(28.dp),
-                        strokeWidth = 3.dp,
-                    )
-                }
-            }
-        } else {
-            itemsIndexed(
-                topTracks,
-                key = { index, track -> track.ratingKey.ifBlank { "artist-track-$index" } },
-                contentType = { _, _ -> "track" },
-            ) { index, track ->
-                ArtistTrackRow(
-                    artist = currentArtist,
-                    track = track,
-                    index = index,
-                    isPlaybackLoading = isPlaybackLoading,
-                    downloadedTrackKeys = downloadedTrackKeys,
-                    downloadProgress = downloadProgress,
-                    onDownloadTrack = onDownloadTrack,
-                    onDeleteDownloadedTrack = onDeleteDownloadedTrack,
-                    onPlayTrack = onPlayTrack,
-                    onQueueTrack = onQueueTrack,
-                )
-            }
-        }
-
         val categories = listOf(
             ArtistAlbumCategory.Album to Strings.studioAlbums,
             ArtistAlbumCategory.SingleEp to Strings.singlesAndEps,
@@ -689,6 +649,46 @@ internal fun ArtistAlbumsSection(
                         }
                     }
                 }
+            }
+        }
+
+        // Discography first; top tracks sit at the bottom of the page.
+        if (isArtistTracksLoading || topTracks.isNotEmpty()) {
+            item(contentType = "tracks-header") {
+                SectionHeader(title = Strings.topTracks, modifier = Modifier.padding(top = 12.dp))
+            }
+        }
+        if (isArtistTracksLoading) {
+            item(contentType = "tracks-loading") {
+                Box(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    CircularProgressIndicator(
+                        color = palette.accent,
+                        modifier = Modifier.size(28.dp),
+                        strokeWidth = 3.dp,
+                    )
+                }
+            }
+        } else {
+            itemsIndexed(
+                topTracks,
+                key = { index, track -> track.ratingKey.ifBlank { "artist-track-$index" } },
+                contentType = { _, _ -> "track" },
+            ) { index, track ->
+                ArtistTrackRow(
+                    artist = currentArtist,
+                    track = track,
+                    index = index,
+                    isPlaybackLoading = isPlaybackLoading,
+                    downloadedTrackKeys = downloadedTrackKeys,
+                    downloadProgress = downloadProgress,
+                    onDownloadTrack = onDownloadTrack,
+                    onDeleteDownloadedTrack = onDeleteDownloadedTrack,
+                    onPlayTrack = onPlayTrack,
+                    onQueueTrack = onQueueTrack,
+                )
             }
         }
 
