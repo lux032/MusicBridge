@@ -7,6 +7,9 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
@@ -632,10 +635,14 @@ internal fun PlaybackDetailSection(
         }
     }
 
-    // Swipe-to-dismiss: downward drags from the top of the scrollable details area slide the
-    // page down. Keep this entirely in nested scroll: a full-page pointerInput competes with
-    // child click targets and can prevent transport buttons from receiving an otherwise
-    // valid tap.
+    // Swipe-to-dismiss, two channels:
+    // - nested scroll: drags that start inside a scrollable (lyrics list, landscape details)
+    //   take over once that content is at its top;
+    // - draggable: drags on non-scrollable areas (portrait artwork, meta, gaps). This is
+    //   the stock slop-based detector — it never consumes the down event and only claims
+    //   the pointer after vertical touch slop, so taps on transport buttons are untouched
+    //   (the earlier hand-rolled pointerInput with a Final-pass watcher was what competed
+    //   with child clicks). Movement already consumed by sliders/lists cancels it.
     val dismissScope = rememberCoroutineScope()
     // Plain state written synchronously from the scroll callback: launching a coroutine per
     // drag event to snapTo() an Animatable could land a frame late, so the sheet lagged
@@ -699,8 +706,23 @@ internal fun PlaybackDetailSection(
         }
     }
 
+    val dismissDragState = rememberDraggableState { delta ->
+        if (delta > 0f || dismissOffset > 0f) {
+            dismissSpringJob?.cancel()
+            dismissOffset = (dismissOffset + delta).coerceAtLeast(0f)
+        }
+    }
+
+    // Order matters: the drag detector sits before graphicsLayer so it measures in the
+    // un-translated parent space — otherwise the sheet moving under the finger would feed
+    // back into the drag delta.
     val dismissModifier = Modifier
         .nestedScroll(dismissConnection)
+        .draggable(
+            state = dismissDragState,
+            orientation = Orientation.Vertical,
+            onDragStopped = { velocity -> settleDismiss(velocity) },
+        )
         .graphicsLayer {
             // Drag reads as a physical sheet: it follows the finger 1:1 and rounds its top
             // corners. Pure translation only — no alpha (washed-out, ghosting) and no scale
