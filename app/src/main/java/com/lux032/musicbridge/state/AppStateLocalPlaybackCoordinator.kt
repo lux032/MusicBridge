@@ -308,7 +308,9 @@ internal class AppStateLocalPlaybackCoordinator(
         val safeIndex = startIndex.coerceIn(0, tracks.lastIndex)
         // Only release a room this app is actually driving; a merely selected room may be
         // playing something the user started from another controller.
-        val handedOverSonosRoom = sonosRoomToReleaseForLocalPlayback(state.miniPlayerState)
+        // A restored (not yet loaded) session only REMEMBERS its room; we are not driving it.
+        val handedOverSonosRoom = if (state.isRestoredSessionPending) null
+        else sonosRoomToReleaseForLocalPlayback(state.miniPlayerState)
         val sonosPushJob = state.albumPlaybackJob
         // Retire in-flight Sonos requests first: their cancelled network calls must not
         // surface as errors once the local engine owns playback.

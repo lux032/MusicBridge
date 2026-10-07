@@ -10,6 +10,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.lifecycle.AndroidViewModel
 import com.lux032.musicbridge.plex.ArtistRef
 import com.lux032.musicbridge.plex.PlexAlbum
@@ -44,6 +45,8 @@ import com.lux032.musicbridge.sonos.SonosRoom
 import com.lux032.musicbridge.storage.AlbumLocalStore
 import com.lux032.musicbridge.storage.DownloadedAlbumGroup
 import com.lux032.musicbridge.storage.OfflineDownloadManager
+import com.lux032.musicbridge.storage.PlaybackSessionStore
+import com.lux032.musicbridge.storage.SavedPlaybackSession
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CoroutineScope
@@ -54,6 +57,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.UUID
+
+/** Cursor save cadence while playing; bounds what a process kill can lose. */
+private const val PLAYBACK_POSITION_SAVE_INTERVAL_MILLIS = 5_000L
 
 private data class ClientFingerprint(
     val profile: MusicServerProfile,
@@ -774,6 +780,11 @@ class AppState(
         libraryCoordinator.cancelOfflineHydration()
     }
 
+    /** True while a session restored after process death has not been loaded into any
+     *  renderer yet (see AppStatePlaybackCoordinator.startRestoredSession). */
+    internal val isRestoredSessionPending: Boolean
+        get() = playbackCoordinator.isRestoredSessionPending
+
     internal val currentPlaybackRequestGeneration: Long
         get() = playbackCoordinator.currentPlaybackRequestGeneration
 
@@ -932,7 +943,112 @@ class AppState(
 
     fun cancelSleepTimer() = playbackCoordinator.cancelSleepTimer()
 
+    // --- Playback session persistence ----------------------------------------------------
+    // The last session survives process death: on a cold start the mini player comes back
+    // paused at the saved track/position, and the first transport command loads it (see
+    // AppStatePlaybackCoordinator.startRestoredSession).
+
+    private val playbackSessionStore = PlaybackSessionStore(context)
+    /** Single-threaded so queue and cursor writes land in order. */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private val playbackSessionIo = Dispatchers.IO.limitedParallelism(1)
+    private var persistedQueueId = 0L
+    private var persistedTracks: List<PlexTrackStream>? = null
+    private var persistedAlbum: PlexAlbum? = null
+
+    init {
+        scope.launch {
+            val saved = withContext(playbackSessionIo) { playbackSessionStore.load() }
+            // Only if the user has not started something in the meantime.
+            if (saved != null && miniPlayerState == null) restorePlaybackSession(saved)
+            persistPlaybackSession()
+        }
+    }
+
+    private suspend fun restorePlaybackSession(saved: SavedPlaybackSession) {
+        val track = saved.tracks[saved.currentIndex]
+        val sourceId = track.sourceId.ifBlank { saved.album.sourceId }
+        if (serverProfiles.none { it.id == sourceId }) {
+            // The server it belonged to was deleted: the session can never play again.
+            withContext(playbackSessionIo) { playbackSessionStore.clear() }
+            return
+        }
+        val target = saved.sonosRoom?.let { PlaybackTarget.Sonos(it) } ?: PlaybackTarget.LocalDevice
+        playbackMode = saved.playbackMode
+        selectPlaybackTarget(target)
+        miniPlayerState = MiniPlayerState(
+            album = saved.album,
+            tracks = saved.tracks,
+            currentIndex = saved.currentIndex,
+            target = target,
+            isPaused = true,
+            isBuffering = false,
+            currentPositionMillis = saved.positionMillis,
+            durationMillis = saved.durationMillis ?: track.durationMillis,
+        )
+        playbackCoordinator.markRestoredSession(saved.tracks)
+        // Already on disk: the observer must not rewrite it under a new id.
+        persistedQueueId = saved.queueId
+        persistedTracks = saved.tracks
+        persistedAlbum = saved.album
+        Log.i("PlaybackSession", "restored ${saved.tracks.size} tracks at index ${saved.currentIndex}, ${saved.positionMillis}ms")
+    }
+
+    /**
+     * Mirrors the player into the store. The queue is rewritten only when it changes; the
+     * cursor is written at once on track / pause / output / mode changes and otherwise at
+     * most every [PLAYBACK_POSITION_SAVE_INTERVAL_MILLIS] while playing, so a kill loses at
+     * most a few seconds. A null player (sleep timer, server switch) keeps the last saved
+     * session, which is what a later cold start should offer to resume.
+     */
+    private suspend fun persistPlaybackSession() {
+        var lastCursorKey: List<Any?>? = null
+        var lastSavedPositionMillis = 0L
+        snapshotFlow { miniPlayerState to playbackMode }.collect { (player, mode) ->
+            player ?: return@collect
+            if (player.tracks !== persistedTracks || player.album !== persistedAlbum) {
+                val queueId = maxOf(persistedQueueId + 1, System.currentTimeMillis())
+                persistedQueueId = queueId
+                persistedTracks = player.tracks
+                persistedAlbum = player.album
+                val album = player.album
+                val tracks = player.tracks
+                withContext(playbackSessionIo) { playbackSessionStore.saveQueue(queueId, album, tracks) }
+                lastCursorKey = null
+            }
+            val cursorKey = listOf(persistedQueueId, player.currentIndex, player.sonosRoom?.coordinatorUuid, player.isPaused, mode)
+            val positionDelta = kotlin.math.abs(player.currentPositionMillis - lastSavedPositionMillis)
+            val positionDue = if (player.isPaused) positionDelta > 0L else positionDelta >= PLAYBACK_POSITION_SAVE_INTERVAL_MILLIS
+            if (cursorKey != lastCursorKey || positionDue) {
+                lastCursorKey = cursorKey
+                lastSavedPositionMillis = player.currentPositionMillis
+                val queueId = persistedQueueId
+                withContext(playbackSessionIo) {
+                    playbackSessionStore.saveCursor(
+                        queueId = queueId,
+                        currentIndex = player.currentIndex,
+                        positionMillis = player.currentPositionMillis,
+                        durationMillis = player.durationMillis,
+                        sonosRoom = player.sonosRoom,
+                        playbackMode = mode,
+                    )
+                }
+            }
+        }
+    }
+
     override fun onCleared() {
+        // Last cursor flush (SharedPreferences.apply is safe on the main thread).
+        miniPlayerState?.takeIf { it.tracks === persistedTracks }?.let { player ->
+            playbackSessionStore.saveCursor(
+                queueId = persistedQueueId,
+                currentIndex = player.currentIndex,
+                positionMillis = player.currentPositionMillis,
+                durationMillis = player.durationMillis,
+                sonosRoom = player.sonosRoom,
+                playbackMode = playbackMode,
+            )
+        }
         // Fire-and-forget bounded ends on the process-level reporter scope: no runBlocking
         // on the main thread (ANR/interlock risk), and delivery does not depend on the
         // scope this method is about to cancel. The transport is genuinely cancellable and

@@ -136,6 +136,53 @@ internal class AppStatePlaybackCoordinator(
     @Volatile
     private var transcodeRestartSeek: TranscodeRestartSeek? = null
 
+    // --- Restored session (cold start after process death) -------------------------------
+    // The mini player is put back paused, but no renderer holds the queue yet: the local
+    // engine is empty and a Sonos room is not driven by us. Until the first command loads
+    // it, transport commands must start playback instead of talking to that empty renderer.
+    // Identity-checked against the live queue, so ANY fresh playback start (which always
+    // builds a new tracks list) retires the restored state without extra bookkeeping.
+    private var restoredQueue: List<PlexTrackStream>? = null
+
+    /** Mirrors ExoPlayer's default maxSeekToPreviousPosition used by the local engine. */
+    private val restartThresholdMillis = 3_000L
+
+    val isRestoredSessionPending: Boolean
+        get() = restoredQueue != null && state.miniPlayerState?.tracks === restoredQueue
+
+    fun markRestoredSession(tracks: List<PlexTrackStream>) {
+        restoredQueue = tracks
+    }
+
+    /** Loads the restored queue into [target] and starts it at [index]/[positionMillis]. */
+    private fun startRestoredSession(index: Int, positionMillis: Long, target: PlaybackTarget) {
+        val playerState = state.miniPlayerState ?: return
+        restoredQueue = null
+        val safeIndex = index.coerceIn(0, playerState.tracks.lastIndex)
+        Log.i(LOG_TAG, "start restored session index=$safeIndex positionMs=$positionMillis target=$target")
+        when (target) {
+            PlaybackTarget.LocalDevice -> state.localPlaybackCoordinator.startLocalPlayback(
+                album = playerState.album,
+                tracks = playerState.tracks,
+                startIndex = safeIndex,
+                initialPositionMillis = positionMillis,
+            )
+            is PlaybackTarget.Sonos -> {
+                // Prefer the freshly discovered room: the saved one may carry a stale IP.
+                val room = state.sonosRooms.firstOrNull { it.coordinatorUuid == target.room.coordinatorUuid }
+                    ?: target.room
+                state.selectPlaybackTarget(PlaybackTarget.Sonos(room))
+                playSonosQueueIndex(
+                    playerState.copy(target = PlaybackTarget.Sonos(room)),
+                    safeIndex,
+                    positionMillis,
+                    room,
+                    continueChain = false,
+                )
+            }
+        }
+    }
+
     init {
         SleepTimerController.onExpired = { room ->
             activeSonosPlan = null
@@ -831,6 +878,11 @@ internal class AppStatePlaybackCoordinator(
     }
 
     fun togglePause(playerState: MiniPlayerState) {
+        if (isRestoredSessionPending) {
+            // A restored session is always paused, so the toggle can only mean "play".
+            startRestoredSession(playerState.currentIndex, playerState.currentPositionMillis, playerState.target)
+            return
+        }
         if (playerState.target == PlaybackTarget.LocalDevice) {
             state.localPlaybackCoordinator.toggleLocalPause(playerState)
             return
@@ -956,6 +1008,16 @@ internal class AppStatePlaybackCoordinator(
      */
     fun playPrevious() {
         val playerState = state.miniPlayerState ?: return
+        if (isRestoredSessionPending) {
+            // Same rule as the engine: past the first few seconds, "previous" restarts.
+            val index = if (playerState.currentPositionMillis > restartThresholdMillis) {
+                playerState.currentIndex
+            } else {
+                (playerState.currentIndex - 1).coerceAtLeast(0)
+            }
+            startRestoredSession(index, 0L, playerState.target)
+            return
+        }
         if (playerState.target == PlaybackTarget.LocalDevice) {
             state.localPlaybackCoordinator.playLocalPrevious(playerState)
             return
@@ -968,6 +1030,12 @@ internal class AppStatePlaybackCoordinator(
 
     fun playNext() {
         val playerState = state.miniPlayerState ?: return
+        if (isRestoredSessionPending) {
+            if (playerState.currentIndex < playerState.tracks.lastIndex) {
+                startRestoredSession(playerState.currentIndex + 1, 0L, playerState.target)
+            }
+            return
+        }
         if (playerState.target == PlaybackTarget.LocalDevice) {
             state.localPlaybackCoordinator.playLocalNext()
             return
@@ -978,6 +1046,10 @@ internal class AppStatePlaybackCoordinator(
 
     fun playQueueIndex(index: Int, positionMillis: Long, target: PlaybackTarget?, continueChain: Boolean = false) {
         val playerState = state.miniPlayerState ?: return
+        if (isRestoredSessionPending) {
+            startRestoredSession(index, positionMillis, target ?: playerState.target)
+            return
+        }
         val targetIndex = index.coerceIn(0, playerState.tracks.lastIndex)
         when (val resolvedTarget = target ?: playerState.target) {
             PlaybackTarget.LocalDevice -> {
@@ -1062,6 +1134,14 @@ internal class AppStatePlaybackCoordinator(
 
     /** Moves the current playback (or just the selection, when idle) to another output. */
     fun switchPlaybackTarget(target: PlaybackTarget) {
+        val restored = state.miniPlayerState?.takeIf { isRestoredSessionPending }
+        if (restored != null) {
+            // Nothing is rendering yet: just retarget the paused session; play starts there.
+            state.selectPlaybackTarget(target)
+            state.miniPlayerState = restored.copy(target = target)
+            state.volumeSyncKey += 1
+            return
+        }
         if (target == PlaybackTarget.LocalDevice) {
             activeSonosPlan = null
             pending032Plan = null
@@ -1093,6 +1173,14 @@ internal class AppStatePlaybackCoordinator(
     }
 
     fun seekPlayback(playerState: MiniPlayerState, positionMillis: Long) {
+        if (isRestoredSessionPending) {
+            // Only move the cursor; the next play starts from here.
+            val duration = playerState.durationMillis?.takeIf { it > 0L } ?: Long.MAX_VALUE
+            state.miniPlayerState = state.miniPlayerState?.copy(
+                currentPositionMillis = positionMillis.coerceIn(0L, duration),
+            )
+            return
+        }
         if (playerState.target == PlaybackTarget.LocalDevice) {
             state.localPlaybackCoordinator.seekLocal(playerState, positionMillis)
             return
@@ -1215,8 +1303,13 @@ internal class AppStatePlaybackCoordinator(
         val updatedTracks = playerState.tracks.toMutableList().apply {
             addAll(insertIndex, tracks)
         }
+        val restoredPending = isRestoredSessionPending
         state.miniPlayerState = playerState.copy(tracks = updatedTracks)
-        if (playerState.target == PlaybackTarget.LocalDevice) {
+        if (restoredPending) {
+            // The empty engine must not receive inserts (indices would misalign); the
+            // whole queue is loaded on the first play. Keep the session marked restored.
+            restoredQueue = updatedTracks
+        } else if (playerState.target == PlaybackTarget.LocalDevice) {
             state.localPlaybackCoordinator.insertIntoLocalQueue(insertIndex, tracks)
         }
         state.errorMessage = null
