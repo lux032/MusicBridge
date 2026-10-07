@@ -122,7 +122,7 @@ fun ServerSection(
                     color = AppColors.TextPrimary,
                 )
                 Text(
-                    text = "支持管理多个 Plex 或 032 Music Server 并随时切换",
+                    text = "支持管理多个音乐服务器并随时切换",
                     style = MaterialTheme.typography.bodySmall,
                     color = AppColors.TextTertiary,
                 )

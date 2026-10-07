@@ -83,7 +83,7 @@ fun AboutAndDiagnosticsSection(
         // App Version item
         SettingsItem(
             title = "MusicBridge",
-            subtitle = "Plex & 032 Music Server to Sonos Bridge",
+            subtitle = "Music Server to Sonos Bridge",
             value = "v${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
             icon = Icons.Filled.Info,
         )
