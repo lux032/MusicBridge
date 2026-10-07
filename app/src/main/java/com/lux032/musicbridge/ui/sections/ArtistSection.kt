@@ -51,9 +51,13 @@ import kotlinx.coroutines.Job
 internal fun ArtistsSection(
     artists: List<ArtistSummary>,
     presentation: ArtistPresentation,
+    searchQuery: String,
+    favoritesOnly: Boolean,
     gridState: LazyGridState = rememberLazyGridState(),
     listState: LazyListState = rememberLazyListState(),
     onPresentationChange: (ArtistPresentation) -> Unit,
+    onSearchQueryChange: (String) -> Unit,
+    onFavoritesOnlyChange: (Boolean) -> Unit,
     onGoHome: () -> Unit,
     onArtistClick: (ArtistSummary) -> Unit,
 ) {
@@ -74,11 +78,51 @@ internal fun ArtistsSection(
         return
     }
 
-    val artistGroups = remember(artists) {
-        buildIndexedGroups(artists) { it.name }
+    val visibleArtists = remember(artists, searchQuery, favoritesOnly) {
+        filterArtists(artists, searchQuery, favoritesOnly)
+    }
+    val artistGroups = remember(visibleArtists) {
+        buildIndexedGroups(visibleArtists) { it.name }
     }
     val scope = rememberCoroutineScope()
     var jumpJob by remember { mutableStateOf<Job?>(null) }
+
+    // A changed query/filter reshapes the list, so return to the top (where the search field
+    // lives). The initial composition keeps the restored scroll position.
+    var appliedFilter by remember { mutableStateOf(searchQuery to favoritesOnly) }
+    LaunchedEffect(searchQuery, favoritesOnly) {
+        val current = searchQuery to favoritesOnly
+        if (current != appliedFilter) {
+            appliedFilter = current
+            when (presentation) {
+                ArtistPresentation.Covers -> gridState.scrollToItem(0)
+                ArtistPresentation.List -> listState.scrollToItem(0)
+            }
+        }
+    }
+
+    val header: @Composable () -> Unit = {
+        ArtistsHeader(
+            visibleCount = visibleArtists.size,
+            presentation = presentation,
+            searchQuery = searchQuery,
+            favoritesOnly = favoritesOnly,
+            onPresentationChange = onPresentationChange,
+            onSearchQueryChange = onSearchQueryChange,
+            onFavoritesOnlyChange = onFavoritesOnlyChange,
+        )
+    }
+    val emptyFilterCard: @Composable () -> Unit = {
+        EmptyStateCard(
+            title = Strings.noFilteredArtists,
+            body = Strings.noFilteredArtistsDesc,
+            actionLabel = Strings.clearFilters,
+            onAction = {
+                onSearchQueryChange("")
+                onFavoritesOnlyChange(false)
+            },
+        )
+    }
 
     when (presentation) {
         ArtistPresentation.Covers -> {
@@ -99,30 +143,11 @@ internal fun ArtistsSection(
                     verticalArrangement = Arrangement.spacedBy(if (compactPhone) 10.dp else 14.dp),
                 ) {
                     item(span = { GridItemSpan(maxLineSpan) }, contentType = "section-title") {
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(bottom = 2.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Column(
-                                modifier = Modifier.weight(1f),
-                                verticalArrangement = Arrangement.spacedBy(6.dp),
-                            ) {
-                                Text(
-                                    text = Strings.artists,
-                                    style = MaterialTheme.typography.headlineMedium,
-                                    color = AppColors.TextPrimary,
-                                )
-                                Text(
-                                    text = Strings.artistsDesc,
-                                    color = AppColors.TextTertiary,
-                                    style = MaterialTheme.typography.bodySmall,
-                                )
-                            }
-                            ArtistPresentationToggle(
-                                presentation = presentation,
-                                onPresentationChange = onPresentationChange,
-                            )
+                        header()
+                    }
+                    if (visibleArtists.isEmpty()) {
+                        item(span = { GridItemSpan(maxLineSpan) }, contentType = "empty") {
+                            emptyFilterCard()
                         }
                     }
                     artistGroups.forEach { group ->
@@ -180,30 +205,11 @@ internal fun ArtistsSection(
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     item(contentType = "section-title") {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Column(
-                                modifier = Modifier.weight(1f),
-                                verticalArrangement = Arrangement.spacedBy(6.dp),
-                            ) {
-                                Text(
-                                    text = Strings.artists,
-                                    style = MaterialTheme.typography.headlineMedium,
-                                    color = AppColors.TextPrimary,
-                                )
-                                Text(
-                                    text = Strings.artistsDesc,
-                                    color = AppColors.TextTertiary,
-                                    style = MaterialTheme.typography.bodySmall,
-                                )
-                            }
-                            ArtistPresentationToggle(
-                                presentation = presentation,
-                                onPresentationChange = onPresentationChange,
-                            )
+                        header()
+                    }
+                    if (visibleArtists.isEmpty()) {
+                        item(contentType = "empty") {
+                            emptyFilterCard()
                         }
                     }
                     artistGroups.forEach { group ->
@@ -242,6 +248,93 @@ internal fun ArtistsSection(
         }
     }
 }
+
+/** Title row (with the view toggle), search field and filter chip — one lazy item so the
+ *  index-bar jump offsets keep a single leading item. */
+@Composable
+private fun ArtistsHeader(
+    visibleCount: Int,
+    presentation: ArtistPresentation,
+    searchQuery: String,
+    favoritesOnly: Boolean,
+    onPresentationChange: (ArtistPresentation) -> Unit,
+    onSearchQueryChange: (String) -> Unit,
+    onFavoritesOnlyChange: (Boolean) -> Unit,
+) {
+    val filtered = favoritesOnly || searchQuery.isNotBlank()
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(bottom = 2.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text(
+                    text = Strings.artists,
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = AppColors.TextPrimary,
+                )
+                Text(
+                    text = if (filtered) {
+                        listOfNotNull(
+                            Strings.artistsCount(visibleCount),
+                            Strings.filterFavoriteOnly.takeIf { favoritesOnly },
+                        ).joinToString(" · ")
+                    } else {
+                        Strings.artistsDesc
+                    },
+                    color = AppColors.TextTertiary,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            ArtistPresentationToggle(
+                presentation = presentation,
+                onPresentationChange = onPresentationChange,
+            )
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            TonalSearchField(
+                value = searchQuery,
+                onValueChange = onSearchQueryChange,
+                placeholder = Strings.searchArtistsPlaceholder,
+                modifier = Modifier.weight(1f),
+            )
+            AlbumControlChip(
+                icon = Icons.Filled.Favorite,
+                label = Strings.filterFavoriteOnly,
+                selected = favoritesOnly,
+                onClick = { onFavoritesOnlyChange(!favoritesOnly) },
+            )
+        }
+    }
+}
+
+/** Case/width-insensitive substring match on the artist name, plus the favourites filter. */
+internal fun filterArtists(
+    artists: List<ArtistSummary>,
+    query: String,
+    favoritesOnly: Boolean,
+): List<ArtistSummary> {
+    val needle = normalizeArtistSearch(query)
+    if (needle.isEmpty() && !favoritesOnly) return artists
+    return artists.filter { artist ->
+        (!favoritesOnly || artist.isFavorite) &&
+            (needle.isEmpty() || normalizeArtistSearch(artist.name).contains(needle))
+    }
+}
+
+private fun normalizeArtistSearch(value: String): String =
+    java.text.Normalizer.normalize(value.trim(), java.text.Normalizer.Form.NFKC).lowercase()
 
 @Composable
 internal fun ArtistCoverCard(
@@ -504,15 +597,12 @@ internal fun ArtistAlbumsSection(
     // and bottom bar.
     val palette = LocalArtworkPalette.current
     val albumSections = remember(currentArtist.albums, layoutInfo.albumGridColumns) {
+        // Newest release date first; groupBy keeps that order inside each category.
         currentArtist.albums
+            .sortedByRelease(newestFirst = true)
             .map { ClassifiedArtistAlbum(it, classifyArtistAlbum(it)) }
             .groupBy { it.classification.category }
-            .mapValues { (_, albums) ->
-                albums.sortedWith(
-                    compareByDescending<ClassifiedArtistAlbum> { it.album.year ?: Int.MIN_VALUE }
-                        .thenBy { it.album.title.lowercase() }
-                ).chunked(layoutInfo.albumGridColumns)
-            }
+            .mapValues { (_, albums) -> albums.chunked(layoutInfo.albumGridColumns) }
     }
     val topTracks = remember(artistTracks) { artistTracks.take(10) }
 

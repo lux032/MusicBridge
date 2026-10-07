@@ -60,6 +60,9 @@ data class PlexAlbum(
     val musicAnalysisVersion: String? = null,
     val format: String? = null,
     val subformat: String? = null,
+    /** Full release date as served (Plex originallyAvailableAt / 032 releaseDate); may be
+     *  only a year or year-month. Use [releaseSortKey] for ordering. */
+    val releaseDate: String? = null,
 ) {
     val isFavorite: Boolean
         get() = (userRating ?: 0f) > 0f
@@ -635,6 +638,7 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient, SonicC
                         musicAnalysisVersion = directory.getAttribute("musicAnalysisVersion").trim().ifBlank { null },
                         format = format,
                         subformat = subformats.joinToString(",").ifBlank { null },
+                        releaseDate = directory.getAttribute("originallyAvailableAt").trim().ifBlank { null },
                     )
                 )
             }
@@ -853,6 +857,7 @@ class PlexClient(private val config: PlexAuthConfig) : MusicSourceClient, SonicC
                         musicAnalysisVersion = directory.getAttribute("musicAnalysisVersion").trim().ifBlank { null },
                         format = format,
                         subformat = subformats.joinToString(",").ifBlank { null },
+                        releaseDate = directory.getAttribute("originallyAvailableAt").trim().ifBlank { null },
                     )
                 )
             }

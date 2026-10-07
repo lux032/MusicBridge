@@ -223,7 +223,13 @@ class AppState(
     var selectedArtistName by mutableStateOf<String?>(null)
     var artistTracks by mutableStateOf<List<PlexTrackStream>>(emptyList())
     var isArtistTracksLoading by mutableStateOf(false)
-    var artistPresentation by mutableStateOf(ArtistPresentation.Covers)
+    /** Artist list view mode and favourites filter persist across restarts; the search
+     *  query only lives for the session (like the album search). */
+    var artistPresentation by mutableStateOf(appPreferences.loadArtistPresentation())
+        private set
+    var artistFavoritesOnly by mutableStateOf(appPreferences.loadArtistFavoritesOnly())
+        private set
+    var artistSearchQuery by mutableStateOf("")
     var trackResult by mutableStateOf<PlexAlbumTracksResult?>(null)
     var sonosRooms by mutableStateOf<List<SonosRoom>>(emptyList())
     var sonosDiscoveryAttempted by mutableStateOf(false)
@@ -503,6 +509,16 @@ class AppState(
     fun updateAlbumFavoritesOnly(enabled: Boolean) {
         albumFavoritesOnly = enabled
         appPreferences.saveAlbumFavoritesOnly(enabled)
+    }
+
+    fun updateArtistPresentation(presentation: ArtistPresentation) {
+        artistPresentation = presentation
+        appPreferences.saveArtistPresentation(presentation)
+    }
+
+    fun updateArtistFavoritesOnly(enabled: Boolean) {
+        artistFavoritesOnly = enabled
+        appPreferences.saveArtistFavoritesOnly(enabled)
     }
 
     fun updateAlbumDecadeFilter(filter: AlbumDecadeFilter) {

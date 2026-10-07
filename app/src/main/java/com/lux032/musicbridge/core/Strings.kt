@@ -107,6 +107,11 @@ object Strings {
     val saveAndRefresh get() = if (isZhCN) "保存并刷新首页" else "Save and Refresh Home"
     val artists get() = if (isZhCN) "歌手" else "Artists"
     val artistsDesc get() = if (isZhCN) "按索引分组展示，右侧可直接跳转到字母或五十音分组。" else "Grouped by index. Use the right bar to jump to letter or kana groups."
+    val artistsCount get() = if (isZhCN) { count: Int -> "$count 位歌手" } else { count: Int -> if (count == 1) "1 artist" else "$count artists" }
+    val searchArtistsPlaceholder get() = if (isZhCN) "搜索歌手" else "Search artists"
+    val noFilteredArtists get() = if (isZhCN) "没有符合当前筛选的歌手" else "No Artists Match the Filters"
+    val noFilteredArtistsDesc get() = if (isZhCN) "试试更换关键词，或关闭“仅收藏”。" else "Try another keyword or turn off Favorites."
+    val clearFilters get() = if (isZhCN) "清除筛选" else "Clear Filters"
     val noArtists get() = if (isZhCN) "还没有可展示的歌手" else "No Artists to Display"
     val noArtistsDesc get() = if (isZhCN) "先到首页同步音乐库，之后这里会按专辑自动聚合出歌手。" else "Sync your music library from the home page first. Artists will be aggregated from albums."
     val goHome get() = if (isZhCN) "去首页" else "Go to Home"
@@ -242,8 +247,8 @@ object Strings {
     val localCacheUsedDesc get() = if (isZhCN) { used: String, limit: String -> "已缓存 $used / 上限 $limit" } else { used: String, limit: String -> "$used cached / $limit limit" }
     val sortTitle get() = if (isZhCN) "标题 A→Z" else "Title A–Z"
     val sortArtist get() = if (isZhCN) "艺人 A→Z" else "Artist A–Z"
-    val sortYearDesc get() = if (isZhCN) "年份 新→旧" else "Year, newest first"
-    val sortYearAsc get() = if (isZhCN) "年份 旧→新" else "Year, oldest first"
+    val sortReleaseDateDesc get() = if (isZhCN) "发行日期 新→旧" else "Release date, newest first"
+    val sortReleaseDateAsc get() = if (isZhCN) "发行日期 旧→新" else "Release date, oldest first"
     val sortFieldTitle get() = if (isZhCN) "排序" else "Sort"
     val sortDialogTitle get() = if (isZhCN) "排序方式" else "Sort By"
     val filterFavoriteOnly get() = if (isZhCN) "仅收藏" else "Favorites"

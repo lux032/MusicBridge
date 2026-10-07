@@ -70,6 +70,10 @@ internal object Music032Json {
             leafCount = value.optInt("trackCount").takeIf { it > 0 },
             format = format,
             subformat = subformat,
+            // sync/albums sends the effective date; album/artist detail sends the raw
+            // releaseDate with originalReleaseDate as the fallback.
+            releaseDate = value.optString("releaseDate").trim().ifBlank { null }
+                ?: value.optString("originalReleaseDate").trim().ifBlank { null },
         )
     }
 

@@ -144,7 +144,7 @@ class AlbumLocalStoreMigrationTest {
         assertEquals(null, albums.single().format)
         assertEquals(null, albums.single().subformat)
         context.openOrCreateDatabase(DATABASE_NAME, Context.MODE_PRIVATE, null).use { db ->
-            assertEquals(16, db.version)
+            assertEquals(17, db.version)
             assertTrue(db.columnNames("albums").containsAll(listOf("format", "subformat")))
             assertTrue(db.columnNames("tracks").contains("bit_depth"))
             assertTrue(db.columnNames("album_tracks").contains("bit_depth"))
@@ -220,7 +220,7 @@ class AlbumLocalStoreMigrationTest {
         assertEquals(emptyList<DownloadedAudioTrack>(), store.getAllDownloadedTracks())
 
         context.openOrCreateDatabase(DATABASE_NAME, Context.MODE_PRIVATE, null).use { db ->
-            assertEquals(16, db.version)
+            assertEquals(17, db.version)
             val expectedColumns = setOf(
                 "source_id",
                 "rating_key",
@@ -368,7 +368,7 @@ class AlbumLocalStoreMigrationTest {
         assertEquals(5, storedTrack?.trackNumber)
 
         context.openOrCreateDatabase(DATABASE_NAME, Context.MODE_PRIVATE, null).use { db ->
-            assertEquals(16, db.version)
+            assertEquals(17, db.version)
             assertTrue(db.columnNames("downloaded_tracks").containsAll(listOf("disc_number", "track_number", "user_rating")))
         }
         context.deleteDatabase(DATABASE_NAME)
@@ -499,7 +499,7 @@ class AlbumLocalStoreMigrationTest {
         store.updateDownloadedTrackFavoriteStatus("src", "trk1", null)
         // trk1 now has explicit null in downloaded_tracks, but fallback will check tracks table if needed or return null
         context.openOrCreateDatabase(DATABASE_NAME, Context.MODE_PRIVATE, null).use { db ->
-            assertEquals(16, db.version)
+            assertEquals(17, db.version)
             assertTrue(db.columnNames("downloaded_tracks").contains("user_rating"))
         }
         context.deleteDatabase(DATABASE_NAME)
@@ -517,7 +517,7 @@ class AlbumLocalStoreMigrationTest {
         AlbumLocalStore(context).getAllPlaylists("source")
 
         context.openOrCreateDatabase(DATABASE_NAME, Context.MODE_PRIVATE, null).use { db ->
-            assertEquals(16, db.version)
+            assertEquals(17, db.version)
             assertTrue(db.columnNames("tracks").contains("lyric_url"))
             assertTrue(db.columnNames("album_tracks").contains("lyric_url"))
             assertTrue(db.columnNames("playlists").containsAll(listOf("sort_order", "rating_key", "source_id")))
@@ -525,6 +525,40 @@ class AlbumLocalStoreMigrationTest {
             assertEquals(1, db.columnNotNull("playlist_tracks", "playlist_order"))
             assertTrue(db.indexNames("playlist_tracks").contains("index_playlist_tracks_ref"))
         }
+        context.deleteDatabase(DATABASE_NAME)
+    }
+
+    @Test
+    fun version16To17AddsAlbumReleaseDateAndRoundTripsIt() {
+        val context = cleanDatabaseContext()
+        context.openOrCreateDatabase(DATABASE_NAME, Context.MODE_PRIVATE, null).use { db ->
+            db.execSQL("CREATE TABLE albums (source_id TEXT NOT NULL, rating_key TEXT NOT NULL, title TEXT NOT NULL, artist_name TEXT, year INTEGER, thumb_url TEXT, user_rating REAL, added_at_epoch_seconds INTEGER, last_viewed_at_epoch_seconds INTEGER, section_key TEXT NOT NULL, section_title TEXT NOT NULL, section_type TEXT NOT NULL, leaf_count INTEGER, format TEXT, subformat TEXT, PRIMARY KEY (source_id, rating_key))")
+            db.execSQL("INSERT INTO albums (source_id, rating_key, title, year, section_key, section_title, section_type) VALUES ('source', 'old', 'Old', 2001, '1', 'Music', 'artist')")
+            db.version = 16
+        }
+
+        val store = AlbumLocalStore(context)
+        assertEquals(null, store.getAllAlbums("source").single().releaseDate)
+        context.openOrCreateDatabase(DATABASE_NAME, Context.MODE_PRIVATE, null).use { db ->
+            assertEquals(17, db.version)
+            assertTrue(db.columnNames("albums").contains("release_date"))
+        }
+
+        val album = PlexAlbum(
+            ratingKey = "new",
+            title = "New",
+            artistName = "Artist",
+            year = 2004,
+            thumbUrl = null,
+            userRating = null,
+            addedAtEpochSeconds = null,
+            lastViewedAtEpochSeconds = null,
+            section = PlexSection("1", "Music", "artist"),
+            sourceId = "source",
+            releaseDate = "2004-12-01",
+        )
+        store.replaceAllAlbums("source", listOf(album))
+        assertEquals("2004-12-01", store.getAllAlbums("source").single().releaseDate)
         context.deleteDatabase(DATABASE_NAME)
     }
 

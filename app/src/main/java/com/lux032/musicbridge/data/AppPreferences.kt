@@ -386,8 +386,7 @@ class AppPreferences(context: Context) {
     }
 
     fun loadAlbumSortOption(): AlbumSortOption =
-        sharedPreferences.getString(KEY_ALBUM_SORT_OPTION, null)
-            ?.let { runCatching { AlbumSortOption.valueOf(it) }.getOrNull() }
+        AlbumSortOption.fromStoredName(sharedPreferences.getString(KEY_ALBUM_SORT_OPTION, null))
             ?: AlbumSortOption.Title
 
     fun saveAlbumSortOption(option: AlbumSortOption) {
@@ -408,6 +407,22 @@ class AppPreferences(context: Context) {
 
     fun saveAlbumDecadeFilter(filter: AlbumDecadeFilter) {
         sharedPreferences.edit { putString(KEY_ALBUM_DECADE_FILTER, filter.name) }
+    }
+
+    fun loadArtistPresentation(): ArtistPresentation =
+        sharedPreferences.getString(KEY_ARTIST_PRESENTATION, null)
+            ?.let { stored -> ArtistPresentation.entries.firstOrNull { it.name == stored } }
+            ?: ArtistPresentation.Covers
+
+    fun saveArtistPresentation(presentation: ArtistPresentation) {
+        sharedPreferences.edit { putString(KEY_ARTIST_PRESENTATION, presentation.name) }
+    }
+
+    fun loadArtistFavoritesOnly(): Boolean =
+        sharedPreferences.getBoolean(KEY_ARTIST_FAVORITES_ONLY, false)
+
+    fun saveArtistFavoritesOnly(enabled: Boolean) {
+        sharedPreferences.edit { putBoolean(KEY_ARTIST_FAVORITES_ONLY, enabled) }
     }
 
     private fun clearLegacyServerKeys() {
@@ -465,6 +480,8 @@ class AppPreferences(context: Context) {
         private const val KEY_ALBUM_SORT_OPTION = "album_sort_option_v1"
         private const val KEY_ALBUM_FAVORITES_ONLY = "album_favorites_only_v1"
         private const val KEY_ALBUM_DECADE_FILTER = "album_decade_filter_v1"
+        private const val KEY_ARTIST_PRESENTATION = "artist_presentation_v1"
+        private const val KEY_ARTIST_FAVORITES_ONLY = "artist_favorites_only_v1"
         private const val RECENT_PLAYED_SEPARATOR = "|"
         private const val MAX_RECENT_PLAYED = 100
 

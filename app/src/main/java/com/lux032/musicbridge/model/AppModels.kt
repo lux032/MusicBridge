@@ -85,8 +85,8 @@ enum class QueuePlacement {
 enum class AlbumSortOption {
     Title,
     Artist,
-    YearDesc,
-    YearAsc,
+    ReleaseDateDesc,
+    ReleaseDateAsc,
     RecentlyAdded,
     RecentlyPlayed;
 
@@ -94,11 +94,54 @@ enum class AlbumSortOption {
         get() = when (this) {
             Title -> Strings.sortTitle
             Artist -> Strings.sortArtist
-            YearDesc -> Strings.sortYearDesc
-            YearAsc -> Strings.sortYearAsc
+            ReleaseDateDesc -> Strings.sortReleaseDateDesc
+            ReleaseDateAsc -> Strings.sortReleaseDateAsc
             RecentlyAdded -> Strings.recentAdded
             RecentlyPlayed -> Strings.recentPlayed
         }
+
+    companion object {
+        /** Accepts persisted names, including the pre-release-date year sorts. */
+        fun fromStoredName(name: String?): AlbumSortOption? = when (name) {
+            null -> null
+            "YearDesc" -> ReleaseDateDesc
+            "YearAsc" -> ReleaseDateAsc
+            else -> entries.firstOrNull { it.name == name }
+        }
+    }
+}
+
+private val RELEASE_DATE_PATTERN = Regex("""^(\d{4})(?:[-./]?(\d{1,2})(?:[-./]?(\d{1,2}))?)?""")
+
+/**
+ * Comparable release key `yyyyMMdd`; missing month/day count as 0, so a bare year sorts
+ * after that year's dated releases when newest-first (same as the 032 web "date" sort).
+ * A [PlexAlbum.year] that contradicts the date's year wins (it is the user-edited value),
+ * and an album without a usable date falls back to its year. Null when neither exists.
+ */
+fun PlexAlbum.releaseSortKey(): Int? {
+    val validYear = year?.takeIf { it in 1..9999 }
+    val match = releaseDate?.trim()?.let(RELEASE_DATE_PATTERN::find)
+    if (match != null) {
+        val dateYear = match.groupValues[1].toInt()
+        if (dateYear > 0 && (validYear == null || validYear == dateYear)) {
+            val month = match.groupValues[2].toIntOrNull()?.takeIf { it in 1..12 } ?: 0
+            val day = if (month == 0) 0 else match.groupValues[3].toIntOrNull()?.takeIf { it in 1..31 } ?: 0
+            return dateYear * 10_000 + month * 100 + day
+        }
+    }
+    return validYear?.let { it * 10_000 }
+}
+
+/** Sorts by [releaseSortKey] (keys computed once); undated albums always last, ties by title. */
+fun List<PlexAlbum>.sortedByRelease(newestFirst: Boolean): List<PlexAlbum> {
+    val keyed = map { Triple(it, it.releaseSortKey(), it.title.lowercase()) }
+    val byKey: Comparator<Triple<PlexAlbum, Int?, String>> = if (newestFirst) {
+        compareByDescending(nullsFirst()) { it.second }
+    } else {
+        compareBy(nullsLast()) { it.second }
+    }
+    return keyed.sortedWith(byKey.thenBy { it.third }).map { it.first }
 }
 
 /** Decade buckets for filtering the album grid by release year. Albums with no year

@@ -595,8 +595,8 @@ internal fun AllAlbumsSection(
             // Title/Artist ordering happens inside buildIndexedGroups (pinyin/letter aware).
             AlbumSortOption.Title,
             AlbumSortOption.Artist -> filtered
-            AlbumSortOption.YearDesc -> filtered.sortedByDescending { it.year ?: Int.MIN_VALUE }
-            AlbumSortOption.YearAsc -> filtered.sortedBy { it.year ?: Int.MAX_VALUE }
+            AlbumSortOption.ReleaseDateDesc -> filtered.sortedByRelease(newestFirst = true)
+            AlbumSortOption.ReleaseDateAsc -> filtered.sortedByRelease(newestFirst = false)
             AlbumSortOption.RecentlyAdded ->
                 filtered.sortedByDescending { it.addedAtEpochSeconds ?: 0L }
             AlbumSortOption.RecentlyPlayed ->
@@ -813,7 +813,7 @@ internal fun AllAlbumsSection(
 
 /** Filter / sort chip: tonal squircle, inverted to the hi fill while active. */
 @Composable
-private fun AlbumControlChip(
+internal fun AlbumControlChip(
     icon: androidx.compose.ui.graphics.vector.ImageVector?,
     label: String,
     selected: Boolean,

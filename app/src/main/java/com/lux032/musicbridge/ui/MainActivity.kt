@@ -417,9 +417,13 @@ fun PlexAlbumScreen(
                         ArtistsSection(
                             artists = state.artists,
                             presentation = state.artistPresentation,
+                            searchQuery = state.artistSearchQuery,
+                            favoritesOnly = state.artistFavoritesOnly,
                             gridState = artistsGridState,
                             listState = artistsListState,
-                            onPresentationChange = { state.artistPresentation = it },
+                            onPresentationChange = state::updateArtistPresentation,
+                            onSearchQueryChange = { state.artistSearchQuery = it },
+                            onFavoritesOnlyChange = state::updateArtistFavoritesOnly,
                             onGoHome = { state.switchPrimarySection(AppSection.Home) },
                             onArtistClick = state::openArtistAlbums,
                         )

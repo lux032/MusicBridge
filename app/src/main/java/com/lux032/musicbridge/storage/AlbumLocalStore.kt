@@ -525,11 +525,12 @@ class AlbumLocalStore(context: Context) {
                     UPDATE ${AlbumDatabaseHelper.TABLE_ALBUMS}
                     SET ${AlbumDatabaseHelper.COLUMN_FORMAT} = COALESCE(?, ${AlbumDatabaseHelper.COLUMN_FORMAT}),
                         ${AlbumDatabaseHelper.COLUMN_SUBFORMAT} = COALESCE(?, ${AlbumDatabaseHelper.COLUMN_SUBFORMAT}),
-                        ${AlbumDatabaseHelper.COLUMN_LEAF_COUNT} = COALESCE(?, ${AlbumDatabaseHelper.COLUMN_LEAF_COUNT})
+                        ${AlbumDatabaseHelper.COLUMN_LEAF_COUNT} = COALESCE(?, ${AlbumDatabaseHelper.COLUMN_LEAF_COUNT}),
+                        ${AlbumDatabaseHelper.COLUMN_RELEASE_DATE} = COALESCE(?, ${AlbumDatabaseHelper.COLUMN_RELEASE_DATE})
                     WHERE ${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ?
                       AND ${AlbumDatabaseHelper.COLUMN_RATING_KEY} = ?
                     """.trimIndent(),
-                    arrayOf<Any?>(album.format, album.subformat, album.leafCount, sourceId, album.ratingKey),
+                    arrayOf<Any?>(album.format, album.subformat, album.leafCount, album.releaseDate, sourceId, album.ratingKey),
                 )
             }
             database.setTransactionSuccessful()
@@ -735,6 +736,9 @@ class AlbumLocalStore(context: Context) {
                 ?: nullableInt(AlbumDatabaseHelper.COLUMN_LEAF_COUNT),
             format = nullableString(AlbumDatabaseHelper.COLUMN_FORMAT),
             subformat = nullableString(AlbumDatabaseHelper.COLUMN_SUBFORMAT),
+            releaseDate = getColumnIndex(AlbumDatabaseHelper.COLUMN_RELEASE_DATE)
+                .takeIf { it >= 0 && !isNull(it) }
+                ?.let(::getString),
         )
     }
 
@@ -859,6 +863,7 @@ class AlbumLocalStore(context: Context) {
             put(AlbumDatabaseHelper.COLUMN_LEAF_COUNT, leafCount)
             put(AlbumDatabaseHelper.COLUMN_FORMAT, format)
             put(AlbumDatabaseHelper.COLUMN_SUBFORMAT, subformat)
+            put(AlbumDatabaseHelper.COLUMN_RELEASE_DATE, releaseDate)
         }
 
     private fun PlexPlaylist.toContentValues(sourceId: String, sortOrder: Int): ContentValues = ContentValues().apply {
@@ -973,6 +978,16 @@ internal fun ensureVersion16Columns(db: SQLiteDatabase) {
     }
 }
 
+internal fun ensureVersion17Columns(db: SQLiteDatabase) {
+    val albumsExists = db.rawQuery(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        arrayOf(AlbumDatabaseHelper.TABLE_ALBUMS),
+    ).use { it.moveToFirst() }
+    // Nothing to migrate when the albums table is absent (partial or legacy schemas).
+    if (!albumsExists) return
+    addColumnIfNotExists(db, AlbumDatabaseHelper.TABLE_ALBUMS, AlbumDatabaseHelper.COLUMN_RELEASE_DATE, "TEXT")
+}
+
 private class AlbumDatabaseHelper(context: Context) :
     SQLiteOpenHelper(context, DATABASE_NAME, null, DATABASE_VERSION) {
 
@@ -1031,11 +1046,12 @@ private class AlbumDatabaseHelper(context: Context) :
             ensureVersion16Columns(db)
             createPlaylistTables(db)
         }
+        if (oldVersion < 17) ensureVersion17Columns(db)
     }
 
     companion object {
         private const val DATABASE_NAME = "plex_album_cache.db"
-        private const val DATABASE_VERSION = 16
+        private const val DATABASE_VERSION = 17
 
         const val TABLE_ALBUMS = "albums"
         const val TABLE_TRACKS = "tracks"
@@ -1055,6 +1071,7 @@ private class AlbumDatabaseHelper(context: Context) :
         const val COLUMN_SECTION_KEY = "section_key"
         const val COLUMN_SECTION_TITLE = "section_title"
         const val COLUMN_SECTION_TYPE = "section_type"
+        const val COLUMN_RELEASE_DATE = "release_date"
         const val COLUMN_TRACK_RATING_KEY = "rating_key"
         const val COLUMN_TRACK_TITLE = "title"
         const val COLUMN_TRACK_STREAM_URL = "stream_url"
@@ -1111,6 +1128,7 @@ private class AlbumDatabaseHelper(context: Context) :
                 $COLUMN_LEAF_COUNT INTEGER,
                 $COLUMN_FORMAT TEXT,
                 $COLUMN_SUBFORMAT TEXT,
+                $COLUMN_RELEASE_DATE TEXT,
                 PRIMARY KEY ($COLUMN_SOURCE_ID, $COLUMN_RATING_KEY)
             )
             """.trimIndent()
