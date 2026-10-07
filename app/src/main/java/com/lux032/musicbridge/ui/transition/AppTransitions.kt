@@ -4,6 +4,10 @@ import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.animation.BoundsTransform
 import androidx.compose.animation.ContentTransform
+import androidx.compose.animation.EnterExitState
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.animation.SizeTransform
@@ -17,8 +21,15 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
 import com.lux032.musicbridge.plex.PlexTrackStream
@@ -48,7 +59,6 @@ object PlayerSharedKeys {
 object TransitionDurations {
     const val PageFadeInMillis = 240
     const val PageFadeOutMillis = 180
-    const val DismissSettleMillis = 160
     /** Player expand/collapse crossfade — faster than the generic page fades; the shared
      *  artwork/container morph is the star, so the pages must not lag behind it. */
     const val PlayerFadeInMillis = 140
@@ -57,7 +67,16 @@ object TransitionDurations {
      *  slow enough for the parallax to read. */
     const val PageSlideMillis = 320
     const val TabFadeInMillis = 280
+    /** Player collapse (back from the full player): the whole page drops as one sheet. */
+    const val PlayerCollapseMillis = 380
 }
+
+/** Player collapse curve. Starts already moving (~1.5x average speed, so a released
+ *  swipe carries straight on) but with a capped peak velocity. M3 "emphasized
+ *  decelerate" (0.05, 0.7, 0.1, 1) was tried first: its ~14x initial slope made a
+ *  full-height sheet jump ~1/5 of the screen per frame, which the eye reads as
+ *  strobing afterimages (残影). */
+val PlayerCollapseEasing = CubicBezierEasing(0.2f, 0.3f, 0.1f, 1f)
 
 /** Bounds morph for shared elements. A fixed 240ms decelerate curve: springs looked right
  *  on paper but measured ~350ms on-device (soft tail + velocity thresholds stretch the
@@ -80,6 +99,22 @@ val PlayerBoundsTransform: BoundsTransform = BoundsTransform { _: Rect, _: Rect 
 fun AnimatedContentTransitionScope<AppSection>.sectionTransitionSpec(
     action: NavAction,
 ): ContentTransform {
+    // Collapse: ONE opaque thing moves — the player page drops as a sheet with all its
+    // content (artwork included) attached. The page beneath is simply there, fully opaque
+    // and still; the dock is static on top. Earlier attempts layered a flying artwork, a
+    // fading/scaling underlay and a fading mini bar on the moving sheet, and the
+    // overlapping semi-transparent motions read as ghosting.
+    if (initialState == AppSection.PlaybackDetail && action == NavAction.Pop) {
+        return ContentTransform(
+            targetContentEnter = EnterTransition.None,
+            initialContentExit = slideOutVertically(
+                tween(TransitionDurations.PlayerCollapseMillis, easing = PlayerCollapseEasing),
+            ) { it },
+            // The dropping sheet must stay above the page it reveals.
+            targetContentZIndex = -1f,
+            sizeTransform = SizeTransform(clip = false),
+        )
+    }
     val playerInvolved = targetState == AppSection.PlaybackDetail ||
         initialState == AppSection.PlaybackDetail
     if (playerInvolved) {
@@ -127,12 +162,15 @@ fun AnimatedContentTransitionScope<AppSection>.sectionTransitionSpec(
 
 // --- Shared-element modifier helpers (null-safe when no SharedTransitionLayout is present) ---
 
-/** Player-side (inside AnimatedContent) shared element, e.g. the big artwork. */
+/** Player-side (inside AnimatedContent) shared element, e.g. the big artwork.
+ *  Enter-only: the expand morphs mini -> player, but on exit the element stays in the
+ *  page and drops with the sheet (a separately flying artwork caused ghosting). */
 @OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
 fun Modifier.playerSharedElement(key: Any): Modifier {
     val sharedScope = LocalSharedTransitionScope.current ?: return this
     val animScope = LocalAnimatedVisibilityScope.current ?: return this
+    if (animScope.transition.targetState != EnterExitState.Visible) return this
     return with(sharedScope) {
         this@playerSharedElement.sharedElement(
             rememberSharedContentState(key),
@@ -156,6 +194,31 @@ fun Modifier.playerSharedBounds(key: Any): Modifier = playerSharedElement(key)
 @Composable
 fun Modifier.miniSharedElement(key: Any, visible: Boolean): Modifier {
     val sharedScope = LocalSharedTransitionScope.current ?: return this
+    // Collapse guard. The player end is enter-only, so on collapse this end has no partner,
+    // yet the shared state still remembers the player's full-screen bounds: the mini bar
+    // would morph from full screen down to the dock, drawn in the overlay on top of
+    // everything (a dark dock-coloured curtain falling over the screen — confirmed by a
+    // frame-by-frame screen recording). So when visibility flips back to true, detach the
+    // shared element for the collapse window, then re-attach with fresh state, ready for
+    // the next expand. Decided synchronously in composition so the very first collapse
+    // frame is already detached.
+    val guard = remember { CollapseGuard(lastVisible = visible) }
+    // Bumped when the guard window ends, forcing a recomposition that re-attaches.
+    var reattachTick by remember { mutableIntStateOf(0) }
+    if (visible && !guard.lastVisible) {
+        guard.detachedUntilNanos = System.nanoTime() + CollapseGuardMillis * 1_000_000L
+    }
+    guard.lastVisible = visible
+    val untilNanos = guard.detachedUntilNanos
+    LaunchedEffect(untilNanos) {
+        val remainingMillis = (untilNanos - System.nanoTime()) / 1_000_000L
+        if (remainingMillis > 0L) {
+            delay(remainingMillis + 16L)
+            reattachTick++
+        }
+    }
+    val detached = reattachTick >= 0 && visible && System.nanoTime() < untilNanos
+    if (detached) return this
     return with(sharedScope) {
         this@miniSharedElement.sharedElementWithCallerManagedVisibility(
             rememberSharedContentState(key),
@@ -163,6 +226,12 @@ fun Modifier.miniSharedElement(key: Any, visible: Boolean): Modifier {
             boundsTransform = PlayerBoundsTransform,
         )
     }
+}
+
+private const val CollapseGuardMillis = TransitionDurations.PlayerCollapseMillis + 60L
+
+private class CollapseGuard(var lastVisible: Boolean) {
+    var detachedUntilNanos: Long = 0L
 }
 
 /** Mini-player-side shared bounds with caller-managed visibility (see [miniSharedElement]).
@@ -182,7 +251,9 @@ fun Modifier.staggeredPlayerEnter(@Suppress("UNUSED_PARAMETER") index: Int): Mod
         this@staggeredPlayerEnter.animateEnterExit(
             enter = fadeIn(tween(TransitionDurations.PlayerFadeInMillis)) +
                 slideInVertically(tween(TransitionDurations.PlayerFadeInMillis)) { it / 24 },
-            exit = fadeOut(tween(100)),
+            // No exit of its own: on collapse the content rides down with the sheet; on
+            // other exits the page-level fade already covers it.
+            exit = ExitTransition.None,
         )
     }
 }

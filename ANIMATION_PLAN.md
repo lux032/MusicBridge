@@ -20,6 +20,7 @@
 | 播放键共享元素 morph | ❌ 已移除 | 共享元素 overlay 渲染期间触摸判定留在布局原位，飞行中的按钮点不中——交互可靠性优先，播放键改为随控制区淡入 |
 | **修复：播放页播放键间歇/完全失灵** | ✅ | 根因是传输控件被 `isPlaybackCommandLoading` 门控（网络命令飞行期间按钮禁用、点了没反应，而迷你条不看此标志所以正常）。修复：播放/暂停、上一首/下一首、进度条不再被门控；`togglePause` 协程内重读最新暂停状态；SOAP socket 补 5s 连接超时（原仅读超时，IP 失效可卡死数分钟） |
 | **修复：转场后导航栏错位/页面变暗** | ✅ | AnimatedContent 闭合位置错误导致底部导航/迷你条/音量浮层被包进页面内容 lambda |
+| 返回收起改为整页下滑（单一运动） | ✅ | Pop 离开播放页时只有播放页这一张不透明“纸”在动：`slideOutVertically` 380ms，曲线 `(0.2,0.3,0.1,1)`（带初速度但限峰值；M3 emphasized-decelerate 初速 ~14× 平均速度，整屏页面每帧跳 1/5 屏，造成频闪残影，已弃用）。下层页面无动画、不透明；封面/背景共享元素仅展开时生效，收起时随页面一起下滑；底部导航/迷你条收起时直接出现、静止，不做淡入或上滑（与下落页面反向交错会产生重影）。下滑手势：拖动偏移改为同步写入的 State（原每帧 launch snapTo 会滞后一帧抖动），只做位移+顶部圆角，不缩放不透明度；过 22% 或快速轻扫即交接给退出动画 |
 | 导航方向标记 | ✅ | `AppState.lastNavAction: NavAction { Push, Pop, TabSwitch }`，供 P1 定向转场使用 |
 
 **涉及文件**
@@ -72,6 +73,7 @@
 - 本版本 Compose **没有** `sharedBoundsWithCallerManagedVisibility`；`miniSharedBounds`/`playerSharedBounds` 均用 `sharedElement` 变体实现。
 - `ContentTransform` 用构造函数（`targetContentEnter, initialContentExit, sizeTransform`）；`using` 中缀在此版本不可解析。
 - Row 内调用 `AnimatedVisibility` 需全限定（`RowScope.AnimatedVisibility` 会遮蔽顶层函数）。
+- **单端停用共享元素时，另一端也要停用**：播放页端改为仅展开时挂载后，迷你条端 `sharedElementWithCallerManagedVisibility` 仍记得播放页全屏 bounds，收起时会从全屏 morph 回迷你条，且在 overlay 最上层绘制（录屏可见一整块深色 dock 幕布下落 = 用户感知的“残影”）。`miniSharedElement` 现在在 visible 由 false→true 的收起窗口内同步摘除共享元素，窗口结束后再挂回。
 - **交互按钮不做共享元素**：overlay 渲染期间命中判定与视觉位置分离，按钮会"点了没反应"。
 - 高频传输控件**不要用网络 loading 状态门控**；loading 只用于展示，不用于禁用。
 - 大改布局嵌套后用括号配平校验（awk 统计深度归零），错位一个 `}` 会让兄弟节点落进错误的 lambda。

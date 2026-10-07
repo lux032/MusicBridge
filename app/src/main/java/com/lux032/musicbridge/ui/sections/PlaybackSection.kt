@@ -13,7 +13,8 @@ import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.material3.ripple
 import androidx.compose.animation.Crossfade
-import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animate
+import kotlinx.coroutines.Job
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -636,25 +637,36 @@ internal fun PlaybackDetailSection(
     // child click targets and can prevent transport buttons from receiving an otherwise
     // valid tap.
     val dismissScope = rememberCoroutineScope()
-    val dismissOffset = remember { Animatable(0f) }
+    // Plain state written synchronously from the scroll callback: launching a coroutine per
+    // drag event to snapTo() an Animatable could land a frame late, so the sheet lagged
+    // and jittered behind the finger. The spring-back runs as a cancellable job.
+    var dismissOffset by remember { mutableFloatStateOf(0f) }
+    var dismissSpringJob by remember { mutableStateOf<Job?>(null) }
     var dismissHeightPx by remember { mutableFloatStateOf(1f) }
     val landscapeDetailsScroll = rememberScrollState()
     val lyricsListState = rememberLazyListState()
 
-    fun settleDismiss() {
-        if (dismissOffset.value <= 0f) return
-        dismissScope.launch {
-            val progress = dismissOffset.value / dismissHeightPx
-            if (progress > 0.22f) {
-                dismissOffset.animateTo(
-                    dismissHeightPx * 0.6f,
-                    tween(TransitionDurations.DismissSettleMillis),
-                )
+    val dismissFlingThresholdPx = with(LocalDensity.current) { 1000.dp.toPx() }
+
+    fun settleDismiss(velocityY: Float = 0f) {
+        if (dismissOffset <= 0f) return
+        val progress = dismissOffset / dismissHeightPx
+            // Distance OR a quick downward flick dismisses (mainstream players honour flicks).
+            if (progress > 0.22f || (velocityY > dismissFlingThresholdPx && progress > 0.04f)) {
+                // Hand off immediately: the section exit continues the drop from the
+                // current offset with a fast-start curve, so there is no stop-then-go
+                // between the finger lifting and the sheet leaving.
                 onBack()
             } else {
-                dismissOffset.animateTo(0f, spring(dampingRatio = 0.68f, stiffness = 380f))
+                dismissSpringJob = dismissScope.launch {
+                    animate(
+                        initialValue = dismissOffset,
+                        targetValue = 0f,
+                        initialVelocity = velocityY,
+                        animationSpec = spring(dampingRatio = 0.85f, stiffness = 500f),
+                    ) { value, _ -> dismissOffset = value.coerceAtLeast(0f) }
+                }
             }
-        }
     }
 
     val dismissConnection = remember(selectedPlayerPage) {
@@ -666,22 +678,22 @@ internal fun PlaybackDetailSection(
                     val lyricsAtTop = lyricsListState.firstVisibleItemIndex == 0 && lyricsListState.firstVisibleItemScrollOffset == 0
                     val detailsAtTop = landscapeDetailsScroll.value == 0
                     val activeContentAtTop = if (selectedPlayerPage == 1) lyricsAtTop else detailsAtTop
-                    if (activeContentAtTop || dismissOffset.value > 0f) {
-                        dismissScope.launch { dismissOffset.snapTo(dismissOffset.value + dy) }
+                    if (activeContentAtTop || dismissOffset > 0f) {
+                        dismissSpringJob?.cancel()
+                        dismissOffset += dy
                         return Offset(0f, dy)
                     }
-                } else if (dy < 0f && dismissOffset.value > 0f) {
-                    dismissScope.launch {
-                        dismissOffset.snapTo((dismissOffset.value + dy).coerceAtLeast(0f))
-                    }
+                } else if (dy < 0f && dismissOffset > 0f) {
+                    dismissSpringJob?.cancel()
+                    dismissOffset = (dismissOffset + dy).coerceAtLeast(0f)
                     return Offset(0f, dy)
                 }
                 return Offset.Zero
             }
 
             override suspend fun onPreFling(available: Velocity): Velocity {
-                if (dismissOffset.value <= 0f) return Velocity.Zero
-                settleDismiss()
+                if (dismissOffset <= 0f) return Velocity.Zero
+                settleDismiss(available.y)
                 return available
             }
         }
@@ -690,12 +702,15 @@ internal fun PlaybackDetailSection(
     val dismissModifier = Modifier
         .nestedScroll(dismissConnection)
         .graphicsLayer {
-            val p = (dismissOffset.value / dismissHeightPx).coerceIn(0f, 1f)
-            translationY = dismissOffset.value
-            val s = 1f - 0.07f * p
-            scaleX = s
-            scaleY = s
-            alpha = 1f - 0.45f * p
+            // Drag reads as a physical sheet: it follows the finger 1:1 and rounds its top
+            // corners. Pure translation only — no alpha (washed-out, ghosting) and no scale
+            // (resampling makes text shimmer while moving).
+            val p = (dismissOffset / dismissHeightPx).coerceIn(0f, 1f)
+            translationY = dismissOffset
+            val cornerPx = 28.dp.toPx() * (p * 8f).coerceAtMost(1f)
+            shape = RoundedCornerShape(topStart = cornerPx, topEnd = cornerPx)
+            clip = cornerPx > 0f
+            shadowElevation = 12.dp.toPx() * (p * 8f).coerceAtMost(1f)
         }
 
     BoxWithConstraints(

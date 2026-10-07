@@ -869,11 +869,21 @@ fun PlexAlbumScreen(
         }
         }
 
-        if (isBottomBarVisible && !isNavigationRailVisible) {
+        if (!isNavigationRailVisible) {
+            // The dock tucks away under the opening player. On collapse it is simply there,
+            // opaque and still, while the player sheet drops behind it — a rising dock
+            // crossing the falling sheet added a second, opposing motion (ghosting).
+            androidx.compose.animation.AnimatedVisibility(
+                visible = isBottomBarVisible,
+                modifier = Modifier.align(Alignment.BottomCenter),
+                enter = androidx.compose.animation.EnterTransition.None,
+                exit = slideOutVertically(
+                    animationSpec = tween(200),
+                    targetOffsetY = { it },
+                ) + fadeOut(tween(160)),
+            ) {
             BottomNavigationBar(
                 primarySection = state.primarySection,
-                modifier = Modifier
-                    .align(Alignment.BottomCenter),
                 onSectionChange = { section: AppSection ->
                     when (section) {
                         AppSection.Home,
@@ -884,6 +894,7 @@ fun PlexAlbumScreen(
                     }
                 }
             )
+            }
         }
 
         // The mini player stays composed while the full player is open so its shared
