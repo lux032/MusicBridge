@@ -1,5 +1,6 @@
 package com.lux032.musicbridge.music
 
+import com.lux032.musicbridge.plex.ArtistRef
 import com.lux032.musicbridge.plex.PlexSection
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -15,6 +16,29 @@ class Music032JsonTest {
     private fun album(type: String, extra: String = "") = Music032Json.parseAlbum(
         JSONObject("""{"id":1,"title":"Ordinary","trackCount":10,"formats":"FLAC,MP3","albumType":"$type"$extra}"""),
         base, "token", section, "032")
+
+    @Test fun artistRefsAndSyncArtists() {
+        val duet = album("album", ""","artist":"A, B","artists":[{"id":2,"name":"A"},{"id":3,"name":"B"},{"id":0,"name":"bad"},{"id":2,"name":"A"}]""")
+        assertEquals(listOf(ArtistRef("2", "A"), ArtistRef("3", "B")), duet.artists)
+        assertEquals("A, B", duet.artistName)
+        assertTrue(album("album").artists.isEmpty())
+
+        val guestTrack = track("""{"id":7,"title":"Song","artist":"Guest","artists":[{"id":4,"name":"Guest"}]}""")
+        assertEquals(listOf(ArtistRef("4", "Guest")), guestTrack.artists)
+        assertTrue(track("""{"id":8,"title":"Plain","artists":[]}""").artists.isEmpty())
+
+        val artist = Music032Json.parseArtist(
+            JSONObject("""{"id":4,"name":" Guest ","sortName":"guest","imageUrl":"/api/v1/artists/4/image","isFavorite":true,"albumCount":1,"trackCount":3}"""),
+            base, "token", "032",
+        )!!
+        assertEquals("4", artist.ratingKey)
+        assertEquals("Guest", artist.title)
+        assertEquals(1, artist.albumCount)
+        assertEquals(3, artist.trackCount)
+        assertTrue(artist.isFavorite)
+        assertEquals("https://example.org/api/v1/artists/4/image?mediaToken=token", artist.thumbUrl)
+        assertNull(Music032Json.parseArtist(JSONObject("""{"id":0,"name":"x"}"""), base, "token", "032"))
+    }
 
     @Test fun newAndOldTrackFields() {
         val track = track("""{"id":7,"title":"Song","codec":"FLAC","sampleRate":96000,"bitDepth":24,"bitrateKbps":2800,"discNumber":2,"trackNumber":3,"lyricsUrl":"/lyrics.lrc","viewCount":2,"skipCount":1,"lastViewedAt":1234}""")

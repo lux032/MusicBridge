@@ -45,6 +45,10 @@ data class PlexServer(val name: String, val uri: String, val accessToken: String
 
 data class PlexSection(val key: String, val title: String, val type: String)
 
+/** Server-side artist identity (032 artist id + display name). Plex sources leave refs empty
+ *  and keep navigating by name. */
+data class ArtistRef(val id: String, val name: String)
+
 data class PlexAlbum(
     val ratingKey: String,
     val title: String,
@@ -63,6 +67,8 @@ data class PlexAlbum(
     /** Full release date as served (Plex originallyAvailableAt / 032 releaseDate); may be
      *  only a year or year-month. Use [releaseSortKey] for ordering. */
     val releaseDate: String? = null,
+    /** Credited album artists in credit order; [artistName] is only their joined text. */
+    val artists: List<ArtistRef> = emptyList(),
 ) {
     val isFavorite: Boolean
         get() = (userRating ?: 0f) > 0f
@@ -93,6 +99,8 @@ data class PlexTrackStream(
     val skipCount: Long? = null,
     val discNumber: Int? = null,
     val trackNumber: Int? = null,
+    /** Performing track artists; empty means the album artists apply. */
+    val artists: List<ArtistRef> = emptyList(),
 )
 
 internal data class PlexTrackBehavior(
@@ -152,6 +160,10 @@ data class PlexArtist(
     val thumbUrl: String?,
     val userRating: Float? = null,
     val sourceId: String = "",
+    /** 032 sync model counts (discography albums / performed tracks); null for Plex. */
+    val albumCount: Int? = null,
+    val trackCount: Int? = null,
+    val sortName: String? = null,
 ) {
     // Plex has no artist "follow"; a 10-star rating is what Plexamp shows as a liked artist.
     val isFavorite: Boolean

@@ -4,10 +4,17 @@ import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import com.lux032.musicbridge.plex.ArtistRef
 import com.lux032.musicbridge.plex.PlexAlbum
+import com.lux032.musicbridge.plex.PlexArtist
 import com.lux032.musicbridge.plex.PlexPlaylist
 import com.lux032.musicbridge.plex.PlexSection
 import com.lux032.musicbridge.plex.PlexTrackStream
+import org.json.JSONArray
+import org.json.JSONObject
+
+/** One release on a 032 artist page; [isAppearance] = the artist only sings some tracks. */
+data class ArtistRelease(val album: PlexAlbum, val isAppearance: Boolean)
 
 data class DownloadedAudioTrack(
     val sourceId: String,
@@ -492,12 +499,19 @@ class AlbumLocalStore(context: Context) {
         database.beginTransaction()
         try {
             database.delete(AlbumDatabaseHelper.TABLE_ALBUMS, "${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ?", arrayOf(sourceId))
-            albums.forEach { album ->
-                database.insertOrThrow(
-                    AlbumDatabaseHelper.TABLE_ALBUMS,
-                    null,
-                    album.toContentValues(),
-                )
+            database.delete(AlbumDatabaseHelper.TABLE_ALBUM_ARTIST_LINKS, "${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ?", arrayOf(sourceId))
+            val links = ArtistLinkWriter(database)
+            try {
+                albums.forEach { album ->
+                    database.insertOrThrow(
+                        AlbumDatabaseHelper.TABLE_ALBUMS,
+                        null,
+                        album.toContentValues(),
+                    )
+                    links.album(album)
+                }
+            } finally {
+                links.close()
             }
             database.setTransactionSuccessful()
         } finally {
@@ -506,12 +520,217 @@ class AlbumLocalStore(context: Context) {
     }
 
     fun upsertAlbum(album: PlexAlbum) {
+        val database = helper.writableDatabase
+        database.beginTransaction()
+        try {
+            database.insertWithOnConflict(
+                AlbumDatabaseHelper.TABLE_ALBUMS,
+                null,
+                album.toContentValues(),
+                SQLiteDatabase.CONFLICT_REPLACE,
+            )
+            database.delete(
+                AlbumDatabaseHelper.TABLE_ALBUM_ARTIST_LINKS,
+                "${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ? AND ${AlbumDatabaseHelper.COLUMN_LINK_ALBUM_RATING_KEY} = ?",
+                arrayOf(album.sourceId, album.ratingKey),
+            )
+            ArtistLinkWriter(database).run {
+                try { album(album) } finally { close() }
+            }
+            database.setTransactionSuccessful()
+        } finally {
+            database.endTransaction()
+        }
+    }
+
+    // ---- 032 artist sync model -------------------------------------------------------------
+
+    fun replaceAllArtists(sourceId: String, artists: List<PlexArtist>) {
+        val database = helper.writableDatabase
+        database.beginTransaction()
+        try {
+            database.delete(AlbumDatabaseHelper.TABLE_ARTISTS, "${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ?", arrayOf(sourceId))
+            artists.forEach { artist ->
+                database.insertWithOnConflict(
+                    AlbumDatabaseHelper.TABLE_ARTISTS,
+                    null,
+                    artist.toContentValues(sourceId),
+                    SQLiteDatabase.CONFLICT_REPLACE,
+                )
+            }
+            database.setTransactionSuccessful()
+        } finally {
+            database.endTransaction()
+        }
+    }
+
+    fun upsertArtist(sourceId: String, artist: PlexArtist) {
         helper.writableDatabase.insertWithOnConflict(
-            AlbumDatabaseHelper.TABLE_ALBUMS,
+            AlbumDatabaseHelper.TABLE_ARTISTS,
             null,
-            album.toContentValues(),
+            artist.toContentValues(sourceId),
             SQLiteDatabase.CONFLICT_REPLACE,
         )
+    }
+
+    fun getArtists(sourceId: String): List<PlexArtist> =
+        helper.readableDatabase.query(
+            AlbumDatabaseHelper.TABLE_ARTISTS,
+            null,
+            "${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ?",
+            arrayOf(sourceId),
+            null,
+            null,
+            "${AlbumDatabaseHelper.COLUMN_ALBUM_COUNT} DESC, ${AlbumDatabaseHelper.COLUMN_ARTIST_NAME} COLLATE NOCASE ASC",
+        ).use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.toArtist()) } }
+
+    fun getArtist(sourceId: String, artistId: String): PlexArtist? =
+        helper.readableDatabase.query(
+            AlbumDatabaseHelper.TABLE_ARTISTS,
+            null,
+            "${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ? AND ${AlbumDatabaseHelper.COLUMN_RATING_KEY} = ?",
+            arrayOf(sourceId, artistId),
+            null,
+            null,
+            null,
+        ).use { cursor -> if (cursor.moveToFirst()) cursor.toArtist() else null }
+
+    /** Exact (case-insensitive, trimmed) display-name match for text-only links. */
+    fun findArtistsByName(sourceId: String, name: String): List<PlexArtist> =
+        helper.readableDatabase.query(
+            AlbumDatabaseHelper.TABLE_ARTISTS,
+            null,
+            "${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ? AND TRIM(${AlbumDatabaseHelper.COLUMN_ARTIST_NAME}) = ? COLLATE NOCASE",
+            arrayOf(sourceId, name.trim()),
+            null,
+            null,
+            "${AlbumDatabaseHelper.COLUMN_ALBUM_COUNT} DESC",
+        ).use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.toArtist()) } }
+
+    fun updateArtistFavorite(sourceId: String, artistId: String, userRating: Float?) {
+        val values = ContentValues().apply {
+            if (userRating != null) put(AlbumDatabaseHelper.COLUMN_USER_RATING, userRating)
+            else putNull(AlbumDatabaseHelper.COLUMN_USER_RATING)
+        }
+        helper.writableDatabase.update(
+            AlbumDatabaseHelper.TABLE_ARTISTS,
+            values,
+            "${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ? AND ${AlbumDatabaseHelper.COLUMN_RATING_KEY} = ?",
+            arrayOf(sourceId, artistId),
+        )
+    }
+
+    /**
+     * Same release set as the server's ArtistDiscography: albums credited to the artist plus
+     * albums where the artist is a primary track artist. Multi-artist compilations and
+     * track-only credits are appearances (参与作品).
+     */
+    fun getArtistDiscography(sourceId: String, artistId: String): List<ArtistRelease> {
+        val links = AlbumDatabaseHelper.TABLE_ALBUM_ARTIST_LINKS
+        val trackLinks = AlbumDatabaseHelper.TABLE_TRACK_ARTIST_LINKS
+        val source = AlbumDatabaseHelper.COLUMN_SOURCE_ID
+        val albumKey = AlbumDatabaseHelper.COLUMN_LINK_ALBUM_RATING_KEY
+        val artistKey = AlbumDatabaseHelper.COLUMN_LINK_ARTIST_RATING_KEY
+        return helper.readableDatabase.rawQuery(
+            """
+            SELECT t1.*,
+                   COALESCE(
+                       t1.${AlbumDatabaseHelper.COLUMN_LEAF_COUNT},
+                       NULLIF((
+                           SELECT COUNT(*)
+                           FROM ${AlbumDatabaseHelper.TABLE_ALBUM_TRACKS} t2
+                           WHERE t2.${AlbumDatabaseHelper.COLUMN_TRACK_ALBUM_RATING_KEY} = t1.${AlbumDatabaseHelper.COLUMN_RATING_KEY}
+                             AND t2.$source = t1.$source
+                       ), 0)
+                   ) AS effective_leaf_count,
+                   EXISTS(SELECT 1 FROM $links l WHERE l.$source = t1.$source AND l.$albumKey = t1.${AlbumDatabaseHelper.COLUMN_RATING_KEY} AND l.$artistKey = ?) AS is_credited,
+                   (SELECT COUNT(*) FROM $links l WHERE l.$source = t1.$source AND l.$albumKey = t1.${AlbumDatabaseHelper.COLUMN_RATING_KEY}) AS credited_count
+            FROM ${AlbumDatabaseHelper.TABLE_ALBUMS} t1
+            WHERE t1.$source = ? AND t1.${AlbumDatabaseHelper.COLUMN_RATING_KEY} IN (
+                SELECT $albumKey FROM $links WHERE $source = ? AND $artistKey = ?
+                UNION
+                SELECT $albumKey FROM $trackLinks WHERE $source = ? AND $artistKey = ?
+            )
+            ORDER BY t1.${AlbumDatabaseHelper.COLUMN_YEAR} DESC, t1.${AlbumDatabaseHelper.COLUMN_TITLE} COLLATE NOCASE ASC
+            """.trimIndent(),
+            arrayOf(artistId, sourceId, sourceId, artistId, sourceId, artistId),
+        ).use { cursor ->
+            val creditedIndex = cursor.getColumnIndexOrThrow("is_credited")
+            val countIndex = cursor.getColumnIndexOrThrow("credited_count")
+            buildList {
+                while (cursor.moveToNext()) {
+                    val album = cursor.toAlbum()
+                    val credited = cursor.getInt(creditedIndex) != 0
+                    val compilationCollaboration = credited && cursor.getInt(countIndex) > 1 &&
+                        album.subformat.orEmpty().contains("Compilation", ignoreCase = true)
+                    add(ArtistRelease(album, isAppearance = !credited || compilationCollaboration))
+                }
+            }
+        }
+    }
+
+    /** Performed tracks (own primary credits ∪ tracks of credited albums), for offline play. */
+    fun getArtistTracks(sourceId: String, artistId: String): List<PlexTrackStream> {
+        val source = AlbumDatabaseHelper.COLUMN_SOURCE_ID
+        val artistKey = AlbumDatabaseHelper.COLUMN_LINK_ARTIST_RATING_KEY
+        return helper.readableDatabase.rawQuery(
+            """
+            SELECT t.* FROM ${AlbumDatabaseHelper.TABLE_ALBUM_TRACKS} t
+            WHERE t.$source = ? AND (
+                t.${AlbumDatabaseHelper.COLUMN_TRACK_RATING_KEY} IN (
+                    SELECT ${AlbumDatabaseHelper.COLUMN_LINK_TRACK_RATING_KEY} FROM ${AlbumDatabaseHelper.TABLE_TRACK_ARTIST_LINKS}
+                    WHERE $source = ? AND $artistKey = ?)
+                OR t.${AlbumDatabaseHelper.COLUMN_TRACK_ALBUM_RATING_KEY} IN (
+                    SELECT ${AlbumDatabaseHelper.COLUMN_LINK_ALBUM_RATING_KEY} FROM ${AlbumDatabaseHelper.TABLE_ALBUM_ARTIST_LINKS}
+                    WHERE $source = ? AND $artistKey = ?)
+            )
+            ORDER BY COALESCE(t.${AlbumDatabaseHelper.COLUMN_TRACK_VIEW_COUNT}, 0) DESC,
+                     t.${AlbumDatabaseHelper.COLUMN_TRACK_ALBUM_RATING_KEY},
+                     COALESCE(t.${AlbumDatabaseHelper.COLUMN_TRACK_DISC_NUMBER}, 1),
+                     COALESCE(t.${AlbumDatabaseHelper.COLUMN_TRACK_NUMBER}, 2147483647)
+            """.trimIndent(),
+            arrayOf(sourceId, sourceId, artistId, sourceId, artistId),
+        ).use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.toTrack()) } }
+    }
+
+    /** Precompiled link writers: one statement per transaction instead of ContentValues per row. */
+    private class ArtistLinkWriter(database: SQLiteDatabase) {
+        private val albumLink = database.compileStatement(
+            "INSERT OR IGNORE INTO ${AlbumDatabaseHelper.TABLE_ALBUM_ARTIST_LINKS} " +
+                "(${AlbumDatabaseHelper.COLUMN_SOURCE_ID}, ${AlbumDatabaseHelper.COLUMN_LINK_ALBUM_RATING_KEY}, " +
+                "${AlbumDatabaseHelper.COLUMN_LINK_ARTIST_RATING_KEY}, ${AlbumDatabaseHelper.COLUMN_LINK_POSITION}) VALUES (?, ?, ?, ?)"
+        )
+        private val trackLink = database.compileStatement(
+            "INSERT OR IGNORE INTO ${AlbumDatabaseHelper.TABLE_TRACK_ARTIST_LINKS} " +
+                "(${AlbumDatabaseHelper.COLUMN_SOURCE_ID}, ${AlbumDatabaseHelper.COLUMN_LINK_TRACK_RATING_KEY}, " +
+                "${AlbumDatabaseHelper.COLUMN_LINK_ALBUM_RATING_KEY}, ${AlbumDatabaseHelper.COLUMN_LINK_ARTIST_RATING_KEY}) VALUES (?, ?, ?, ?)"
+        )
+
+        fun album(album: PlexAlbum) {
+            album.artists.forEachIndexed { index, ref ->
+                albumLink.bindString(1, album.sourceId)
+                albumLink.bindString(2, album.ratingKey)
+                albumLink.bindString(3, ref.id)
+                albumLink.bindLong(4, index.toLong())
+                albumLink.executeInsert()
+            }
+        }
+
+        fun track(track: PlexTrackStream) {
+            val albumKey = track.albumRatingKey ?: return
+            track.artists.forEach { ref ->
+                trackLink.bindString(1, track.sourceId)
+                trackLink.bindString(2, track.ratingKey)
+                trackLink.bindString(3, albumKey)
+                trackLink.bindString(4, ref.id)
+                trackLink.executeInsert()
+            }
+        }
+
+        fun close() {
+            albumLink.close()
+            trackLink.close()
+        }
     }
 
     fun updateAlbumsMetadata(sourceId: String, albums: List<PlexAlbum>) {
@@ -551,6 +770,9 @@ class AlbumLocalStore(context: Context) {
             database.delete(AlbumDatabaseHelper.TABLE_ALBUM_TRACKS, where, args)
             database.delete(AlbumDatabaseHelper.TABLE_PLAYLISTS, where, args)
             database.delete(AlbumDatabaseHelper.TABLE_PLAYLIST_TRACKS, where, args)
+            database.delete(AlbumDatabaseHelper.TABLE_ARTISTS, where, args)
+            database.delete(AlbumDatabaseHelper.TABLE_ALBUM_ARTIST_LINKS, where, args)
+            database.delete(AlbumDatabaseHelper.TABLE_TRACK_ARTIST_LINKS, where, args)
             database.setTransactionSuccessful()
         } finally {
             database.endTransaction()
@@ -614,15 +836,22 @@ class AlbumLocalStore(context: Context) {
         database.beginTransaction()
         try {
             database.delete(AlbumDatabaseHelper.TABLE_ALBUM_TRACKS, "${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ?", arrayOf(sourceId))
-            albumTracks.values.forEach { tracks ->
-                tracks.forEach { track ->
-                    database.insertWithOnConflict(
-                        AlbumDatabaseHelper.TABLE_ALBUM_TRACKS,
-                        null,
-                        track.toContentValues(),
-                        SQLiteDatabase.CONFLICT_REPLACE,
-                    )
+            database.delete(AlbumDatabaseHelper.TABLE_TRACK_ARTIST_LINKS, "${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ?", arrayOf(sourceId))
+            val links = ArtistLinkWriter(database)
+            try {
+                albumTracks.values.forEach { tracks ->
+                    tracks.forEach { track ->
+                        database.insertWithOnConflict(
+                            AlbumDatabaseHelper.TABLE_ALBUM_TRACKS,
+                            null,
+                            track.toContentValues(),
+                            SQLiteDatabase.CONFLICT_REPLACE,
+                        )
+                        links.track(track)
+                    }
                 }
+            } finally {
+                links.close()
             }
             database.setTransactionSuccessful()
         } finally {
@@ -639,13 +868,24 @@ class AlbumLocalStore(context: Context) {
                 "${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ? AND ${AlbumDatabaseHelper.COLUMN_TRACK_ALBUM_RATING_KEY} = ?",
                 arrayOf(sourceId, albumRatingKey),
             )
-            tracks.forEach { track ->
-                database.insertWithOnConflict(
-                    AlbumDatabaseHelper.TABLE_ALBUM_TRACKS,
-                    null,
-                    track.toContentValues(),
-                    SQLiteDatabase.CONFLICT_REPLACE,
-                )
+            database.delete(
+                AlbumDatabaseHelper.TABLE_TRACK_ARTIST_LINKS,
+                "${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ? AND ${AlbumDatabaseHelper.COLUMN_LINK_ALBUM_RATING_KEY} = ?",
+                arrayOf(sourceId, albumRatingKey),
+            )
+            val links = ArtistLinkWriter(database)
+            try {
+                tracks.forEach { track ->
+                    database.insertWithOnConflict(
+                        AlbumDatabaseHelper.TABLE_ALBUM_TRACKS,
+                        null,
+                        track.toContentValues(),
+                        SQLiteDatabase.CONFLICT_REPLACE,
+                    )
+                    links.track(track)
+                }
+            } finally {
+                links.close()
             }
             database.setTransactionSuccessful()
         } finally {
@@ -739,7 +979,41 @@ class AlbumLocalStore(context: Context) {
             releaseDate = getColumnIndex(AlbumDatabaseHelper.COLUMN_RELEASE_DATE)
                 .takeIf { it >= 0 && !isNull(it) }
                 ?.let(::getString),
+            artists = artistRefsColumn(),
         )
+    }
+
+    private fun android.database.Cursor.artistRefsColumn(): List<ArtistRef> =
+        getColumnIndex(AlbumDatabaseHelper.COLUMN_ARTIST_REFS)
+            .takeIf { it >= 0 && !isNull(it) }
+            ?.let { decodeArtistRefs(getString(it)) }
+            .orEmpty()
+
+    private fun android.database.Cursor.toArtist(): PlexArtist {
+        fun nullableInt(name: String): Int? =
+            getColumnIndexOrThrow(name).let { if (isNull(it)) null else getInt(it) }
+        return PlexArtist(
+            ratingKey = getString(getColumnIndexOrThrow(AlbumDatabaseHelper.COLUMN_RATING_KEY)),
+            title = getString(getColumnIndexOrThrow(AlbumDatabaseHelper.COLUMN_ARTIST_NAME)),
+            thumbUrl = getString(getColumnIndexOrThrow(AlbumDatabaseHelper.COLUMN_THUMB_URL)),
+            userRating = getColumnIndexOrThrow(AlbumDatabaseHelper.COLUMN_USER_RATING)
+                .let { if (isNull(it)) null else getFloat(it) },
+            sourceId = getString(getColumnIndexOrThrow(AlbumDatabaseHelper.COLUMN_SOURCE_ID)),
+            albumCount = nullableInt(AlbumDatabaseHelper.COLUMN_ALBUM_COUNT),
+            trackCount = nullableInt(AlbumDatabaseHelper.COLUMN_TRACK_COUNT),
+            sortName = getString(getColumnIndexOrThrow(AlbumDatabaseHelper.COLUMN_SORT_NAME)),
+        )
+    }
+
+    private fun PlexArtist.toContentValues(sourceId: String): ContentValues = ContentValues().apply {
+        put(AlbumDatabaseHelper.COLUMN_SOURCE_ID, sourceId)
+        put(AlbumDatabaseHelper.COLUMN_RATING_KEY, ratingKey)
+        put(AlbumDatabaseHelper.COLUMN_ARTIST_NAME, title)
+        put(AlbumDatabaseHelper.COLUMN_SORT_NAME, sortName)
+        put(AlbumDatabaseHelper.COLUMN_THUMB_URL, thumbUrl)
+        put(AlbumDatabaseHelper.COLUMN_USER_RATING, userRating)
+        put(AlbumDatabaseHelper.COLUMN_ALBUM_COUNT, albumCount)
+        put(AlbumDatabaseHelper.COLUMN_TRACK_COUNT, trackCount)
     }
 
     private fun android.database.Cursor.toPlaylist(): PlexPlaylist = PlexPlaylist(
@@ -784,6 +1058,7 @@ class AlbumLocalStore(context: Context) {
             skipCount = nullableLong(AlbumDatabaseHelper.COLUMN_TRACK_SKIP_COUNT),
             discNumber = nullableInt(AlbumDatabaseHelper.COLUMN_TRACK_DISC_NUMBER),
             trackNumber = nullableInt(AlbumDatabaseHelper.COLUMN_TRACK_NUMBER),
+            artists = artistRefsColumn(),
         )
     }
 
@@ -864,6 +1139,7 @@ class AlbumLocalStore(context: Context) {
             put(AlbumDatabaseHelper.COLUMN_FORMAT, format)
             put(AlbumDatabaseHelper.COLUMN_SUBFORMAT, subformat)
             put(AlbumDatabaseHelper.COLUMN_RELEASE_DATE, releaseDate)
+            put(AlbumDatabaseHelper.COLUMN_ARTIST_REFS, encodeArtistRefs(artists))
         }
 
     private fun PlexPlaylist.toContentValues(sourceId: String, sortOrder: Int): ContentValues = ContentValues().apply {
@@ -906,6 +1182,7 @@ class AlbumLocalStore(context: Context) {
             put(AlbumDatabaseHelper.COLUMN_TRACK_SKIP_COUNT, skipCount)
             put(AlbumDatabaseHelper.COLUMN_TRACK_DISC_NUMBER, discNumber)
             put(AlbumDatabaseHelper.COLUMN_TRACK_NUMBER, trackNumber)
+            put(AlbumDatabaseHelper.COLUMN_ARTIST_REFS, encodeArtistRefs(artists))
         }
 
     private companion object {
@@ -988,6 +1265,91 @@ internal fun ensureVersion17Columns(db: SQLiteDatabase) {
     addColumnIfNotExists(db, AlbumDatabaseHelper.TABLE_ALBUMS, AlbumDatabaseHelper.COLUMN_RELEASE_DATE, "TEXT")
 }
 
+/**
+ * v18: 032 artist sync model. Albums/tracks keep their artist refs (JSON) for navigation, the
+ * link tables make discography queries indexable, and `artists` holds the synced performers.
+ * Existing rows have no refs until the next library sync; navigation falls back to names.
+ */
+internal fun ensureVersion18Schema(db: SQLiteDatabase) {
+    val tables = db.rawQuery("SELECT name FROM sqlite_master WHERE type = 'table'", null).use { cursor ->
+        buildSet { while (cursor.moveToNext()) add(cursor.getString(0)) }
+    }
+    for (table in listOf(
+        AlbumDatabaseHelper.TABLE_ALBUMS,
+        AlbumDatabaseHelper.TABLE_TRACKS,
+        AlbumDatabaseHelper.TABLE_ALBUM_TRACKS,
+        AlbumDatabaseHelper.TABLE_PLAYLIST_TRACKS,
+    )) {
+        if (table in tables) addColumnIfNotExists(db, table, AlbumDatabaseHelper.COLUMN_ARTIST_REFS, "TEXT")
+    }
+    db.execSQL(
+        """
+        CREATE TABLE IF NOT EXISTS ${AlbumDatabaseHelper.TABLE_ARTISTS} (
+            ${AlbumDatabaseHelper.COLUMN_SOURCE_ID} TEXT NOT NULL,
+            ${AlbumDatabaseHelper.COLUMN_RATING_KEY} TEXT NOT NULL,
+            ${AlbumDatabaseHelper.COLUMN_ARTIST_NAME} TEXT NOT NULL,
+            ${AlbumDatabaseHelper.COLUMN_SORT_NAME} TEXT,
+            ${AlbumDatabaseHelper.COLUMN_THUMB_URL} TEXT,
+            ${AlbumDatabaseHelper.COLUMN_USER_RATING} REAL,
+            ${AlbumDatabaseHelper.COLUMN_ALBUM_COUNT} INTEGER,
+            ${AlbumDatabaseHelper.COLUMN_TRACK_COUNT} INTEGER,
+            PRIMARY KEY (${AlbumDatabaseHelper.COLUMN_SOURCE_ID}, ${AlbumDatabaseHelper.COLUMN_RATING_KEY})
+        )
+        """.trimIndent()
+    )
+    db.execSQL(
+        "CREATE INDEX IF NOT EXISTS index_artists_name ON ${AlbumDatabaseHelper.TABLE_ARTISTS}(${AlbumDatabaseHelper.COLUMN_SOURCE_ID}, ${AlbumDatabaseHelper.COLUMN_ARTIST_NAME} COLLATE NOCASE)"
+    )
+    db.execSQL(
+        """
+        CREATE TABLE IF NOT EXISTS ${AlbumDatabaseHelper.TABLE_ALBUM_ARTIST_LINKS} (
+            ${AlbumDatabaseHelper.COLUMN_SOURCE_ID} TEXT NOT NULL,
+            ${AlbumDatabaseHelper.COLUMN_LINK_ALBUM_RATING_KEY} TEXT NOT NULL,
+            ${AlbumDatabaseHelper.COLUMN_LINK_ARTIST_RATING_KEY} TEXT NOT NULL,
+            ${AlbumDatabaseHelper.COLUMN_LINK_POSITION} INTEGER NOT NULL,
+            PRIMARY KEY (${AlbumDatabaseHelper.COLUMN_SOURCE_ID}, ${AlbumDatabaseHelper.COLUMN_LINK_ALBUM_RATING_KEY}, ${AlbumDatabaseHelper.COLUMN_LINK_ARTIST_RATING_KEY})
+        )
+        """.trimIndent()
+    )
+    db.execSQL(
+        "CREATE INDEX IF NOT EXISTS index_album_artist_links_artist ON ${AlbumDatabaseHelper.TABLE_ALBUM_ARTIST_LINKS}(${AlbumDatabaseHelper.COLUMN_SOURCE_ID}, ${AlbumDatabaseHelper.COLUMN_LINK_ARTIST_RATING_KEY})"
+    )
+    db.execSQL(
+        """
+        CREATE TABLE IF NOT EXISTS ${AlbumDatabaseHelper.TABLE_TRACK_ARTIST_LINKS} (
+            ${AlbumDatabaseHelper.COLUMN_SOURCE_ID} TEXT NOT NULL,
+            ${AlbumDatabaseHelper.COLUMN_LINK_TRACK_RATING_KEY} TEXT NOT NULL,
+            ${AlbumDatabaseHelper.COLUMN_LINK_ALBUM_RATING_KEY} TEXT NOT NULL,
+            ${AlbumDatabaseHelper.COLUMN_LINK_ARTIST_RATING_KEY} TEXT NOT NULL,
+            PRIMARY KEY (${AlbumDatabaseHelper.COLUMN_SOURCE_ID}, ${AlbumDatabaseHelper.COLUMN_LINK_TRACK_RATING_KEY}, ${AlbumDatabaseHelper.COLUMN_LINK_ARTIST_RATING_KEY})
+        )
+        """.trimIndent()
+    )
+    db.execSQL(
+        "CREATE INDEX IF NOT EXISTS index_track_artist_links_artist ON ${AlbumDatabaseHelper.TABLE_TRACK_ARTIST_LINKS}(${AlbumDatabaseHelper.COLUMN_SOURCE_ID}, ${AlbumDatabaseHelper.COLUMN_LINK_ARTIST_RATING_KEY})"
+    )
+}
+
+internal fun encodeArtistRefs(refs: List<ArtistRef>): String? {
+    if (refs.isEmpty()) return null
+    val array = JSONArray()
+    refs.forEach { ref -> array.put(JSONObject().put("id", ref.id).put("name", ref.name)) }
+    return array.toString()
+}
+
+internal fun decodeArtistRefs(text: String?): List<ArtistRef> {
+    if (text.isNullOrBlank()) return emptyList()
+    return runCatching {
+        val array = JSONArray(text)
+        (0 until array.length()).mapNotNull { index ->
+            val item = array.optJSONObject(index) ?: return@mapNotNull null
+            val id = item.optString("id").trim()
+            val name = item.optString("name").trim()
+            if (id.isEmpty() || name.isEmpty()) null else ArtistRef(id, name)
+        }
+    }.getOrDefault(emptyList())
+}
+
 private class AlbumDatabaseHelper(context: Context) :
     SQLiteOpenHelper(context, DATABASE_NAME, null, DATABASE_VERSION) {
 
@@ -1002,6 +1364,7 @@ private class AlbumDatabaseHelper(context: Context) :
         createAlbumTracksTable(db)
         createDownloadedTracksTable(db)
         createPlaylistTables(db)
+        ensureVersion18Schema(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -1047,11 +1410,12 @@ private class AlbumDatabaseHelper(context: Context) :
             createPlaylistTables(db)
         }
         if (oldVersion < 17) ensureVersion17Columns(db)
+        if (oldVersion < 18) ensureVersion18Schema(db)
     }
 
     companion object {
         private const val DATABASE_NAME = "plex_album_cache.db"
-        private const val DATABASE_VERSION = 17
+        private const val DATABASE_VERSION = 18
 
         const val TABLE_ALBUMS = "albums"
         const val TABLE_TRACKS = "tracks"
@@ -1059,6 +1423,17 @@ private class AlbumDatabaseHelper(context: Context) :
         const val TABLE_DOWNLOADED_TRACKS = "downloaded_tracks"
         const val TABLE_PLAYLISTS = "playlists"
         const val TABLE_PLAYLIST_TRACKS = "playlist_tracks"
+        const val TABLE_ARTISTS = "artists"
+        const val TABLE_ALBUM_ARTIST_LINKS = "album_artist_links"
+        const val TABLE_TRACK_ARTIST_LINKS = "track_artist_links"
+        const val COLUMN_ARTIST_REFS = "artist_refs"
+        const val COLUMN_SORT_NAME = "sort_name"
+        const val COLUMN_ALBUM_COUNT = "album_count"
+        const val COLUMN_TRACK_COUNT = "track_count"
+        const val COLUMN_LINK_ALBUM_RATING_KEY = "album_rating_key"
+        const val COLUMN_LINK_TRACK_RATING_KEY = "track_rating_key"
+        const val COLUMN_LINK_ARTIST_RATING_KEY = "artist_rating_key"
+        const val COLUMN_LINK_POSITION = "position"
         const val COLUMN_SOURCE_ID = "source_id"
         const val COLUMN_RATING_KEY = "rating_key"
         const val COLUMN_TITLE = "title"

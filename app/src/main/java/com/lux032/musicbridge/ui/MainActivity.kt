@@ -523,7 +523,7 @@ fun PlexAlbumScreen(
                             onTogglePause = state::togglePause,
                             onSeek = state::seekPlayback,
                             onAlbumClick = state::openAlbumDetail,
-                            onArtistClick = state::openArtistAlbumsByName,
+                            onArtistClick = state::openArtistLink,
                             onToggleTrackFavorite = state::toggleTrackFavorite,
                             onSelectTrack = { index -> state.playQueueIndex(index) },
                             onSelectPlaybackMode = state::updatePlaybackMode,
@@ -555,7 +555,8 @@ fun PlexAlbumScreen(
                             )
                         }
                     }
-                    LaunchedEffect(state.selectedArtist?.name) {
+                    val selectedArtistIdentity = state.selectedArtist?.let { it.ratingKey ?: it.name }
+                    LaunchedEffect(selectedArtistIdentity) {
                         artistAlbumsListState.scrollToItem(0)
                         state.selectedArtist?.let {
                             state.loadArtistTracks(it)
@@ -569,6 +570,7 @@ fun PlexAlbumScreen(
                     ) {
                         ArtistAlbumsSection(
                             artist = state.selectedArtist,
+                            isResolving = state.isResolvingArtist,
                             selectedAlbum = state.selectedAlbum,
                             outputTargetName = state.selectedPlaybackTarget.displayName,
                             isPlaybackLoading = state.isPlaybackCommandLoading,
@@ -691,7 +693,7 @@ fun PlexAlbumScreen(
                             onDownloadAlbum = state::downloadAlbum,
                             onDeleteDownloadedAlbum = state::deleteDownloadedAlbum,
                             onReturnHome = state::navigateBack,
-                            onArtistClick = state::openArtistAlbumsByName,
+                            onArtistClick = state::openArtistLink,
                             onToggleAlbumFavorite = state::toggleAlbumFavorite,
                             onToggleTrackFavorite = state::toggleTrackFavorite,
                             onQueueAlbum = state::enqueueAlbum,
@@ -918,6 +920,14 @@ fun PlexAlbumScreen(
                 bottomInset = if (isNavigationRailVisible) systemBarBottomPadding else 0.dp,
                 isPlayerOpen = activeSection == AppSection.PlaybackDetail,
                 onOpenPlayback = state::openPlaybackDetail,
+            )
+        }
+
+        if (state.artistChoices.isNotEmpty()) {
+            ArtistChoiceDialog(
+                choices = state.artistChoices,
+                onDismiss = state::dismissArtistChoices,
+                onChoose = state::openArtistRef,
             )
         }
 

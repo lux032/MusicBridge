@@ -11,6 +11,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
+import com.lux032.musicbridge.plex.ArtistRef
 import com.lux032.musicbridge.plex.PlexAlbum
 import com.lux032.musicbridge.plex.PlexAlbumTracksResult
 import com.lux032.musicbridge.plex.PlexAuthConfig
@@ -221,6 +222,14 @@ class AppState(
     var isAlbumSearchLoading by mutableStateOf(false)
     var selectedAlbum by mutableStateOf<PlexAlbum?>(null)
     var selectedArtistName by mutableStateOf<String?>(null)
+    /** 032 artist id of the open artist page (sync model identity); null = Plex name lookup. */
+    var selectedArtistKey by mutableStateOf<String?>(null)
+    /** True while an artist link is being resolved against the server (shows a loader). */
+    var isResolvingArtist by mutableStateOf(false)
+    /** Online artist page used when the local sync model has no releases for the id. */
+    var remoteArtist by mutableStateOf<ArtistSummary?>(null)
+    /** Multi-artist link awaiting the user's pick (e.g. "A, B" duet credits). */
+    var artistChoices by mutableStateOf<List<ArtistRef>>(emptyList())
     var artistTracks by mutableStateOf<List<PlexTrackStream>>(emptyList())
     var isArtistTracksLoading by mutableStateOf(false)
     /** Artist list view mode and favourites filter persist across restarts; the search
@@ -316,6 +325,15 @@ class AppState(
     // cached album list in step with the underlying database.
     val selectedArtist: ArtistSummary? by derivedStateOf {
         val selectedName = (selectedArtistName to artistAlbumsRevision).first
+        val selectedKey = selectedArtistKey
+        if (selectedKey != null) {
+            // 032: identity is the artist id. Local sync data wins when it has releases;
+            // otherwise the server detail (fresh install, stale id after a merge) fills in.
+            val local = libraryCoordinator.localArtistSummary(connectionPreferences.id, selectedKey, artists)
+            return@derivedStateOf local?.takeIf { it.albums.isNotEmpty() }
+                ?: remoteArtist?.takeIf { it.ratingKey == selectedKey }
+                ?: local
+        }
         selectedName?.let {
             val albums = albumLocalStore.getAlbumsByArtist(connectionPreferences.id, selectedName)
             val summary = artists.firstOrNull { it.name == selectedName }
@@ -683,6 +701,10 @@ class AppState(
         favoriteTracks = emptyList()
         selectedAlbum = null
         selectedArtistName = null
+        selectedArtistKey = null
+        remoteArtist = null
+        artistChoices = emptyList()
+        isResolvingArtist = false
         selectedPlaylist = null
         trackResult = null
         playlistTrackResult = null
@@ -696,6 +718,15 @@ class AppState(
     fun openArtistAlbums(artist: ArtistSummary) = libraryCoordinator.openArtistAlbums(artist)
 
     fun openArtistAlbumsByName(artistName: String?) = libraryCoordinator.openArtistAlbumsByName(artistName)
+
+    /** Artist link with server ids when available; several ids ask the user to pick one. */
+    fun openArtistLink(artistName: String?, refs: List<ArtistRef>) = libraryCoordinator.openArtistLink(artistName, refs)
+
+    fun openArtistRef(ref: ArtistRef) = libraryCoordinator.openArtistRef(ref)
+
+    fun dismissArtistChoices() {
+        artistChoices = emptyList()
+    }
 
     fun shuffleArtist(artist: ArtistSummary) = libraryCoordinator.shuffleArtist(artist)
 

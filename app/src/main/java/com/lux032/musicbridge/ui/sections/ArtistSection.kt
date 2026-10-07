@@ -42,6 +42,7 @@ import com.lux032.musicbridge.model.ArtistAlbumCategory
 import com.lux032.musicbridge.model.ArtistAlbumClassification
 import com.lux032.musicbridge.model.ReleaseKind
 import com.lux032.musicbridge.model.classifyArtistAlbum
+import com.lux032.musicbridge.plex.ArtistRef
 import com.lux032.musicbridge.plex.PlexAlbum
 import com.lux032.musicbridge.plex.PlexTrackStream
 import kotlinx.coroutines.launch
@@ -580,9 +581,31 @@ internal fun ArtistAlbumsSection(
     onDeleteDownloadedTrack: (PlexTrackStream) -> Unit = {},
     onPlayTrack: (ArtistSummary, PlexTrackStream, Int) -> Unit,
     onQueueTrack: (PlexTrackStream, QueuePlacement) -> Unit,
+    isResolving: Boolean = false,
 ) {
     val layoutInfo = LocalAppLayoutInfo.current
     val currentArtist = artist
+    if (currentArtist == null && isResolving) {
+        Column(
+            modifier = Modifier.fillMaxSize().padding(horizontal = layoutInfo.horizontalPadding, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(32.dp),
+        ) {
+            BackCircleButton(onClick = onBack, contentDescription = Strings.backToArtists)
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                CircularProgressIndicator(
+                    color = LocalArtworkPalette.current.accent,
+                    modifier = Modifier.size(28.dp),
+                    strokeWidth = 3.dp,
+                )
+                Text(Strings.loadingArtist, color = AppColors.TextSecondary, style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+        return
+    }
     if (currentArtist == null) {
         EmptyStateCard(
             title = Strings.artistNotFound,
@@ -596,13 +619,22 @@ internal fun ArtistAlbumsSection(
     // Shares the root now-playing tint so this page stays consistent with the mini player
     // and bottom bar.
     val palette = LocalArtworkPalette.current
-    val albumSections = remember(currentArtist.albums, layoutInfo.albumGridColumns) {
+    val albumSections = remember(currentArtist.albums, currentArtist.appearanceAlbumKeys, layoutInfo.albumGridColumns) {
         // Newest release date first; groupBy keeps that order inside each category.
         currentArtist.albums
+            .filterNot { it.ratingKey in currentArtist.appearanceAlbumKeys }
             .sortedByRelease(newestFirst = true)
             .map { ClassifiedArtistAlbum(it, classifyArtistAlbum(it)) }
             .groupBy { it.classification.category }
             .mapValues { (_, albums) -> albums.chunked(layoutInfo.albumGridColumns) }
+    }
+    // Web "参与作品": releases where the artist only sings some tracks (032 only).
+    val appearanceRows = remember(currentArtist.albums, currentArtist.appearanceAlbumKeys, layoutInfo.albumGridColumns) {
+        currentArtist.albums
+            .filter { it.ratingKey in currentArtist.appearanceAlbumKeys }
+            .sortedByRelease(newestFirst = true)
+            .map { ClassifiedArtistAlbum(it, classifyArtistAlbum(it)) }
+            .chunked(layoutInfo.albumGridColumns)
     }
     val topTracks = remember(artistTracks) { artistTracks.take(10) }
 
@@ -701,12 +733,17 @@ internal fun ArtistAlbumsSection(
         }
 
         val categories = listOf(
-            ArtistAlbumCategory.Album to Strings.studioAlbums,
-            ArtistAlbumCategory.SingleEp to Strings.singlesAndEps,
-            ArtistAlbumCategory.CompilationLive to Strings.compilationsAndLive,
+            ArtistAlbumCategory.Album.name to Strings.studioAlbums,
+            ArtistAlbumCategory.SingleEp.name to Strings.singlesAndEps,
+            ArtistAlbumCategory.CompilationLive.name to Strings.compilationsAndLive,
+            APPEARANCES_SECTION to Strings.artistAppearances,
         )
         categories.forEach { (category, title) ->
-            val rows = albumSections[category].orEmpty()
+            val rows = if (category == APPEARANCES_SECTION) {
+                appearanceRows
+            } else {
+                albumSections[ArtistAlbumCategory.valueOf(category)].orEmpty()
+            }
             if (rows.isNotEmpty()) {
                 item(key = "artist-album-header-$category", contentType = "albums-header") {
                     SectionHeader(title = title, modifier = Modifier.padding(top = 12.dp))
@@ -783,6 +820,55 @@ internal fun ArtistAlbumsSection(
         }
 
     }
+}
+
+private const val APPEARANCES_SECTION = "Appearances"
+
+/** Picker for multi-artist credits ("A, B"): each name opens its own artist page. */
+@Composable
+internal fun ArtistChoiceDialog(
+    choices: List<ArtistRef>,
+    onDismiss: () -> Unit,
+    onChoose: (ArtistRef) -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(Strings.back) }
+        },
+        title = {
+            Text(Strings.chooseArtist, color = AppColors.TextPrimary, fontWeight = FontWeight.Bold)
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                choices.forEach { ref ->
+                    ChoiceRow(
+                        selected = false,
+                        onClick = { onChoose(ref) },
+                        modifier = Modifier.fillMaxWidth(),
+                        showCheck = false,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Person,
+                            contentDescription = null,
+                            tint = AppColors.TextSecondary,
+                            modifier = Modifier.size(22.dp),
+                        )
+                        Text(
+                            ref.name,
+                            color = AppColors.TextPrimary,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                }
+            }
+        },
+        containerColor = AppColors.CardSurface,
+    )
 }
 
 private data class ClassifiedArtistAlbum(

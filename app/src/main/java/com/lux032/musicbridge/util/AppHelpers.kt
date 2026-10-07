@@ -17,6 +17,10 @@ data class ArtistSummary(
     val ratingKey: String? = null,
     val sourceId: String = "",
     val userRating: Float? = null,
+    /** 032: performed track count from the sync model. */
+    val trackCount: Int? = null,
+    /** 032: albums where the artist only sings some tracks (web "参与作品"). */
+    val appearanceAlbumKeys: Set<String> = emptySet(),
 ) {
     // Plex has no artist "follow"; a 10-star rating is what Plexamp shows as a liked artist.
     val isFavorite: Boolean

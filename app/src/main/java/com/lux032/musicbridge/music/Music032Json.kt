@@ -1,6 +1,8 @@
 package com.lux032.musicbridge.music
 
+import com.lux032.musicbridge.plex.ArtistRef
 import com.lux032.musicbridge.plex.PlexAlbum
+import com.lux032.musicbridge.plex.PlexArtist
 import com.lux032.musicbridge.plex.PlexPlaylist
 import com.lux032.musicbridge.plex.PlexSection
 import com.lux032.musicbridge.plex.PlexTrackStream
@@ -74,6 +76,34 @@ internal object Music032Json {
             // releaseDate with originalReleaseDate as the fallback.
             releaseDate = value.optString("releaseDate").trim().ifBlank { null }
                 ?: value.optString("originalReleaseDate").trim().ifBlank { null },
+            artists = parseArtistRefs(value.optJSONArray("artists")),
+        )
+    }
+
+    /** `artists: [{id, name}]` on albums and tracks; entries without a valid id are dropped. */
+    fun parseArtistRefs(array: JSONArray?): List<ArtistRef> {
+        if (array == null) return emptyList()
+        return (0 until array.length()).mapNotNull { index ->
+            val item = array.optJSONObject(index) ?: return@mapNotNull null
+            val id = item.optLong("id").takeIf { it > 0L } ?: return@mapNotNull null
+            val name = item.optString("name").trim().ifBlank { return@mapNotNull null }
+            ArtistRef(id.toString(), name)
+        }.distinctBy(ArtistRef::id)
+    }
+
+    /** One row of `/api/v1/sync/artists` (or the `artist` object of the detail endpoint). */
+    fun parseArtist(value: JSONObject, baseUrl: String, mediaToken: String, sourceId: String): PlexArtist? {
+        val id = value.optLong("id").takeIf { it > 0L } ?: return null
+        val name = value.optString("name").trim().ifBlank { return null }
+        return PlexArtist(
+            ratingKey = id.toString(),
+            title = name,
+            thumbUrl = mediaUrl(value.optString("imageUrl"), baseUrl, mediaToken),
+            userRating = if (value.optBoolean("isFavorite")) 10f else null,
+            sourceId = sourceId,
+            albumCount = if (value.has("albumCount")) value.optInt("albumCount") else null,
+            trackCount = if (value.has("trackCount")) value.optInt("trackCount") else null,
+            sortName = value.optString("sortName").trim().ifBlank { null },
         )
     }
 
@@ -133,6 +163,7 @@ internal object Music032Json {
             lastViewedAtEpochSeconds = value.opt("lastViewedAt")?.toString()?.toLongOrNull()
                 ?: parseEpochSeconds(value.optString("lastPlayedAt")),
             skipCount = value.opt("skipCount")?.toString()?.toLongOrNull(),
+            artists = parseArtistRefs(value.optJSONArray("artists")),
         )
     }
 

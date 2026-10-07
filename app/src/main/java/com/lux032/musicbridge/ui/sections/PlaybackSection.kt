@@ -61,6 +61,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import kotlin.math.roundToLong
+import com.lux032.musicbridge.plex.ArtistRef
 import com.lux032.musicbridge.plex.PlexAlbum
 import com.lux032.musicbridge.plex.PlexAlbumTracksResult
 import com.lux032.musicbridge.plex.PlexTrackStream
@@ -106,7 +107,7 @@ internal fun PlaybackDetailSection(
     onTogglePause: (MiniPlayerState) -> Unit,
     onSeek: (MiniPlayerState, Long) -> Unit,
     onAlbumClick: (PlexAlbum) -> Unit,
-    onArtistClick: (String?) -> Unit,
+    onArtistClick: (String?, List<ArtistRef>) -> Unit,
     onToggleTrackFavorite: (PlexTrackStream) -> Unit,
     onSelectTrack: (Int) -> Unit,
     onSelectPlaybackMode: (PlaybackMode) -> Unit,
@@ -274,7 +275,7 @@ internal fun PlaybackDetailSection(
                             modifier = Modifier
                                 .weight(1f, fill = false)
                                 .clip(RoundedCornerShape(6.dp))
-                                .clickable { onArtistClick(displayAlbum.artistName) },
+                                .clickable { onArtistClick(currentTrack.artistName ?: displayAlbum.artistName, currentTrack.artists) },
                         )
                         if (hasRealAlbum) {
                             val albumLabel = buildString {
@@ -857,7 +858,7 @@ internal fun PlaybackDetailSection(
                 }
                 MoreSheetAction(Icons.Filled.Person, Strings.viewArtist) {
                     isMoreSheetVisible = false
-                    onArtistClick(displayAlbum.artistName)
+                    onArtistClick(currentTrack.artistName ?: displayAlbum.artistName, currentTrack.artists)
                 }
                 Text(Strings.trackDetails, color = AppColors.TextSecondary, fontWeight = FontWeight.SemiBold)
                 Text(currentTrack.trackDetailText(currentState.target, localPlaybackPolicy, cachedOriginalTrackKeys), color = AppColors.TextTertiary, style = MaterialTheme.typography.bodyMedium)
@@ -1356,7 +1357,7 @@ internal fun AlbumDetailSection(
     modifier: Modifier = Modifier,
     trackListState: LazyListState = rememberLazyListState(),
     onReturnHome: () -> Unit,
-    onArtistClick: (String?) -> Unit,
+    onArtistClick: (String?, List<ArtistRef>) -> Unit,
     onToggleAlbumFavorite: (PlexAlbum) -> Unit,
     onToggleTrackFavorite: (PlexTrackStream) -> Unit,
     onQueueAlbum: (PlexAlbum, QueuePlacement) -> Unit,
@@ -1527,7 +1528,7 @@ private fun AlbumDetailHeroWide(
     isFavoriteLoading: Boolean,
     showAlbumQueueMenu: Boolean,
     onShowAlbumQueueMenuChange: (Boolean) -> Unit,
-    onArtistClick: (String?) -> Unit,
+    onArtistClick: (String?, List<ArtistRef>) -> Unit,
     onToggleAlbumFavorite: (PlexAlbum) -> Unit,
     onQueueAlbum: (PlexAlbum, QueuePlacement) -> Unit,
     onPlayAlbum: (PlexAlbumTracksResult) -> Unit,
@@ -1613,7 +1614,7 @@ private fun AlbumDetailHeroWide(
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier
                 .clip(RoundedCornerShape(6.dp))
-                .clickable { onArtistClick(album.artistName) },
+                .clickable { onArtistClick(album.artistName, album.artists) },
         )
         Text(
             text = buildString {
@@ -1755,7 +1756,7 @@ private fun AlbumDetailHeroCompact(
     isFavoriteLoading: Boolean,
     showAlbumQueueMenu: Boolean,
     onShowAlbumQueueMenuChange: (Boolean) -> Unit,
-    onArtistClick: (String?) -> Unit,
+    onArtistClick: (String?, List<ArtistRef>) -> Unit,
     onToggleAlbumFavorite: (PlexAlbum) -> Unit,
     onQueueAlbum: (PlexAlbum, QueuePlacement) -> Unit,
     onPlayAlbum: (PlexAlbumTracksResult) -> Unit,
@@ -1851,7 +1852,7 @@ private fun AlbumDetailHeroCompact(
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier
                 .clip(RoundedCornerShape(6.dp))
-                .clickable { onArtistClick(album.artistName) }
+                .clickable { onArtistClick(album.artistName, album.artists) }
                 .padding(horizontal = 4.dp, vertical = 2.dp),
         )
         Spacer(Modifier.height(4.dp))

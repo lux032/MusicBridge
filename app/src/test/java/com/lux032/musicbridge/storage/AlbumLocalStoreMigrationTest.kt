@@ -2,7 +2,9 @@ package com.lux032.musicbridge.storage
 
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
+import com.lux032.musicbridge.plex.ArtistRef
 import com.lux032.musicbridge.plex.PlexAlbum
+import com.lux032.musicbridge.plex.PlexArtist
 import com.lux032.musicbridge.plex.PlexPlaylist
 import com.lux032.musicbridge.plex.PlexSection
 import com.lux032.musicbridge.plex.PlexTrackStream
@@ -144,7 +146,7 @@ class AlbumLocalStoreMigrationTest {
         assertEquals(null, albums.single().format)
         assertEquals(null, albums.single().subformat)
         context.openOrCreateDatabase(DATABASE_NAME, Context.MODE_PRIVATE, null).use { db ->
-            assertEquals(17, db.version)
+            assertEquals(18, db.version)
             assertTrue(db.columnNames("albums").containsAll(listOf("format", "subformat")))
             assertTrue(db.columnNames("tracks").contains("bit_depth"))
             assertTrue(db.columnNames("album_tracks").contains("bit_depth"))
@@ -220,7 +222,7 @@ class AlbumLocalStoreMigrationTest {
         assertEquals(emptyList<DownloadedAudioTrack>(), store.getAllDownloadedTracks())
 
         context.openOrCreateDatabase(DATABASE_NAME, Context.MODE_PRIVATE, null).use { db ->
-            assertEquals(17, db.version)
+            assertEquals(18, db.version)
             val expectedColumns = setOf(
                 "source_id",
                 "rating_key",
@@ -368,7 +370,7 @@ class AlbumLocalStoreMigrationTest {
         assertEquals(5, storedTrack?.trackNumber)
 
         context.openOrCreateDatabase(DATABASE_NAME, Context.MODE_PRIVATE, null).use { db ->
-            assertEquals(17, db.version)
+            assertEquals(18, db.version)
             assertTrue(db.columnNames("downloaded_tracks").containsAll(listOf("disc_number", "track_number", "user_rating")))
         }
         context.deleteDatabase(DATABASE_NAME)
@@ -499,7 +501,7 @@ class AlbumLocalStoreMigrationTest {
         store.updateDownloadedTrackFavoriteStatus("src", "trk1", null)
         // trk1 now has explicit null in downloaded_tracks, but fallback will check tracks table if needed or return null
         context.openOrCreateDatabase(DATABASE_NAME, Context.MODE_PRIVATE, null).use { db ->
-            assertEquals(17, db.version)
+            assertEquals(18, db.version)
             assertTrue(db.columnNames("downloaded_tracks").contains("user_rating"))
         }
         context.deleteDatabase(DATABASE_NAME)
@@ -517,7 +519,7 @@ class AlbumLocalStoreMigrationTest {
         AlbumLocalStore(context).getAllPlaylists("source")
 
         context.openOrCreateDatabase(DATABASE_NAME, Context.MODE_PRIVATE, null).use { db ->
-            assertEquals(17, db.version)
+            assertEquals(18, db.version)
             assertTrue(db.columnNames("tracks").contains("lyric_url"))
             assertTrue(db.columnNames("album_tracks").contains("lyric_url"))
             assertTrue(db.columnNames("playlists").containsAll(listOf("sort_order", "rating_key", "source_id")))
@@ -540,7 +542,7 @@ class AlbumLocalStoreMigrationTest {
         val store = AlbumLocalStore(context)
         assertEquals(null, store.getAllAlbums("source").single().releaseDate)
         context.openOrCreateDatabase(DATABASE_NAME, Context.MODE_PRIVATE, null).use { db ->
-            assertEquals(17, db.version)
+            assertEquals(18, db.version)
             assertTrue(db.columnNames("albums").contains("release_date"))
         }
 
@@ -559,6 +561,107 @@ class AlbumLocalStoreMigrationTest {
         )
         store.replaceAllAlbums("source", listOf(album))
         assertEquals("2004-12-01", store.getAllAlbums("source").single().releaseDate)
+        context.deleteDatabase(DATABASE_NAME)
+    }
+
+    @Test
+    fun version17To18AddsArtistSyncModel() {
+        val context = cleanDatabaseContext()
+        context.openOrCreateDatabase(DATABASE_NAME, Context.MODE_PRIVATE, null).use { db ->
+            db.execSQL("CREATE TABLE albums (source_id TEXT NOT NULL, rating_key TEXT NOT NULL, title TEXT NOT NULL, artist_name TEXT, year INTEGER, thumb_url TEXT, user_rating REAL, added_at_epoch_seconds INTEGER, last_viewed_at_epoch_seconds INTEGER, section_key TEXT NOT NULL, section_title TEXT NOT NULL, section_type TEXT NOT NULL, leaf_count INTEGER, format TEXT, subformat TEXT, release_date TEXT, PRIMARY KEY (source_id, rating_key))")
+            db.execSQL("INSERT INTO albums (source_id, rating_key, title, artist_name, section_key, section_title, section_type) VALUES ('source', 'old', 'Old', 'Someone', '1', 'Music', 'artist')")
+            db.version = 17
+        }
+
+        val store = AlbumLocalStore(context)
+        val legacy = store.getAllAlbums("source").single()
+        assertTrue(legacy.artists.isEmpty())
+        context.openOrCreateDatabase(DATABASE_NAME, Context.MODE_PRIVATE, null).use { db ->
+            assertEquals(18, db.version)
+            assertTrue(db.columnNames("albums").contains("artist_refs"))
+            assertTrue(db.columnNames("artists").containsAll(listOf("rating_key", "artist_name", "album_count", "track_count")))
+            assertTrue(db.indexNames("album_artist_links").contains("index_album_artist_links_artist"))
+            assertTrue(db.indexNames("track_artist_links").contains("index_track_artist_links_artist"))
+        }
+        context.deleteDatabase(DATABASE_NAME)
+    }
+
+    @Test
+    fun artistSyncModelBuildsDiscographyFromIdLinks() {
+        val context = cleanDatabaseContext()
+        val store = AlbumLocalStore(context)
+        val team = ArtistRef("1", "アトラスサウンドチーム")
+        val singerA = ArtistRef("2", "高橋あず美")
+        val singerB = ArtistRef("3", "Lotus Juice")
+        val guest = ArtistRef("4", "目黒将司")
+        fun album(key: String, artists: List<ArtistRef>, subformat: String? = null) = PlexAlbum(
+            ratingKey = key,
+            title = key,
+            artistName = artists.joinToString(", ") { it.name },
+            year = 2024,
+            thumbUrl = null,
+            userRating = null,
+            addedAtEpochSeconds = null,
+            lastViewedAtEpochSeconds = null,
+            section = PlexSection("032", "032", "artist"),
+            sourceId = "source",
+            subformat = subformat,
+            artists = artists,
+        )
+        store.replaceAllAlbums(
+            "source",
+            listOf(
+                album("ost", listOf(team)),
+                album("duet", listOf(singerA, singerB)),
+                album("best", listOf(team, singerA), subformat = "Compilation"),
+            ),
+        )
+        store.replaceAllAlbumTracks(
+            "source",
+            mapOf(
+                "ost" to listOf(
+                    track("source", "guest-track", 0, 0).copy(albumRatingKey = "ost", artists = listOf(guest)),
+                    track("source", "plain-track", 0, 0).copy(albumRatingKey = "ost"),
+                ),
+                "duet" to listOf(track("source", "duet-track", 0, 0).copy(albumRatingKey = "duet")),
+            ),
+        )
+        store.replaceAllArtists(
+            "source",
+            listOf(
+                PlexArtist(team.id, team.name, null, sourceId = "source", albumCount = 2),
+                PlexArtist(guest.id, guest.name, null, userRating = 10f, sourceId = "source", albumCount = 1),
+            ),
+        )
+
+        // Refs round-trip on albums and tracks.
+        assertEquals(listOf(singerA, singerB), store.getAllAlbums("source").first { it.ratingKey == "duet" }.artists)
+        assertEquals(listOf(guest), store.getAlbumTracks("source", "ost").first { it.ratingKey == "guest-track" }.artists)
+
+        // A track-only singer gets the OST as an appearance, and only their own track.
+        val guestReleases = store.getArtistDiscography("source", guest.id)
+        assertEquals(listOf("ost"), guestReleases.map { it.album.ratingKey })
+        assertTrue(guestReleases.single().isAppearance)
+        assertEquals(listOf("guest-track"), store.getArtistTracks("source", guest.id).map { it.ratingKey })
+
+        // Joint album is the singer's own release; a shared compilation is an appearance.
+        val singerReleases = store.getArtistDiscography("source", singerA.id).associate { it.album.ratingKey to it.isAppearance }
+        assertEquals(mapOf("duet" to false, "best" to true), singerReleases)
+        assertEquals(setOf("duet-track"), store.getArtistTracks("source", singerB.id).map { it.ratingKey }.toSet())
+
+        assertEquals(guest.id, store.findArtistsByName("source", " 目黒将司 ").single().ratingKey)
+        assertEquals(10f, store.getArtist("source", guest.id)?.userRating)
+        store.updateArtistFavorite("source", guest.id, null)
+        assertNull(store.getArtist("source", guest.id)?.userRating)
+        assertEquals(listOf(team.id, guest.id), store.getArtists("source").map { it.ratingKey })
+
+        // Re-syncing tracks of one album drops stale links.
+        store.saveAlbumTracks("source", "ost", listOf(track("source", "plain-track", 0, 0).copy(albumRatingKey = "ost")))
+        assertTrue(store.getArtistDiscography("source", guest.id).isEmpty())
+
+        store.deleteServerData("source")
+        assertTrue(store.getArtists("source").isEmpty())
+        assertTrue(store.getArtistDiscography("source", team.id).isEmpty())
         context.deleteDatabase(DATABASE_NAME)
     }
 

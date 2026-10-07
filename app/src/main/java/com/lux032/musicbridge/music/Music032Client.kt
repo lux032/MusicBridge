@@ -21,6 +21,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
+import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicLong
@@ -54,17 +55,37 @@ class Music032Client(
         PlexAlbumsResult(profile.displayName, listOf(section), albums)
     }
 
+    /** Performer list of the sync model (album artists and primary track artists, canonical ids). */
     override suspend fun fetchArtists(): PlexArtistsResult = withContext(Dispatchers.IO) {
-        val artists = fetchPaged("/api/v1/artists") { value ->
-            PlexArtist(
-                ratingKey = value.optLong("id").toString(),
-                title = value.optString("name").trim(),
-                thumbUrl = mediaUrl(value.optString("imageUrl")),
-                userRating = if (value.optBoolean("isFavorite")) 10f else null,
-                sourceId = sourceId,
-            )
-        }.filter { it.title.isNotBlank() }
+        val artists = fetchCursorPaged("/api/v1/sync/artists") { parseArtist(it) }.filterNotNull()
         PlexArtistsResult(profile.displayName, artists)
+    }
+
+    /**
+     * Artist detail as the web artist page sees it. The server follows merge links, so a stale
+     * id resolves to the canonical artist ([Music032ArtistDetail.artist] carries the new id).
+     */
+    suspend fun fetchArtistDetail(id: String): Music032ArtistDetail = withContext(Dispatchers.IO) {
+        val root = artistDetail(id)
+        val artist = root.optJSONObject("artist")?.let { parseArtist(it) }
+            ?: error("未找到歌手")
+        val releases = root.optJSONArray("releases").toObjects()
+        Music032ArtistDetail(
+            artist = artist,
+            albums = releases.map(::parseAlbum),
+            appearanceAlbumKeys = releases
+                .filter { it.optString("relation") == "appearance" }
+                .map { it.optLong("id").toString() }
+                .toSet(),
+            tracks = root.optJSONArray("tracks").toObjects().map(::parseTrack),
+        )
+    }
+
+    /** Name lookup for links that only carry text (old caches, Plex-style names). */
+    suspend fun searchArtists(name: String): List<PlexArtist> = withContext(Dispatchers.IO) {
+        val query = URLEncoder.encode(name.trim(), StandardCharsets.UTF_8.name())
+        val root = JSONObject(request("GET", "/api/v1/artists?q=$query&limit=50"))
+        root.optJSONArray("items").toObjects().mapNotNull { parseArtist(it) }
     }
 
     override suspend fun fetchArtistTracks(artist: PlexArtist): List<PlexTrackStream> = withContext(Dispatchers.IO) {
@@ -287,6 +308,7 @@ class Music032Client(
     private fun parseAlbum(value: JSONObject) = Music032Json.parseAlbum(value, baseUrl, mediaToken, section, sourceId)
     private fun parseTrack(value: JSONObject) = Music032Json.parseTrack(value, baseUrl, mediaToken, sourceId)
     private fun parsePlaylist(value: JSONObject) = Music032Json.parsePlaylist(value, baseUrl, mediaToken, sourceId)
+    private fun parseArtist(value: JSONObject) = Music032Json.parseArtist(value, baseUrl, mediaToken, sourceId)
     private fun mediaUrl(path: String) = Music032Json.mediaUrl(path, baseUrl, mediaToken)
 
     private fun <T> fetchCursorPaged(
@@ -387,3 +409,11 @@ internal fun mediaTokenProbeStatus(status: Int): MediaTokenProbeResult = when (s
 }
 
 internal fun trackDetailNotFound(status: Int): Boolean = status == 404
+
+/** Online artist page payload: canonical artist, web-style releases and performed tracks. */
+data class Music032ArtistDetail(
+    val artist: PlexArtist,
+    val albums: List<PlexAlbum>,
+    val appearanceAlbumKeys: Set<String>,
+    val tracks: List<PlexTrackStream>,
+)

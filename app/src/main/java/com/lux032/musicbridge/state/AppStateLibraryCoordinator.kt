@@ -1,5 +1,7 @@
 package com.lux032.musicbridge
 
+import com.lux032.musicbridge.music.Music032Client
+import com.lux032.musicbridge.plex.ArtistRef
 import com.lux032.musicbridge.plex.PlexAlbum
 import com.lux032.musicbridge.plex.PlexAlbumTracksResult
 import com.lux032.musicbridge.plex.PlexArtist
@@ -9,6 +11,7 @@ import com.lux032.musicbridge.plex.PlexPlaylistTracksResult
 import com.lux032.musicbridge.plex.PlexSection
 import com.lux032.musicbridge.plex.PlexTrackStream
 import com.lux032.musicbridge.plex.isFavorite
+import com.lux032.musicbridge.storage.ArtistRelease
 import com.lux032.musicbridge.storage.DownloadedAlbumGroup
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -86,6 +89,16 @@ internal class AppStateLibraryCoordinator(
             }
             if (state.connectionPreferences.id != sourceId) return
             state.allAlbums = fetched.albums
+            if (profile.type == MusicServerType.Music032) {
+                // Artists are part of the 032 sync model: one cursor sync, persisted locally.
+                runCatching { client.fetchArtists().artists }
+                    .onSuccess { artists ->
+                        withContext(Dispatchers.IO) { state.albumLocalStore.replaceAllArtists(sourceId, artists) }
+                    }
+                    .onFailure { if (it is CancellationException) throw it }
+                if (state.connectionPreferences.id != sourceId) return
+                state.artistAlbumsRevision++
+            }
             loadArtists()
             state.lastAlbumSyncEpochMillis = System.currentTimeMillis()
             state.appPreferences.saveLastAlbumSyncEpochMillis(sourceId, state.lastAlbumSyncEpochMillis!!)
@@ -113,6 +126,8 @@ internal class AppStateLibraryCoordinator(
                 allTracks
             }.onSuccess { allTracks ->
                 if (state.connectionPreferences.id != sourceId) return
+                // Track artist links feed artist discographies (参与作品).
+                state.artistAlbumsRevision++
                 val totalTrackCount = allTracks.values.sumOf { tracks -> tracks.size }
                 state.actionMessage = "已同步 ${fetched.albums.size} 张专辑、${totalTrackCount} 首曲目"
             }.onFailure { error ->
@@ -166,22 +181,173 @@ internal class AppStateLibraryCoordinator(
         }
     }
 
+    private val isMusic032Active: Boolean
+        get() = state.connectionPreferences.type == MusicServerType.Music032
+
     fun openArtistAlbums(artist: ArtistSummary) {
-        val artistChanged = state.selectedArtistName != artist.name
-        state.selectedArtistName = artist.name
-        if (artistChanged) state.resetLazyScrollPosition(AppSection.ArtistAlbums)
-        if (state.activeSection == AppSection.ArtistAlbums) return
-        state.navigateTo(AppSection.ArtistAlbums)
+        val key = artist.ratingKey?.takeIf { isMusic032Active }
+        showArtistPage(artist.name, key)
+        if (key != null) ensureArtistLoaded(key)
     }
 
-    fun openArtistAlbumsByName(artistName: String?) {
-        val normalizedName = artistName?.trim().orEmpty().ifBlank { "未知艺人" }
-        if (state.selectedArtistName != normalizedName) {
-            state.resetLazyScrollPosition(AppSection.ArtistAlbums)
+    fun openArtistRef(ref: ArtistRef) {
+        state.artistChoices = emptyList()
+        if (!isMusic032Active) {
+            openArtistAlbumsByName(ref.name)
+            return
         }
-        state.selectedArtistName = normalizedName
-        state.navigateTo(AppSection.ArtistAlbums)
+        showArtistPage(ref.name, ref.id)
+        ensureArtistLoaded(ref.id)
     }
+
+    fun openArtistLink(artistName: String?, refs: List<ArtistRef>) {
+        state.artistChoices = emptyList()
+        val distinct = refs.distinctBy(ArtistRef::id)
+        when {
+            distinct.size == 1 -> openArtistRef(distinct.single())
+            distinct.size > 1 && isMusic032Active -> state.artistChoices = distinct
+            else -> openArtistAlbumsByName(artistName)
+        }
+    }
+
+    /**
+     * Text-only artist link. 032 resolves the name to an artist id: local sync model first,
+     * then joined credit text ("A, B"), finally the server's artist search. Plex keeps the
+     * name-based page.
+     */
+    fun openArtistAlbumsByName(artistName: String?) {
+        state.artistChoices = emptyList()
+        val normalizedName = artistName?.trim().orEmpty().ifBlank { "未知艺人" }
+        if (!isMusic032Active) {
+            showArtistPage(normalizedName, key = null)
+            return
+        }
+        val local = state.artists.filter { it.ratingKey != null && it.name.trim().equals(normalizedName, ignoreCase = true) }
+        if (local.isNotEmpty()) {
+            openArtistLink(normalizedName, local.map { ArtistRef(it.ratingKey!!, it.name) })
+            return
+        }
+        val parts = splitArtistCredit(normalizedName)
+        if (parts.size > 1) {
+            val refs = parts.mapNotNull { part ->
+                state.artists.firstOrNull { it.ratingKey != null && it.name.trim().equals(part, ignoreCase = true) }
+                    ?.let { ArtistRef(it.ratingKey!!, it.name) }
+            }
+            if (refs.size == parts.size) {
+                openArtistLink(normalizedName, refs)
+                return
+            }
+        }
+        showArtistPage(normalizedName, key = null)
+        resolveArtistByName(normalizedName)
+    }
+
+    private fun showArtistPage(name: String, key: String?) {
+        val changed = state.selectedArtistName != name || state.selectedArtistKey != key
+        state.selectedArtistName = name
+        state.selectedArtistKey = key
+        if (changed) {
+            state.resetLazyScrollPosition(AppSection.ArtistAlbums)
+            artistResolveJob?.cancel()
+            state.isResolvingArtist = false
+            if (state.remoteArtist?.ratingKey != key) state.remoteArtist = null
+        }
+        if (state.activeSection != AppSection.ArtistAlbums) state.navigateTo(AppSection.ArtistAlbums)
+    }
+
+    private var artistResolveJob: Job? = null
+    private var artistResolveGeneration = 0L
+
+    /** Loads the server artist page when the local sync model has nothing for [artistId]. */
+    private fun ensureArtistLoaded(artistId: String) {
+        val sourceId = state.connectionPreferences.id
+        val client = runCatching { state.clientFor(sourceId) as? Music032Client }.getOrNull() ?: return
+        artistResolveJob?.cancel()
+        val generation = ++artistResolveGeneration
+        artistResolveJob = state.scope.launch {
+            val local = withContext(Dispatchers.IO) { localArtistSummary(sourceId, artistId, state.artists) }
+            if (local != null && local.albums.isNotEmpty()) return@launch
+            state.isResolvingArtist = local == null
+            try {
+                val detail = client.fetchArtistDetail(artistId)
+                if (generation != artistResolveGeneration || state.selectedArtistKey != artistId) return@launch
+                val canonical = detail.artist
+                state.remoteArtist = ArtistSummary(
+                    name = canonical.title,
+                    coverUrl = canonical.thumbUrl,
+                    albumCount = detail.albums.size,
+                    albums = detail.albums,
+                    ratingKey = canonical.ratingKey,
+                    sourceId = sourceId,
+                    userRating = canonical.userRating,
+                    trackCount = canonical.trackCount,
+                    appearanceAlbumKeys = detail.appearanceAlbumKeys,
+                )
+                // A merged (stale) id resolves to the canonical artist; follow it.
+                state.selectedArtistName = canonical.title
+                state.selectedArtistKey = canonical.ratingKey
+            } catch (cancel: CancellationException) {
+                throw cancel
+            } catch (_: Exception) {
+                // Offline or removed: the page shows local data or the not-found card.
+            } finally {
+                if (generation == artistResolveGeneration) state.isResolvingArtist = false
+            }
+        }
+    }
+
+    private fun resolveArtistByName(name: String) {
+        val sourceId = state.connectionPreferences.id
+        val client = runCatching { state.clientFor(sourceId) as? Music032Client }.getOrNull() ?: return
+        artistResolveJob?.cancel()
+        val generation = ++artistResolveGeneration
+        state.isResolvingArtist = true
+        artistResolveJob = state.scope.launch {
+            var resolved: List<ArtistRef> = emptyList()
+            try {
+                val candidates = client.searchArtists(name)
+                resolved = candidates
+                    .filter { it.title.trim().equals(name, ignoreCase = true) }
+                    .map { ArtistRef(it.ratingKey, it.title) }
+                if (resolved.isEmpty()) {
+                    val parts = splitArtistCredit(name)
+                    if (parts.size > 1) {
+                        resolved = parts.mapNotNull { part ->
+                            client.searchArtists(part)
+                                .firstOrNull { it.title.trim().equals(part, ignoreCase = true) }
+                                ?.let { ArtistRef(it.ratingKey, it.title) }
+                        }
+                    }
+                }
+            } catch (cancel: CancellationException) {
+                throw cancel
+            } catch (_: Exception) {
+                // Fall through to the not-found card.
+            } finally {
+                if (generation == artistResolveGeneration) state.isResolvingArtist = false
+            }
+            if (generation != artistResolveGeneration || state.selectedArtistName != name || state.selectedArtistKey != null) {
+                return@launch
+            }
+            if (resolved.isNotEmpty()) openArtistLink(name, resolved)
+        }
+    }
+
+    /** Artist page data from the local 032 sync model (artist row + discography links). */
+    internal fun localArtistSummary(sourceId: String, artistId: String, artists: List<ArtistSummary>): ArtistSummary? {
+        val known = artists.firstOrNull { it.ratingKey == artistId && (it.sourceId.isBlank() || it.sourceId == sourceId) }
+            ?: state.albumLocalStore.getArtist(sourceId, artistId)?.toArtistSummary()
+            ?: return null
+        val releases = state.albumLocalStore.getArtistDiscography(sourceId, artistId)
+        return known.copy(
+            albums = releases.map(ArtistRelease::album),
+            albumCount = releases.size.takeIf { it > 0 } ?: known.albumCount,
+            appearanceAlbumKeys = releases.filter(ArtistRelease::isAppearance).map { it.album.ratingKey }.toSet(),
+        )
+    }
+
+    private fun splitArtistCredit(text: String): List<String> =
+        text.split(", ", "、", " / ", "; ").map(String::trim).filter(String::isNotEmpty).distinct()
 
     fun shuffleArtist(artist: ArtistSummary) {
         if (state.isPlaybackCommandLoading || artist.albums.isEmpty()) return
@@ -191,7 +357,23 @@ internal class AppStateLibraryCoordinator(
         state.actionMessage = "正在整理 ${artist.name} 的歌曲..."
         state.scope.launch {
             runCatching {
-                val tracks = artist.albums.flatMap { album ->
+                val artistKey = artist.ratingKey
+                val performedTracks = if (isMusic032Active && artistKey != null) {
+                    // 032: only what the artist performs — not every track of a compilation
+                    // they merely appear on.
+                    withContext(Dispatchers.IO) {
+                        state.albumLocalStore.getArtistTracks(artist.sourceId, artistKey)
+                    }.ifEmpty {
+                        runCatching {
+                            state.clientFor(artist.sourceId).fetchArtistTracks(
+                                PlexArtist(ratingKey = artistKey, title = artist.name, thumbUrl = artist.coverUrl, sourceId = artist.sourceId)
+                            )
+                        }.getOrDefault(emptyList())
+                    }
+                } else {
+                    emptyList()
+                }
+                val tracks = performedTracks.ifEmpty { artist.albums.flatMap { album ->
                     val cachedTracks = withContext(Dispatchers.IO) {
                         state.albumLocalStore.getAlbumTracks(album.sourceId, album.ratingKey)
                     }
@@ -200,7 +382,7 @@ internal class AppStateLibraryCoordinator(
                             state.clientFor(album.sourceId).fetchAlbumTrackStreams(album).tracks
                         }.getOrDefault(emptyList())
                     }
-                }
+                } }
                     .distinctBy(PlexTrackStream::ratingKey)
                     .shuffled()
 
@@ -762,6 +944,14 @@ internal class AppStateLibraryCoordinator(
                         current
                     }
                 }
+                state.remoteArtist?.takeIf { it.ratingKey == ratingKey }?.let {
+                    state.remoteArtist = it.copy(userRating = newRating)
+                }
+                if (isMusic032Active) {
+                    withContext(Dispatchers.IO) {
+                        state.albumLocalStore.updateArtistFavorite(artist.sourceId, ratingKey, newRating)
+                    }
+                }
                 state.actionMessage = if (targetFavorite) {
                     "已收藏歌手：${artist.name}"
                 } else {
@@ -783,6 +973,17 @@ internal class AppStateLibraryCoordinator(
         }
         state.isArtistTracksLoading = true
         state.scope.launch {
+            if (isMusic032Active) {
+                // Synced performed tracks show immediately (and offline); the server list
+                // below refreshes them with play statistics.
+                val local = withContext(Dispatchers.IO) {
+                    state.albumLocalStore.getArtistTracks(artist.sourceId, ratingKey)
+                }
+                if (local.isNotEmpty() && state.selectedArtistName == artist.name) {
+                    state.artistTracks = local
+                    state.isArtistTracksLoading = false
+                }
+            }
             runCatching {
                 state.clientFor(artist.sourceId).fetchArtistTracks(
                     PlexArtist(
@@ -874,12 +1075,24 @@ internal class AppStateLibraryCoordinator(
         }
     }
 
+    private var artistLoadGeneration = 0L
+
+    /**
+     * Several callers (startup, server switch, library sync) may overlap; only the newest call
+     * may publish, so an older snapshot can never overwrite artists from a newer sync.
+     */
     suspend fun loadArtists() {
+        val generation = ++artistLoadGeneration
         val profile = state.connectionPreferences
+        fun isStale() = generation != artistLoadGeneration || state.connectionPreferences.id != profile.id
+        if (profile.type == MusicServerType.Music032) {
+            loadMusic032Artists(profile, ::isStale)
+            return
+        }
         val cachedArtists = withContext(Dispatchers.IO) {
             state.albumLocalStore.getArtistSummaries(profile.id)
         }
-        if (state.connectionPreferences.id != profile.id) return
+        if (isStale()) return
         if (cachedArtists.isNotEmpty()) {
             state.artists = cachedArtists.map { info ->
                 ArtistSummary(
@@ -893,8 +1106,13 @@ internal class AppStateLibraryCoordinator(
         if (!profile.hasCredentials()) return
         try {
             val plexArtists = state.client(profile).fetchArtists().artists
-            if (state.connectionPreferences.id != profile.id) return
-            val artistInfoMap = cachedArtists.associateBy { it.name }
+            if (isStale()) return
+            // Re-read after the network call: a sync may have finished meanwhile.
+            val freshArtists = withContext(Dispatchers.IO) {
+                state.albumLocalStore.getArtistSummaries(profile.id)
+            }
+            if (isStale()) return
+            val artistInfoMap = freshArtists.associateBy { it.name }
             state.artists = plexArtists.map { plexArtist ->
                 val info = artistInfoMap[plexArtist.title]
                 ArtistSummary(
@@ -906,8 +1124,33 @@ internal class AppStateLibraryCoordinator(
                     userRating = plexArtist.userRating,
                 )
             }.filter { it.albumCount > 0 }
+        } catch (cancel: CancellationException) {
+            throw cancel
         } catch (_: Exception) {
             // Cached data is already visible.
+        }
+    }
+
+    private suspend fun loadMusic032Artists(profile: MusicServerProfile, isStale: () -> Boolean) {
+        val cached = withContext(Dispatchers.IO) { state.albumLocalStore.getArtists(profile.id) }
+        if (isStale()) return
+        if (cached.isNotEmpty()) {
+            state.artists = cached.map { it.toArtistSummary() }
+            return
+        }
+        // No artist sync yet (fresh install or upgraded cache): fetch the performer list once.
+        if (!profile.hasCredentials()) return
+        try {
+            val remote = state.client(profile).fetchArtists().artists
+            withContext(Dispatchers.IO) { state.albumLocalStore.replaceAllArtists(profile.id, remote) }
+            if (isStale()) return
+            state.artists = remote
+                .sortedWith(compareByDescending<PlexArtist> { it.albumCount ?: 0 }.thenBy { it.title.lowercase() })
+                .map { it.toArtistSummary() }
+        } catch (cancel: CancellationException) {
+            throw cancel
+        } catch (_: Exception) {
+            // Offline without a cached artist list: the page stays empty until a sync.
         }
     }
 
@@ -977,3 +1220,13 @@ internal class AppStateLibraryCoordinator(
     private fun sameTrack(first: PlexTrackStream, second: PlexTrackStream): Boolean =
         first.sourceId == second.sourceId && first.ratingKey == second.ratingKey
 }
+
+internal fun PlexArtist.toArtistSummary(): ArtistSummary = ArtistSummary(
+    name = title,
+    coverUrl = thumbUrl,
+    albumCount = albumCount ?: 0,
+    ratingKey = ratingKey,
+    sourceId = sourceId,
+    userRating = userRating,
+    trackCount = trackCount,
+)
