@@ -134,9 +134,15 @@ internal class AppStateLibraryCoordinator(
         }
     }
 
-    fun openAlbumDetail(album: PlexAlbum) {
+    fun openAlbumDetail(requestedAlbum: PlexAlbum) {
         state.errorMessage = null
         state.actionMessage = null
+        // 播放页等入口传入的是由曲目拼出来的展示用专辑（artistName 取的是曲目艺术家），
+        // 合辑里单曲艺术家与专辑艺术家不同，直接使用会把专辑页的艺术家显示错。
+        // 优先使用曲库中同 sourceId + ratingKey 的真实专辑元数据。
+        val album = state.allAlbums.firstOrNull { candidate ->
+            candidate.sourceId == requestedAlbum.sourceId && candidate.ratingKey == requestedAlbum.ratingKey
+        } ?: requestedAlbum
         state.selectedAlbum = album
         state.scope.launch {
             val cachedTracks = withContext(Dispatchers.IO) {
