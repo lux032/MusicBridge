@@ -65,7 +65,8 @@ class Music032Client(
      * Artist detail as the web artist page sees it. The server follows merge links, so a stale
      * id resolves to the canonical artist ([Music032ArtistDetail.artist] carries the new id).
      */
-    suspend fun fetchArtistDetail(id: String): Music032ArtistDetail = withContext(Dispatchers.IO) {
+    suspend fun fetchArtistDetail(id: String, refresh: Boolean = false): Music032ArtistDetail = withContext(Dispatchers.IO) {
+        if (refresh) clearArtistDetails()
         val root = artistDetail(id)
         val artist = root.optJSONObject("artist")?.let { parseArtist(it) }
             ?: error("未找到歌手")
@@ -77,7 +78,9 @@ class Music032Client(
                 .filter { it.optString("relation") == "appearance" }
                 .map { it.optLong("id").toString() }
                 .toSet(),
-            tracks = root.optJSONArray("tracks").toObjects().map(::parseTrack),
+            topTracks = root.optJSONArray("topTracks").toObjects().map(::parseTrack),
+            topTracksArePopular = root.optBoolean("topTracksArePopular", false),
+            tracksTotal = root.optInt("tracksTotal"),
         )
     }
 
@@ -89,14 +92,65 @@ class Music032Client(
     }
 
     override suspend fun fetchArtistTracks(artist: PlexArtist): List<PlexTrackStream> = withContext(Dispatchers.IO) {
-        val root = artistDetail(artist.ratingKey)
-        val tracks = root.optJSONArray("tracks").toObjects().map(::parseTrack)
-        if (root.optInt("tracksTotal") > tracks.size) Log.w("Music032Client", "Artist tracks truncated: ${artist.ratingKey} (${tracks.size}/${root.optInt("tracksTotal")})")
+        val id = fetchArtistDetail(artist.ratingKey).artist.ratingKey
+        val tracks = mutableListOf<PlexTrackStream>()
+        var offset = 0
+        do {
+            val page = fetchArtistTracksPage(id, limit = 500, offset = offset)
+            tracks += page.items
+            offset += page.limit
+        } while (page.items.isNotEmpty() && offset < page.total)
         tracks
     }
 
     override suspend fun fetchArtistAlbums(artistRatingKey: String): List<PlexAlbum> = withContext(Dispatchers.IO) {
         artistDetail(artistRatingKey).optJSONArray("albums").toObjects().map(::parseAlbum)
+    }
+
+    suspend fun fetchArtistTracksPage(
+        id: String,
+        sort: ArtistTrackSort = ArtistTrackSort.Album,
+        order: String = sort.defaultOrder,
+        limit: Int = 100,
+        offset: Int = 0,
+    ): Music032ArtistTracksPage {
+        require(limit in 1..500 && offset >= 0)
+        require(order == "asc" || order == "desc")
+        val root = JSONObject(cancellableGet("/api/v1/artists/$id/tracks?sort=${sort.apiValue}&order=$order&limit=$limit&offset=$offset"))
+        return Music032ArtistTracksPage(
+            root.optJSONArray("items").toObjects().map(::parseTrack),
+            root.optInt("total"), root.optInt("limit", limit).coerceAtLeast(1), root.optInt("offset", offset),
+        )
+    }
+
+    private suspend fun cancellableGet(path: String): String = suspendCancellableCoroutine { continuation ->
+        val reference = AtomicReference<HttpURLConnection?>()
+        continuation.invokeOnCancellation { reference.get()?.disconnect() }
+        playbackEventExecutor.execute {
+            var connection: HttpURLConnection? = null
+            try {
+                connection = (URL("$baseUrl$path").openConnection() as HttpURLConnection).apply {
+                    connectTimeout = 15_000
+                    readTimeout = 30_000
+                    setRequestProperty("Accept", "application/json")
+                    setRequestProperty("Authorization", "Bearer $apiToken")
+                }
+                reference.set(connection)
+                if (!continuation.isActive) return@execute
+                val status = connection.responseCode
+                val response = (if (status in 200..299) connection.inputStream else connection.errorStream)
+                    ?.bufferedReader(StandardCharsets.UTF_8)?.use { it.readText() }.orEmpty()
+                if (status !in 200..299) {
+                    val message = runCatching { JSONObject(response).optJSONObject("error")?.optString("message") }.getOrNull()
+                    throw Music032HttpException(status, message.orEmpty().ifBlank { "HTTP $status" })
+                }
+                continuation.resumeWith(Result.success(response))
+            } catch (error: Exception) {
+                continuation.resumeWith(Result.failure(error))
+            } finally {
+                connection?.disconnect()
+            }
+        }
     }
 
     private suspend fun artistDetail(id: String): JSONObject {
@@ -110,7 +164,7 @@ class Music032Client(
         }
         val text = if (owner) {
             try {
-                val response = request("GET", "/api/v1/artists/$id")
+                val response = cancellableGet("/api/v1/artists/$id")
                 synchronized(artistDetails) {
                     if (shouldCacheArtistDetail(generation, artistGeneration.get())) {
                         artistDetails[id] = System.currentTimeMillis() to response
@@ -415,5 +469,16 @@ data class Music032ArtistDetail(
     val artist: PlexArtist,
     val albums: List<PlexAlbum>,
     val appearanceAlbumKeys: Set<String>,
-    val tracks: List<PlexTrackStream>,
+    val topTracks: List<PlexTrackStream>,
+    val topTracksArePopular: Boolean = false,
+    val tracksTotal: Int,
 )
+
+data class Music032ArtistTracksPage(
+    val items: List<PlexTrackStream>, val total: Int, val limit: Int, val offset: Int,
+)
+
+enum class ArtistTrackSort(val apiValue: String, val defaultOrder: String) {
+    Album("album", "asc"), Plays("plays", "desc"), Recent("recent", "desc"),
+    Title("title", "asc"), Added("added", "desc"), Duration("duration", "asc"),
+}

@@ -238,6 +238,13 @@ class AppState(
     var artistChoices by mutableStateOf<List<ArtistRef>>(emptyList())
     var artistTracks by mutableStateOf<List<PlexTrackStream>>(emptyList())
     var isArtistTracksLoading by mutableStateOf(false)
+    var artistTopTracks by mutableStateOf<List<PlexTrackStream>>(emptyList())
+    var artistTopTracksArePopular by mutableStateOf(false)
+    var artistTracksTotal by mutableStateOf(0)
+    var artistTracksOffset by mutableStateOf(0)
+    var artistTracksError by mutableStateOf<String?>(null)
+    var artistTrackSort by mutableStateOf(appPreferences.loadArtistTrackSort())
+    var artistTrackOrder by mutableStateOf(appPreferences.loadArtistTrackOrder())
     /** Artist list view mode and favourites filter persist across restarts; the search
      *  query only lives for the session (like the album search). */
     var artistPresentation by mutableStateOf(appPreferences.loadArtistPresentation())
@@ -336,8 +343,8 @@ class AppState(
             // 032: identity is the artist id. Local sync data wins when it has releases;
             // otherwise the server detail (fresh install, stale id after a merge) fills in.
             val local = libraryCoordinator.localArtistSummary(connectionPreferences.id, selectedKey, artists)
-            return@derivedStateOf local?.takeIf { it.albums.isNotEmpty() }
-                ?: remoteArtist?.takeIf { it.ratingKey == selectedKey }
+            return@derivedStateOf remoteArtist?.takeIf { it.ratingKey == selectedKey }
+                ?: local?.takeIf { it.albums.isNotEmpty() }
                 ?: local
         }
         selectedName?.let {
@@ -757,6 +764,17 @@ class AppState(
     fun toggleArtistFavorite(artist: ArtistSummary) = libraryCoordinator.toggleArtistFavorite(artist)
 
     fun loadArtistTracks(artist: ArtistSummary) = libraryCoordinator.loadArtistTracks(artist)
+
+    fun loadMoreArtistTracks() = libraryCoordinator.loadMoreArtistTracks()
+
+    fun cancelArtistTracks() = libraryCoordinator.cancelArtistTracks()
+
+    fun setArtistTrackSort(sort: com.lux032.musicbridge.music.ArtistTrackSort, order: String) {
+        artistTrackSort = sort
+        artistTrackOrder = order
+        appPreferences.saveArtistTrackSort(sort, order)
+        selectedArtist?.let { libraryCoordinator.loadArtistTracks(it, refreshDetail = false) }
+    }
 
     fun loadArtistAlbums(artist: ArtistSummary) = libraryCoordinator.loadArtistAlbums(artist)
 

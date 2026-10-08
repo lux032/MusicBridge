@@ -248,7 +248,14 @@ internal class AppStateLibraryCoordinator(
         state.selectedArtistKey = key
         if (changed) {
             state.resetLazyScrollPosition(AppSection.ArtistAlbums)
+            cancelArtistTracks()
+            state.artistTracks = emptyList()
+            state.artistTopTracks = emptyList()
+            state.artistTopTracksArePopular = false
+            state.artistTracksTotal = 0
+            state.artistTracksError = null
             artistResolveJob?.cancel()
+            artistResolveGeneration++
             state.isResolvingArtist = false
             if (state.remoteArtist?.ratingKey != key) state.remoteArtist = null
         }
@@ -266,12 +273,14 @@ internal class AppStateLibraryCoordinator(
         val generation = ++artistResolveGeneration
         artistResolveJob = state.scope.launch {
             val local = withContext(Dispatchers.IO) { localArtistSummary(sourceId, artistId, state.artists) }
-            if (local != null && local.albums.isNotEmpty()) return@launch
             state.isResolvingArtist = local == null
             try {
                 val detail = client.fetchArtistDetail(artistId)
                 if (generation != artistResolveGeneration || state.selectedArtistKey != artistId) return@launch
                 val canonical = detail.artist
+                state.artistTopTracks = detail.topTracks
+                state.artistTopTracksArePopular = detail.topTracksArePopular
+                state.artistTracksTotal = detail.tracksTotal
                 state.remoteArtist = ArtistSummary(
                     name = canonical.title,
                     coverUrl = canonical.thumbUrl,
@@ -288,8 +297,8 @@ internal class AppStateLibraryCoordinator(
                 state.selectedArtistKey = canonical.ratingKey
             } catch (cancel: CancellationException) {
                 throw cancel
-            } catch (_: Exception) {
-                // Offline or removed: the page shows local data or the not-found card.
+            } catch (error: Exception) {
+                if (generation == artistResolveGeneration) state.artistTracksError = artistTracksError(error)
             } finally {
                 if (generation == artistResolveGeneration) state.isResolvingArtist = false
             }
@@ -964,42 +973,97 @@ internal class AppStateLibraryCoordinator(
         }
     }
 
-    fun loadArtistTracks(artist: ArtistSummary) {
-        val ratingKey = artist.ratingKey
-        state.artistTracks = emptyList()
-        if (ratingKey == null) {
-            state.isArtistTracksLoading = false
-            return
+    private var artistTracksJob: Job? = null
+    private var artistTracksGeneration = 0L
+    private var artistTracksCanonicalId: String? = null
+
+    fun cancelArtistTracks() {
+        artistTracksJob?.cancel()
+        artistTracksGeneration++
+        state.isArtistTracksLoading = false
+    }
+
+    private fun artistTracksError(error: Exception): String {
+        return when ((error as? com.lux032.musicbridge.music.Music032HttpException)?.status) {
+            400 -> Strings.artistTracksInvalidSort
+            404 -> Strings.artistTracksNotFound
+            else -> error.message ?: Strings.artistTracksLoadFailed
         }
+    }
+
+    fun loadArtistTracks(artist: ArtistSummary, refreshDetail: Boolean = true) {
+        cancelArtistTracks()
+        state.artistTracks = emptyList()
+        state.artistTracksOffset = 0
+        state.artistTracksError = null
+        val ratingKey = artist.ratingKey ?: return
+        if (refreshDetail) artistTracksCanonicalId = ratingKey
+        val generation = artistTracksGeneration
+        val sort = state.artistTrackSort
+        val order = state.artistTrackOrder
         state.isArtistTracksLoading = true
-        state.scope.launch {
-            if (isMusic032Active) {
-                // Synced performed tracks show immediately (and offline); the server list
-                // below refreshes them with play statistics.
-                val local = withContext(Dispatchers.IO) {
-                    state.albumLocalStore.getArtistTracks(artist.sourceId, ratingKey)
-                }
-                if (local.isNotEmpty() && state.selectedArtistName == artist.name) {
-                    state.artistTracks = local
-                    state.isArtistTracksLoading = false
-                }
-            }
-            runCatching {
-                state.clientFor(artist.sourceId).fetchArtistTracks(
-                    PlexArtist(
-                        ratingKey = ratingKey,
-                        title = artist.name,
-                        thumbUrl = artist.coverUrl,
-                        sourceId = artist.sourceId,
-                    )
-                )
-            }.onSuccess { tracks ->
-                if (state.selectedArtistName == artist.name) {
+        artistTracksJob = state.scope.launch {
+            try {
+                val client = state.clientFor(artist.sourceId)
+                if (client is Music032Client) {
+                    val id = if (refreshDetail) {
+                        val detail = client.fetchArtistDetail(ratingKey, refresh = true)
+                        if (generation != artistTracksGeneration) return@launch
+                        state.artistTopTracks = detail.topTracks
+                        state.artistTopTracksArePopular = detail.topTracksArePopular
+                        state.artistTracksTotal = detail.tracksTotal
+                        detail.artist.ratingKey
+                    } else artistTracksCanonicalId ?: ratingKey
+                    artistTracksCanonicalId = id
+                    val page = client.fetchArtistTracksPage(id, sort, order)
+                    if (generation != artistTracksGeneration) return@launch
+                    state.artistTracks = page.items.distinctBy { it.ratingKey }
+                    state.artistTracksTotal = page.total
+                    state.artistTracksOffset = if (page.items.isEmpty()) page.total else page.offset + page.limit
+                } else {
+                    val tracks = client.fetchArtistTracks(PlexArtist(ratingKey, artist.name, artist.coverUrl, sourceId = artist.sourceId))
+                    if (generation != artistTracksGeneration) return@launch
                     state.artistTracks = tracks
+                    state.artistTopTracks = tracks.take(10)
+                    state.artistTopTracksArePopular = true
+                    state.artistTracksTotal = tracks.size
+                    state.artistTracksOffset = tracks.size
                 }
+            } catch (cancel: CancellationException) {
+                throw cancel
+            } catch (error: Exception) {
+                if (generation == artistTracksGeneration) state.artistTracksError = artistTracksError(error)
+            } finally {
+                if (generation == artistTracksGeneration) state.isArtistTracksLoading = false
             }
-            if (state.selectedArtistName == artist.name) {
-                state.isArtistTracksLoading = false
+        }
+    }
+
+    fun loadMoreArtistTracks() {
+        if (state.isArtistTracksLoading || state.artistTracksOffset >= state.artistTracksTotal) return
+        val artist = state.selectedArtist ?: return
+        val id = artistTracksCanonicalId ?: artist.ratingKey ?: return
+        val client = state.clientFor(artist.sourceId) as? Music032Client ?: return
+        artistTracksJob?.cancel()
+        val generation = ++artistTracksGeneration
+        val offset = state.artistTracksOffset
+        val sort = state.artistTrackSort
+        val order = state.artistTrackOrder
+        state.isArtistTracksLoading = true
+        state.artistTracksError = null
+        artistTracksJob = state.scope.launch {
+            try {
+                val page = client.fetchArtistTracksPage(id, sort, order, offset = offset)
+                if (generation != artistTracksGeneration) return@launch
+                state.artistTracks = (state.artistTracks + page.items).distinctBy { it.ratingKey }
+                state.artistTracksTotal = page.total
+                state.artistTracksOffset = if (page.items.isEmpty()) page.total else page.offset + page.limit
+            } catch (cancel: CancellationException) {
+                throw cancel
+            } catch (error: Exception) {
+                if (generation == artistTracksGeneration) state.artistTracksError = artistTracksError(error)
+            } finally {
+                if (generation == artistTracksGeneration) state.isArtistTracksLoading = false
             }
         }
     }

@@ -556,6 +556,20 @@ fun PlexAlbumScreen(
                         }
                     }
                     val selectedArtistIdentity = state.selectedArtist?.let { it.ratingKey ?: it.name }
+                    DisposableEffect(selectedArtistIdentity) {
+                        onDispose { state.cancelArtistTracks() }
+                    }
+                    val playArtistQueue: (ArtistSummary, List<PlexTrackStream>, Int) -> Unit = { artist, queue, index ->
+                        if (queue.isNotEmpty()) {
+                            val queueAlbum = PlexAlbum(
+                                ratingKey = artist.ratingKey ?: artist.name, title = artist.name,
+                                artistName = artist.name, year = null, thumbUrl = artist.coverUrl,
+                                userRating = null, addedAtEpochSeconds = null, lastViewedAtEpochSeconds = null,
+                                section = PlexSection("", "", ""), sourceId = artist.sourceId,
+                            )
+                            state.startSingleTrackPlayback(queueAlbum, queue, index)
+                        }
+                    }
                     LaunchedEffect(selectedArtistIdentity) {
                         artistAlbumsListState.scrollToItem(0)
                         state.selectedArtist?.let {
@@ -577,6 +591,21 @@ fun PlexAlbumScreen(
                             isFavoriteLoading = state.isFavoriteMutationLoading,
                             artistTracks = state.artistTracks,
                             isArtistTracksLoading = state.isArtistTracksLoading,
+                            topTracks = state.artistTopTracks,
+                            topTracksArePopular = state.artistTopTracksArePopular,
+                            tracksTotal = state.artistTracksTotal,
+                            tracksError = state.artistTracksError,
+                            hasMoreTracks = state.artistTracksOffset < state.artistTracksTotal,
+                            trackSort = state.artistTrackSort,
+                            trackOrder = state.artistTrackOrder,
+                            showTrackSorting = state.connectionPreferences.type == MusicServerType.Music032,
+                            onTrackSortChange = state::setArtistTrackSort,
+                            onLoadMoreTracks = state::loadMoreArtistTracks,
+                            onRetryTracks = {
+                                if (state.artistTracks.isEmpty()) state.selectedArtist?.let(state::loadArtistTracks)
+                                else state.loadMoreArtistTracks()
+                            },
+                            onPlayTopTrack = { artist, _, index -> playArtistQueue(artist, state.artistTopTracks, index) },
                             bottomContentPadding = contentBottomPadding,
                             listState = artistAlbumsListState,
                             downloadedTrackKeys = downloadedTrackKeys,
@@ -591,22 +620,7 @@ fun PlexAlbumScreen(
                             onToggleArtistFavorite = state::toggleArtistFavorite,
                             onQueueTrack = state::enqueueTrack,
                             onPlayTrack = { artist, _, index ->
-                                val tracksFromIndex = state.artistTracks.drop(index)
-                                if (tracksFromIndex.isNotEmpty()) {
-                                    val fakeAlbum = PlexAlbum(
-                                        ratingKey = artist.ratingKey ?: artist.name,
-                                        title = artist.name,
-                                        artistName = artist.name,
-                                        year = null,
-                                        thumbUrl = artist.coverUrl,
-                                        userRating = null,
-                                        addedAtEpochSeconds = null,
-                                        lastViewedAtEpochSeconds = null,
-                                        section = PlexSection("", "", ""),
-                                        sourceId = artist.sourceId,
-                                    )
-                                    state.startSingleTrackPlayback(fakeAlbum, tracksFromIndex, 0)
-                                }
+                                playArtistQueue(artist, state.artistTracks, index)
                             },
                         )
                     }

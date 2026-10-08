@@ -409,6 +409,20 @@ class AppPreferences(context: Context) {
         sharedPreferences.edit { putString(KEY_ALBUM_DECADE_FILTER, filter.name) }
     }
 
+    fun loadArtistTrackSort(): com.lux032.musicbridge.music.ArtistTrackSort =
+        com.lux032.musicbridge.music.ArtistTrackSort.entries.firstOrNull {
+            it.apiValue == sharedPreferences.getString("artist_track_sort", null)
+        } ?: com.lux032.musicbridge.music.ArtistTrackSort.Album
+
+    fun loadArtistTrackOrder(): String =
+        sharedPreferences.getString("artist_track_order", null)?.takeIf { it == "asc" || it == "desc" }
+            ?: loadArtistTrackSort().defaultOrder
+
+    fun saveArtistTrackSort(sort: com.lux032.musicbridge.music.ArtistTrackSort, order: String) {
+        sharedPreferences.edit().putString("artist_track_sort", sort.apiValue)
+            .putString("artist_track_order", order).apply()
+    }
+
     fun loadArtistPresentation(): ArtistPresentation =
         sharedPreferences.getString(KEY_ARTIST_PRESENTATION, null)
             ?.let { stored -> ArtistPresentation.entries.firstOrNull { it.name == stored } }

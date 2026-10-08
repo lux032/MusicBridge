@@ -159,7 +159,8 @@ internal object Music032Json {
             trackNumber = value.optInt("trackNumber").takeIf { it > 0 },
             lyricUrl = mediaUrl(value.optString("lyricsUrl"), baseUrl, mediaToken),
             musicAnalysisVersion = value.optString("musicAnalysisVersion").trim().ifBlank { null },
-            viewCount = value.opt("viewCount")?.toString()?.toLongOrNull(),
+            viewCount = value.opt("playCount")?.toString()?.toLongOrNull()
+                ?: value.opt("viewCount")?.toString()?.toLongOrNull(),
             lastViewedAtEpochSeconds = value.opt("lastViewedAt")?.toString()?.toLongOrNull()
                 ?: parseEpochSeconds(value.optString("lastPlayedAt")),
             skipCount = value.opt("skipCount")?.toString()?.toLongOrNull(),

@@ -1,5 +1,7 @@
 package com.lux032.musicbridge
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -22,6 +24,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -567,6 +570,18 @@ internal fun ArtistAlbumsSection(
     isFavoriteLoading: Boolean,
     artistTracks: List<PlexTrackStream>,
     isArtistTracksLoading: Boolean,
+    topTracks: List<PlexTrackStream>,
+    topTracksArePopular: Boolean,
+    tracksTotal: Int,
+    tracksError: String?,
+    hasMoreTracks: Boolean,
+    trackSort: com.lux032.musicbridge.music.ArtistTrackSort,
+    trackOrder: String,
+    showTrackSorting: Boolean,
+    onTrackSortChange: (com.lux032.musicbridge.music.ArtistTrackSort, String) -> Unit,
+    onLoadMoreTracks: () -> Unit,
+    onRetryTracks: () -> Unit,
+    onPlayTopTrack: (ArtistSummary, PlexTrackStream, Int) -> Unit,
     bottomContentPadding: androidx.compose.ui.unit.Dp,
     listState: LazyListState = rememberLazyListState(),
     onBack: () -> Unit,
@@ -636,10 +651,25 @@ internal fun ArtistAlbumsSection(
             .map { ClassifiedArtistAlbum(it, classifyArtistAlbum(it)) }
             .chunked(layoutInfo.albumGridColumns)
     }
-    val topTracks = remember(artistTracks) { artistTracks.take(10) }
+    var showingAllTracks by rememberSaveable(currentArtist.sourceId, currentArtist.ratingKey, currentArtist.name) {
+        mutableStateOf(false)
+    }
+    val allTracksListState = rememberLazyListState()
+    val activeListState = if (showingAllTracks) allTracksListState else listState
+    BackHandler(enabled = showingAllTracks) { showingAllTracks = false }
+    LaunchedEffect(trackSort, trackOrder) { allTracksListState.scrollToItem(0) }
+    LaunchedEffect(showingAllTracks, artistTracks.size, hasMoreTracks, isArtistTracksLoading, tracksError) {
+        if (!showingAllTracks) return@LaunchedEffect
+        snapshotFlow {
+            val info = allTracksListState.layoutInfo
+            info.totalItemsCount > 0 && (info.visibleItemsInfo.lastOrNull()?.index ?: -1) >= info.totalItemsCount - 3
+        }.collect { nearEnd ->
+            if (nearEnd && hasMoreTracks && !isArtistTracksLoading && tracksError == null) onLoadMoreTracks()
+        }
+    }
 
     LazyColumn(
-        state = listState,
+        state = activeListState,
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(
             start = layoutInfo.horizontalPadding,
@@ -650,9 +680,13 @@ internal fun ArtistAlbumsSection(
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         item(contentType = "back") {
-            BackCircleButton(onClick = onBack, contentDescription = Strings.backToArtists)
+            BackCircleButton(
+                onClick = { if (showingAllTracks) showingAllTracks = false else onBack() },
+                contentDescription = if (showingAllTracks) Strings.back else Strings.backToArtists,
+            )
         }
 
+        if (!showingAllTracks) {
         item(contentType = "hero") {
             // Design D header: avatar + serif name, then one action row — the split primary key
             // names the output room, favourite is a toggle key beside it.
@@ -729,6 +763,10 @@ internal fun ArtistAlbumsSection(
                         onClick = { onToggleArtistFavorite(currentArtist) },
                     )
                 }
+                if (hasMoreTracks && artistTracks.isNotEmpty()) {
+                    Text(Strings.artistPartialQueue(artistTracks.size, tracksTotal),
+                        color = AppColors.TextSecondary, style = MaterialTheme.typography.bodySmall)
+                }
             }
         }
 
@@ -779,11 +817,75 @@ internal fun ArtistAlbumsSection(
             }
         }
 
-        // Discography first; top tracks sit at the bottom of the page.
-        if (isArtistTracksLoading || topTracks.isNotEmpty()) {
-            item(contentType = "tracks-header") {
-                SectionHeader(title = Strings.topTracks, modifier = Modifier.padding(top = 12.dp))
+        if (topTracks.isNotEmpty()) {
+            item(key = "top-tracks-header", contentType = "tracks-header") {
+                SectionHeader(
+                    title = if (topTracksArePopular) Strings.topTracks else Strings.artistSongs,
+                    modifier = Modifier.padding(top = 12.dp),
+                    actionLabel = Strings.artistAllTracks(tracksTotal),
+                    onAction = { showingAllTracks = true },
+                )
             }
+            itemsIndexed(topTracks, key = { index, track -> "top-${track.ratingKey}-$index" }) { index, track ->
+                ArtistTrackRow(
+                    artist = currentArtist, track = track, index = index,
+                    isPlaybackLoading = isPlaybackLoading,
+                    downloadedTrackKeys = downloadedTrackKeys, downloadProgress = downloadProgress,
+                    onDownloadTrack = onDownloadTrack, onDeleteDownloadedTrack = onDeleteDownloadedTrack,
+                    onPlayTrack = onPlayTopTrack, onQueueTrack = onQueueTrack, showPlayCount = topTracksArePopular,
+                )
+            }
+        }
+
+        if (topTracks.isEmpty()) {
+            item(key = "all-tracks-entry") {
+                SectionHeader(
+                    title = "",
+                    actionLabel = Strings.artistAllTracks(tracksTotal),
+                    onAction = { showingAllTracks = true },
+                )
+            }
+        }
+        }
+
+        if (showingAllTracks) {
+        item(key = "all-tracks-header", contentType = "tracks-header") {
+            Column {
+                SectionHeader(
+                    title = Strings.artistAllTracks(tracksTotal),
+                    modifier = Modifier.padding(top = 12.dp),
+                )
+                Text(currentArtist.name, color = AppColors.TextSecondary, style = MaterialTheme.typography.bodyMedium)
+                if (showTrackSorting) {
+                    ArtistTrackSortControls(trackSort, trackOrder, onTrackSortChange)
+                }
+                SplitPlayKey(
+                    label = Strings.playOn(outputTargetName),
+                    onPlay = { artistTracks.firstOrNull()?.let { onPlayTrack(currentArtist, it, 0) } },
+                    onShuffle = { onShuffleArtist(currentArtist) },
+                    enabled = artistTracks.isNotEmpty() && !isPlaybackLoading,
+                    shuffleEnabled = artistTracks.isNotEmpty() && !isPlaybackLoading,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                if (hasMoreTracks && artistTracks.isNotEmpty()) {
+                    Text(Strings.artistPartialQueue(artistTracks.size, tracksTotal),
+                        color = AppColors.TextSecondary, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
+        itemsIndexed(
+            artistTracks,
+            key = { index, track -> "all-${track.ratingKey}-$index" },
+            contentType = { _, _ -> "track" },
+        ) { index, track ->
+            ArtistTrackRow(
+                artist = currentArtist, track = track, index = index,
+                isPlaybackLoading = isPlaybackLoading,
+                downloadedTrackKeys = downloadedTrackKeys, downloadProgress = downloadProgress,
+                onDownloadTrack = onDownloadTrack, onDeleteDownloadedTrack = onDeleteDownloadedTrack,
+                onPlayTrack = onPlayTrack, onQueueTrack = onQueueTrack,
+            )
+        }
         }
         if (isArtistTracksLoading) {
             item(contentType = "tracks-loading") {
@@ -798,27 +900,57 @@ internal fun ArtistAlbumsSection(
                     )
                 }
             }
-        } else {
-            itemsIndexed(
-                topTracks,
-                key = { index, track -> track.ratingKey.ifBlank { "artist-track-$index" } },
-                contentType = { _, _ -> "track" },
-            ) { index, track ->
-                ArtistTrackRow(
-                    artist = currentArtist,
-                    track = track,
-                    index = index,
-                    isPlaybackLoading = isPlaybackLoading,
-                    downloadedTrackKeys = downloadedTrackKeys,
-                    downloadProgress = downloadProgress,
-                    onDownloadTrack = onDownloadTrack,
-                    onDeleteDownloadedTrack = onDeleteDownloadedTrack,
-                    onPlayTrack = onPlayTrack,
-                    onQueueTrack = onQueueTrack,
-                )
+        }
+        if (tracksError != null) {
+            item(key = "tracks-error") {
+                Column {
+                    Text(tracksError, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
+                    TextButton(onClick = onRetryTracks) {
+                        Text(Strings.retry)
+                    }
+                }
+            }
+        } else if (showingAllTracks && !isArtistTracksLoading && artistTracks.isEmpty()) {
+            item(key = "tracks-empty") {
+                Text(Strings.artistTracksEmpty, color = AppColors.TextSecondary)
             }
         }
 
+    }
+}
+
+@Composable
+private fun ArtistTrackSortControls(
+    sort: com.lux032.musicbridge.music.ArtistTrackSort,
+    order: String,
+    onChange: (com.lux032.musicbridge.music.ArtistTrackSort, String) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val labels = Strings.artistTrackSortLabels
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.weight(1f)) {
+            TextButton(onClick = { expanded = true }) {
+                Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text(labels[sort.ordinal])
+            }
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                com.lux032.musicbridge.music.ArtistTrackSort.entries.forEach { option ->
+                    DropdownMenuItem(
+                        text = { Text(labels[option.ordinal]) },
+                        onClick = { expanded = false; onChange(option, option.defaultOrder) },
+                        trailingIcon = {
+                            if (option == sort) Icon(Icons.Filled.Check, contentDescription = null)
+                        },
+                    )
+                }
+            }
+        }
+        TextButton(onClick = { onChange(sort, if (order == "asc") "desc" else "asc") }) {
+            Icon(if (order == "asc") Icons.Filled.ArrowUpward else Icons.Filled.ArrowDownward, contentDescription = null)
+            Spacer(Modifier.width(4.dp))
+            Text(if (order == "asc") Strings.sortAscending else Strings.sortDescending)
+        }
     }
 }
 
@@ -900,6 +1032,7 @@ private fun ArtistTrackRow(
     onDeleteDownloadedTrack: (PlexTrackStream) -> Unit = {},
     onPlayTrack: (ArtistSummary, PlexTrackStream, Int) -> Unit,
     onQueueTrack: (PlexTrackStream, QueuePlacement) -> Unit,
+    showPlayCount: Boolean = false,
 ) {
     var showQueueMenu by remember { mutableStateOf(false) }
     val isDownloaded = remember(track.sourceId, track.ratingKey, downloadedTrackKeys) {
@@ -944,7 +1077,13 @@ private fun ArtistTrackRow(
                         )
                     }
                 }
-                Text(track.artistName ?: track.albumTitle.orEmpty(), color = AppColors.TextTertiary, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(
+                    if (showPlayCount) {
+                        Strings.trackPlayCount(track.viewCount ?: 0)
+                    } else track.albumTitle ?: track.artistName.orEmpty(),
+                    color = AppColors.TextTertiary, style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                )
             }
             track.durationMillis?.let {
                 Text(formatDuration(it), color = AppColors.TextTertiary, style = MaterialTheme.typography.bodySmall)

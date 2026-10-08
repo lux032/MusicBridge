@@ -122,7 +122,22 @@ object Strings {
     val artistAlbumsDesc get() = if (isZhCN) { count: Int -> "共 $count 张专辑，点击封面进入专辑详情并继续播放。" } else { count: Int -> "Total $count albums. Tap cover to view details and continue playback." }
     val shuffleArtist get() = if (isZhCN) "随机播放该歌手" else "Shuffle Artist"
     val shuffleShort get() = if (isZhCN) "随机播放" else "Shuffle"
-    val topTracks get() = if (isZhCN) "热门曲目" else "Top Tracks"
+    val topTracks get() = if (isZhCN) "热门歌曲" else "Top Tracks"
+    val artistSongs get() = if (isZhCN) "歌曲" else "Songs"
+    fun artistAllTracks(count: Int) = if (isZhCN) "全部歌曲 ($count)" else "All Tracks ($count)"
+    fun trackPlayCount(count: Long) = if (isZhCN) "播放 $count 次" else "$count plays"
+    val artistTrackSortLabels get() = if (isZhCN) {
+        listOf("默认", "播放最多", "最近播放", "标题", "最新加入", "时长")
+    } else {
+        listOf("Default", "Most played", "Recently played", "Title", "Recently added", "Duration")
+    }
+    val sortAscending get() = if (isZhCN) "升序" else "Ascending"
+    val sortDescending get() = if (isZhCN) "降序" else "Descending"
+    val artistTracksEmpty get() = if (isZhCN) "暂无歌曲" else "No tracks"
+    val artistTracksInvalidSort get() = if (isZhCN) "排序参数无效，请重新选择排序。" else "Invalid sort options. Please choose a sort again."
+    val artistTracksNotFound get() = if (isZhCN) "歌手不存在或已被删除。" else "Artist not found or removed."
+    val artistTracksLoadFailed get() = if (isZhCN) "歌曲加载失败，请重试。" else "Could not load tracks. Please retry."
+    fun artistPartialQueue(count: Int, total: Int) = if (isZhCN) "将播放已加载的 $count / $total 首" else "Plays $count of $total loaded tracks"
     val studioAlbums get() = if (isZhCN) "录音室专辑" else "Studio Albums"
     val singlesAndEps get() = if (isZhCN) "单曲与 EP" else "Singles & EPs"
     val compilationsAndLive get() = if (isZhCN) "精选与现场" else "Compilations & Live"
