@@ -511,13 +511,14 @@ internal class AppStatePlaybackCoordinator(
                                 continueChain = continueChain,
                             )
                         }
-                        state.miniPlayerState = state.miniPlayerState?.copy(
+                        state.miniPlayerState = state.miniPlayerState?.let { current -> current.copy(
+                            album = track.resolvePlaybackAlbum(state.allAlbums, current.album),
                             currentIndex = index,
                             isPaused = false,
                             currentPositionMillis = startPositionMillis,
                             durationMillis = track.durationMillis,
                             target = PlaybackTarget.Sonos(room),
-                        )
+                        ) }
                         state.actionMessage = sonosPushMessage("正在连续播放：${track.title}",
                             is032Source(track) && current032Fallback)
                         val queue = state.miniPlayerState?.tracks ?: albumTrackResult.tracks
@@ -1641,6 +1642,7 @@ internal class AppStatePlaybackCoordinator(
                 // tap send Pause again (UPnP 701) instead of recovering playback.
                 val effectivePaused = playbackState == "paused" || playbackState == "stopped"
                 state.miniPlayerState = latestMiniPlayerState.copy(
+                    album = currentTrack.resolvePlaybackAlbum(state.allAlbums, latestMiniPlayerState.album),
                     currentIndex = currentQueue.indexOfFirst { it.ratingKey == currentTrack.ratingKey && it.sourceId == currentTrack.sourceId }
                         .takeIf { it >= 0 } ?: latestMiniPlayerState.currentIndex,
                     isPaused = effectivePaused,
@@ -2066,7 +2068,7 @@ internal class AppStatePlaybackCoordinator(
             ratingKey = track.albumRatingKey ?: fallback?.ratingKey ?: track.ratingKey,
             title = track.albumTitle ?: fallback?.title ?: track.title,
             artistName = track.artistName ?: fallback?.artistName,
-            year = fallback?.year,
+            year = track.albumYearFrom(fallback),
             thumbUrl = track.thumbUrl ?: fallback?.thumbUrl,
             userRating = fallback?.userRating,
             addedAtEpochSeconds = fallback?.addedAtEpochSeconds,

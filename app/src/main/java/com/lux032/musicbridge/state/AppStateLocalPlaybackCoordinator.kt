@@ -108,6 +108,7 @@ internal class AppStateLocalPlaybackCoordinator(
                     if (index == current.currentIndex) return@launch
                     val track = current.tracks.getOrNull(index) ?: return@launch
                     state.miniPlayerState = current.copy(
+                        album = track.resolvePlaybackAlbum(state.allAlbums, current.album),
                         currentIndex = index,
                         isBuffering = state.localPlaybackEngine.isBuffering,
                         currentPositionMillis = state.localPlaybackEngine.currentPositionMillis,
@@ -342,7 +343,7 @@ internal class AppStateLocalPlaybackCoordinator(
         val resolvedTracks = tracks.map(::resolveTrackWithLocalDownload)
 
         state.miniPlayerState = MiniPlayerState(
-            album = album,
+            album = resolvedTracks.getOrNull(safeIndex)?.resolvePlaybackAlbum(state.allAlbums, album) ?: album,
             tracks = resolvedTracks,
             currentIndex = safeIndex,
             target = PlaybackTarget.LocalDevice,
@@ -525,6 +526,7 @@ internal class AppStateLocalPlaybackCoordinator(
         val newIndex = engine.currentIndex
         val track = playerState.tracks.getOrNull(newIndex) ?: return
         state.miniPlayerState = playerState.copy(
+            album = track.resolvePlaybackAlbum(state.allAlbums, playerState.album),
             currentIndex = newIndex,
             isPaused = false,
             isBuffering = state.localPlaybackEngine.isBuffering,
@@ -553,6 +555,7 @@ internal class AppStateLocalPlaybackCoordinator(
         state.localPlaybackEngine.playAt(safeIndex, positionMillis)
         val track = playerState.tracks.getOrNull(safeIndex) ?: return
         state.miniPlayerState = playerState.copy(
+            album = track.resolvePlaybackAlbum(state.allAlbums, playerState.album),
             currentIndex = safeIndex,
             isPaused = false,
             isBuffering = state.localPlaybackEngine.isBuffering,
@@ -603,6 +606,7 @@ internal class AppStateLocalPlaybackCoordinator(
                     engine.recordDiagnosticHeartbeat(playbackState)
 
                     state.miniPlayerState = current.copy(
+                        album = track.resolvePlaybackAlbum(state.allAlbums, current.album),
                         currentIndex = index,
                         isPaused = isPaused && !engine.isEnded,
                         isBuffering = isBuffering,

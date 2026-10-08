@@ -1204,7 +1204,7 @@ internal class AppStateLibraryCoordinator(
             ratingKey = track.albumRatingKey ?: fallback?.ratingKey ?: track.ratingKey,
             title = track.albumTitle ?: fallback?.title ?: track.title,
             artistName = track.artistName ?: fallback?.artistName,
-            year = fallback?.year,
+            year = track.albumYearFrom(fallback),
             thumbUrl = track.thumbUrl ?: fallback?.thumbUrl,
             userRating = fallback?.userRating,
             addedAtEpochSeconds = fallback?.addedAtEpochSeconds,

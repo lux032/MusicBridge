@@ -139,11 +139,7 @@ internal fun PlaybackDetailSection(
         return
     }
     val displayAlbum = currentTrack.toDisplayAlbum(currentState.album)
-    // Year defense: only trust the fallback album's year when the track actually belongs to
-    // that album (or has no album key at all), avoiding mismatched years in mixed queues.
-    val displayAlbumYear = displayAlbum.year?.takeIf {
-        currentTrack.albumRatingKey == null || currentTrack.albumRatingKey == displayAlbum.ratingKey
-    }
+    val displayAlbumYear = displayAlbum.year
     // Click defense: playlist placeholders without a real album key degrade to plain text.
     val canOpenAlbum = currentTrack.albumRatingKey != null ||
         displayAlbum.ratingKey.isNotBlank()
@@ -2511,7 +2507,7 @@ private fun PlexTrackStream.toDisplayAlbum(fallbackAlbum: PlexAlbum): PlexAlbum 
         ratingKey = albumRatingKey ?: fallbackAlbum.ratingKey,
         title = albumTitle ?: fallbackAlbum.title,
         artistName = artistName ?: fallbackAlbum.artistName,
-        year = fallbackAlbum.year,
+        year = albumYearFrom(fallbackAlbum),
         thumbUrl = thumbUrl ?: fallbackAlbum.thumbUrl,
         userRating = fallbackAlbum.userRating,
         addedAtEpochSeconds = fallbackAlbum.addedAtEpochSeconds,
