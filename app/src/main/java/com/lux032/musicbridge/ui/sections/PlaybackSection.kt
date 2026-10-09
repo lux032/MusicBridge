@@ -910,6 +910,7 @@ internal fun PlaybackDetailSection(
             val queueListState = rememberLazyListState(
                 initialFirstVisibleItemIndex = currentState.currentIndex.coerceIn(0, currentState.tracks.lastIndex.coerceAtLeast(0)),
             )
+            val nowPlayingMarker = LocalNowPlaying.current
             LazyColumn(
                 state = queueListState,
                 modifier = Modifier.fillMaxWidth(),
@@ -941,17 +942,13 @@ internal fun PlaybackDetailSection(
                             .animateItem(fadeInSpec = null, fadeOutSpec = null)
                             .fillMaxWidth(),
                     ) {
-                        Box(modifier = Modifier.width(24.dp), contentAlignment = Alignment.Center) {
-                            if (isCurrent) {
-                                LiveDot()
-                            } else {
-                                Text(
-                                    text = "${index + 1}",
-                                    color = AppColors.TextTertiary,
-                                    style = MaterialTheme.typography.labelLarge,
-                                )
-                            }
-                        }
+                        // Queue position (not track identity) decides "current": the same track
+                        // can sit in the queue more than once.
+                        TrackNumberSlot(
+                            text = "${index + 1}",
+                            nowPlaying = if (isCurrent) nowPlayingMarker else null,
+                            modifier = Modifier.width(24.dp),
+                        )
                         Column(
                             modifier = Modifier.weight(1f),
                             verticalArrangement = Arrangement.spacedBy(2.dp),
@@ -1403,6 +1400,7 @@ internal fun AlbumDetailSection(
     onDeleteDownloadedAlbum: (PlexAlbum) -> Unit = {},
     onPlayAlbum: (PlexAlbumTracksResult) -> Unit,
     onPlayTrack: (PlexAlbum, PlexTrackStream) -> Unit,
+    nowPlaying: NowPlayingMarker? = LocalNowPlaying.current,
 ) {
     val currentTrackResult = trackResult
     if (currentTrackResult == null) {
@@ -1490,6 +1488,7 @@ internal fun AlbumDetailSection(
                             onToggleTrackFavorite = onToggleTrackFavorite,
                             onQueueTrack = onQueueTrack,
                             onPlayTrack = onPlayTrack,
+                            nowPlaying = nowPlaying?.takeIf { it.matches(track) },
                         )
                     }
                 }
@@ -1543,6 +1542,7 @@ internal fun AlbumDetailSection(
                         onToggleTrackFavorite = onToggleTrackFavorite,
                         onQueueTrack = onQueueTrack,
                         onPlayTrack = onPlayTrack,
+                        nowPlaying = nowPlaying?.takeIf { it.matches(track) },
                     )
                 }
             }
@@ -1968,8 +1968,12 @@ private fun AlbumTrackRow(
     onToggleTrackFavorite: (PlexTrackStream) -> Unit,
     onQueueTrack: (PlexTrackStream, QueuePlacement) -> Unit,
     onPlayTrack: (PlexAlbum, PlexTrackStream) -> Unit,
+    nowPlaying: NowPlayingMarker? = null,
 ) {
     var showQueueMenu by remember { mutableStateOf(false) }
+    // Only the matching row receives a non-null marker, so other rows skip recomposition
+    // when play/pause toggles.
+    val isCurrent = nowPlaying != null
     val isDownloaded = remember(track.sourceId, track.ratingKey, downloadedTrackKeys) {
         "${track.sourceId}:${track.ratingKey}" in downloadedTrackKeys || track.ratingKey in downloadedTrackKeys
     }
@@ -1994,11 +1998,9 @@ private fun AlbumTrackRow(
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
+                TrackNumberSlot(
                     text = "${index + 1}",
-                    color = AppColors.TextTertiary,
-                    style = MaterialTheme.typography.labelLarge,
-                    textAlign = TextAlign.Center,
+                    nowPlaying = nowPlaying,
                     modifier = Modifier.width(24.dp),
                 )
                 Column(
@@ -2007,9 +2009,9 @@ private fun AlbumTrackRow(
                 ) {
                     Text(
                         text = track.title,
-                        color = AppColors.TextPrimary,
+                        color = nowPlayingTitleColor(isCurrent),
                         style = MaterialTheme.typography.bodyLarge,
-                        fontWeight = FontWeight.Medium,
+                        fontWeight = if (isCurrent) FontWeight.SemiBold else FontWeight.Medium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )

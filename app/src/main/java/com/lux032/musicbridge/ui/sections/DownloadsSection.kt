@@ -78,6 +78,7 @@ internal fun DownloadsSection(
     onDeleteAlbum: (DownloadedAlbumGroup) -> Unit,
     onDeleteTrack: (DownloadedAudioTrack) -> Unit,
     onShuffleAll: () -> Unit,
+    nowPlaying: NowPlayingMarker? = LocalNowPlaying.current,
 ) {
     val layoutInfo = LocalAppLayoutInfo.current
     val palette = LocalArtworkPalette.current
@@ -228,6 +229,10 @@ internal fun DownloadsSection(
                         onPlayTrack = { track, index -> onPlayTrack(group, track, index) },
                         onDeleteAlbum = { onDeleteAlbum(group) },
                         onDeleteTrack = onDeleteTrack,
+                        nowPlaying = nowPlaying?.takeIf { marker ->
+                            marker.matchesAlbum(group.sourceId, group.albumRatingKey) ||
+                                group.tracks.any { marker.matches(it) }
+                        },
                     )
                 }
             }
@@ -242,6 +247,7 @@ private fun DownloadedAlbumCard(
     onPlayTrack: (DownloadedAudioTrack, Int) -> Unit,
     onDeleteAlbum: () -> Unit,
     onDeleteTrack: (DownloadedAudioTrack) -> Unit,
+    nowPlaying: NowPlayingMarker? = null,
 ) {
     var isExpanded by rememberSaveable(group.albumRatingKey) { mutableStateOf(false) }
     var isMenuExpanded by remember { mutableStateOf(false) }
@@ -261,16 +267,17 @@ private fun DownloadedAlbumCard(
                 horizontalArrangement = Arrangement.spacedBy(14.dp),
             ) {
                 // Cover
-                AsyncAlbumArtwork(
-                    imageUrl = group.thumbPath?.let { "file://$it" },
-                    title = group.albumTitle,
-                    modifier = Modifier
-                        .size(60.dp)
-                        .clip(RoundedCornerShape(10.dp)),
-                    contentScale = ContentScale.Crop,
-                    thumbnailSize = 72.dp,
-                    placeholderThumbnailSize = null,
-                )
+                Box(modifier = Modifier.size(60.dp).clip(RoundedCornerShape(10.dp))) {
+                    AsyncAlbumArtwork(
+                        imageUrl = group.thumbPath?.let { "file://$it" },
+                        title = group.albumTitle,
+                        modifier = Modifier.matchParentSize(),
+                        contentScale = ContentScale.Crop,
+                        thumbnailSize = 72.dp,
+                        placeholderThumbnailSize = null,
+                    )
+                    NowPlayingArtworkScrim(nowPlaying)
+                }
 
                 // Info
                 Column(
@@ -375,6 +382,7 @@ private fun DownloadedAlbumCard(
                             track = track,
                             onPlay = { onPlayTrack(track, index) },
                             onDelete = { onDeleteTrack(track) },
+                            nowPlaying = nowPlaying?.takeIf { it.matches(track) },
                         )
                     }
                     Spacer(modifier = Modifier.height(8.dp))
@@ -415,8 +423,10 @@ private fun DownloadedTrackItem(
     track: DownloadedAudioTrack,
     onPlay: () -> Unit,
     onDelete: () -> Unit,
+    nowPlaying: NowPlayingMarker? = null,
 ) {
     var showTrackDeleteDialog by remember { mutableStateOf(false) }
+    val isCurrent = nowPlaying != null
 
     Row(
         modifier = Modifier
@@ -432,10 +442,11 @@ private fun DownloadedTrackItem(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Text(
+            TrackNumberSlot(
                 text = displayIndex,
+                nowPlaying = nowPlaying,
                 style = MaterialTheme.typography.bodySmall,
-                color = AppColors.TextTertiary,
+                contentAlignment = Alignment.CenterStart,
                 modifier = Modifier.widthIn(min = 22.dp),
             )
 
@@ -446,8 +457,8 @@ private fun DownloadedTrackItem(
                 Text(
                     text = track.title,
                     style = MaterialTheme.typography.bodyMedium,
-                    color = AppColors.TextPrimary,
-                    fontWeight = FontWeight.Medium,
+                    color = nowPlayingTitleColor(isCurrent),
+                    fontWeight = if (isCurrent) FontWeight.SemiBold else FontWeight.Medium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )

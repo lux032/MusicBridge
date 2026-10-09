@@ -597,6 +597,7 @@ internal fun ArtistAlbumsSection(
     onPlayTrack: (ArtistSummary, PlexTrackStream, Int) -> Unit,
     onQueueTrack: (PlexTrackStream, QueuePlacement) -> Unit,
     isResolving: Boolean = false,
+    nowPlaying: NowPlayingMarker? = LocalNowPlaying.current,
 ) {
     val layoutInfo = LocalAppLayoutInfo.current
     val currentArtist = artist
@@ -833,6 +834,7 @@ internal fun ArtistAlbumsSection(
                     downloadedTrackKeys = downloadedTrackKeys, downloadProgress = downloadProgress,
                     onDownloadTrack = onDownloadTrack, onDeleteDownloadedTrack = onDeleteDownloadedTrack,
                     onPlayTrack = onPlayTopTrack, onQueueTrack = onQueueTrack, showPlayCount = topTracksArePopular,
+                    nowPlaying = nowPlaying?.takeIf { it.matches(track) },
                 )
             }
         }
@@ -884,6 +886,7 @@ internal fun ArtistAlbumsSection(
                 downloadedTrackKeys = downloadedTrackKeys, downloadProgress = downloadProgress,
                 onDownloadTrack = onDownloadTrack, onDeleteDownloadedTrack = onDeleteDownloadedTrack,
                 onPlayTrack = onPlayTrack, onQueueTrack = onQueueTrack,
+                nowPlaying = nowPlaying?.takeIf { it.matches(track) },
             )
         }
         }
@@ -1033,6 +1036,7 @@ private fun ArtistTrackRow(
     onPlayTrack: (ArtistSummary, PlexTrackStream, Int) -> Unit,
     onQueueTrack: (PlexTrackStream, QueuePlacement) -> Unit,
     showPlayCount: Boolean = false,
+    nowPlaying: NowPlayingMarker? = null,
 ) {
     var showQueueMenu by remember { mutableStateOf(false) }
     val isDownloaded = remember(track.sourceId, track.ratingKey, downloadedTrackKeys) {
@@ -1049,18 +1053,27 @@ private fun ArtistTrackRow(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            AsyncAlbumArtwork(
-                imageUrl = track.thumbUrl,
-                title = track.title,
-                modifier = Modifier.size(44.dp).clip(RoundedCornerShape(6.dp)),
-                thumbnailSize = 48.dp,
-            )
+            Box(modifier = Modifier.size(44.dp).clip(RoundedCornerShape(6.dp))) {
+                AsyncAlbumArtwork(
+                    imageUrl = track.thumbUrl,
+                    title = track.title,
+                    modifier = Modifier.matchParentSize(),
+                    thumbnailSize = 48.dp,
+                )
+                NowPlayingArtworkScrim(nowPlaying)
+            }
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    Text(track.title, color = AppColors.TextPrimary, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(
+                        track.title,
+                        color = nowPlayingTitleColor(nowPlaying != null),
+                        fontWeight = if (nowPlaying != null) FontWeight.SemiBold else FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                     if (isDownloaded) {
                         Icon(
                             imageVector = Icons.Filled.CheckCircle,

@@ -243,6 +243,7 @@ internal fun PlaylistDetailSection(
     aiDescription: String? = null,
     onSaveToPlex: () -> Unit = {},
     onSonicRadio: (PlexTrackStream) -> Unit = {},
+    nowPlaying: NowPlayingMarker? = LocalNowPlaying.current,
 ) {
     val currentResult = playlistResult
     if (currentResult == null) {
@@ -324,6 +325,7 @@ internal fun PlaylistDetailSection(
                                 onQueueTrack = onQueueTrack,
                                 onPlayTrack = onPlayTrack,
                                 onSonicRadio = onSonicRadio,
+                                nowPlaying = nowPlaying?.takeIf { it.matches(track) },
                             )
                         }
                     }
@@ -370,6 +372,7 @@ internal fun PlaylistDetailSection(
                             onQueueTrack = onQueueTrack,
                             onPlayTrack = onPlayTrack,
                             onSonicRadio = onSonicRadio,
+                            nowPlaying = nowPlaying?.takeIf { it.matches(track) },
                         )
                     }
                 }
@@ -517,8 +520,10 @@ private fun PlaylistDetailTrackRow(
     onQueueTrack: (PlexTrackStream, QueuePlacement) -> Unit,
     onPlayTrack: (PlexPlaylist, PlexTrackStream, Int) -> Unit,
     onSonicRadio: (PlexTrackStream) -> Unit,
+    nowPlaying: NowPlayingMarker? = null,
 ) {
     var showQueueMenu by remember { mutableStateOf(false) }
+    val isCurrent = nowPlaying != null
     val isDownloaded = remember(track.sourceId, track.ratingKey, downloadedTrackKeys) {
         "${track.sourceId}:${track.ratingKey}" in downloadedTrackKeys || track.ratingKey in downloadedTrackKeys
     }
@@ -546,11 +551,9 @@ private fun PlaylistDetailTrackRow(
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
+                TrackNumberSlot(
                     text = "${index + 1}",
-                    color = AppColors.TextTertiary,
-                    style = MaterialTheme.typography.labelLarge,
-                    textAlign = TextAlign.Center,
+                    nowPlaying = nowPlaying,
                     modifier = Modifier.width(24.dp),
                 )
                 Column(
@@ -559,9 +562,9 @@ private fun PlaylistDetailTrackRow(
                 ) {
                     Text(
                         text = track.title,
-                        color = AppColors.TextPrimary,
+                        color = nowPlayingTitleColor(isCurrent),
                         style = MaterialTheme.typography.bodyLarge,
-                        fontWeight = FontWeight.Medium,
+                        fontWeight = if (isCurrent) FontWeight.SemiBold else FontWeight.Medium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )

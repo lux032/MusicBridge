@@ -67,6 +67,7 @@ object Strings {
     val noPlayback get() = if (isZhCN) "当前没有播放中的专辑" else "No Active Playback"
     val noPlaybackDesc get() = if (isZhCN) "先从专辑详情里播放内容，底部栏出现后再进入播放详情。" else "Start playback from album details first. Then access playback details from the bottom bar."
     val nowPlaying get() = if (isZhCN) "正在播放" else "Now Playing"
+    val nowPaused get() = if (isZhCN) "已暂停" else "Paused"
     // Design D: the primary play key names its destination ("在 卧室 播放").
     val playOn get() = { target: String ->
         if (target == localPlayback) {

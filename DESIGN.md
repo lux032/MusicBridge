@@ -19,6 +19,14 @@
 - 设置分组用 5.5% 白的无边面，组内用 hairline 分隔。
 - 输入框：搜索用 `TonalSearchField`；表单保留 outlined，未聚焦时边框弱化到 14% 白。
 
+## 正在播放标识
+实现入口：`ui/components/NowPlaying.kt`，状态由根部 `LocalNowPlaying` 提供。
+- 曲号位（专辑、歌单、离线、队列）：曲号换成 accent 色 `PlayingBars`，歌名 accent + SemiBold（`TrackNumberSlot` / `nowPlayingTitleColor`）。
+- 小封面（≤ 64dp，歌手曲目、离线专辑行）：`NowPlayingArtworkScrim`，45% 黑遮罩 + 白色柱。
+- 大封面（专辑卡片、最近播放）：`NowPlayingCoverBadge`，左下角 28dp 深色圆 + 白色柱。封面上不用 accent，因为 accent 就取自这张封面，会融进去。
+- 柱子要如实反映状态：播放时跳动，暂停时落到静止形状，缓冲时轻微起伏。不加整行底色。
+- 队列按位置判断当前项（同一首歌可能出现多次）；其他列表按 `sourceId + ratingKey` 判断。
+
 ## 字体
 - 页面标题和分组标题（display / headline / titleLarge）用衬线体，Bold。
 - 其余（titleMedium 及以下）用无衬线体。

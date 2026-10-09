@@ -386,9 +386,11 @@ internal fun AlbumCoverCard(
     onPlay: (() -> Unit)? = null,
     compact: Boolean = false,
     subtitleOverride: String? = null,
+    nowPlaying: NowPlayingMarker? = LocalNowPlaying.current,
 ) {
     val layoutInfo = LocalAppLayoutInfo.current
     var showQueueMenu by remember { mutableStateOf(false) }
+    val playingFromAlbum = nowPlaying?.takeIf { it.matchesAlbum(album) }
 
     Box {
     Surface(
@@ -406,30 +408,12 @@ internal fun AlbumCoverCard(
         shadowElevation = 0.dp,
     ) {
         if (compact) {
-            AsyncAlbumArtwork(
-                imageUrl = album.thumbUrl,
-                title = album.title,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(1f)
-                    .clip(RoundedCornerShape(12.dp)),
-                contentScale = ContentScale.Crop,
-                thumbnailSize = layoutInfo.albumGridMinimumWidth * 1.1f,
-            )
+            AlbumCoverArtwork(album, playingFromAlbum)
         } else {
             Column(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                AsyncAlbumArtwork(
-                    imageUrl = album.thumbUrl,
-                    title = album.title,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(1f)
-                        .clip(RoundedCornerShape(12.dp)),
-                    contentScale = ContentScale.Crop,
-                    thumbnailSize = layoutInfo.albumGridMinimumWidth * 1.1f,
-                )
+                AlbumCoverArtwork(album, playingFromAlbum)
                 Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
                     Text(
                         text = album.title,
@@ -472,6 +456,26 @@ internal fun AlbumCoverCard(
                 }
             },
         )
+    }
+}
+
+@Composable
+private fun AlbumCoverArtwork(album: PlexAlbum, nowPlaying: NowPlayingMarker?) {
+    val layoutInfo = LocalAppLayoutInfo.current
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .aspectRatio(1f)
+            .clip(RoundedCornerShape(12.dp)),
+    ) {
+        AsyncAlbumArtwork(
+            imageUrl = album.thumbUrl,
+            title = album.title,
+            modifier = Modifier.matchParentSize(),
+            contentScale = ContentScale.Crop,
+            thumbnailSize = layoutInfo.albumGridMinimumWidth * 1.1f,
+        )
+        NowPlayingCoverBadge(nowPlaying)
     }
 }
 

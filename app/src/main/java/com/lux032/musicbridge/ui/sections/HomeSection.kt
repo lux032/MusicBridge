@@ -216,6 +216,7 @@ private fun RecentPlayedShelfSection(
     onPlayAlbum: ((PlexAlbum) -> Unit)? = null,
 ) {
     val layoutInfo = LocalAppLayoutInfo.current
+    val nowPlaying = LocalNowPlaying.current
 
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -252,13 +253,16 @@ private fun RecentPlayedShelfSection(
                         color = AppColors.CardSurface,
                         shadowElevation = 6.dp,
                     ) {
-                        AsyncAlbumArtwork(
-                            imageUrl = album.thumbUrl,
-                            title = album.title,
-                            modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Crop,
-                            thumbnailSize = layoutInfo.recentAlbumCardWidth,
-                        )
+                        Box {
+                            AsyncAlbumArtwork(
+                                imageUrl = album.thumbUrl,
+                                title = album.title,
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Crop,
+                                thumbnailSize = layoutInfo.recentAlbumCardWidth,
+                            )
+                            NowPlayingCoverBadge(nowPlaying?.takeIf { it.matchesAlbum(album) })
+                        }
                     }
                     Text(
                         text = album.title,

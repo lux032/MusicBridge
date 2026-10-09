@@ -189,6 +189,11 @@ fun PlexAlbumScreen(
         }
     }
     val nowPlayingPalette = rememberAnimatedArtworkPalette(nowPlayingArtworkUrl)
+    // Track / play-state snapshot for list markers. Derived so position ticks in
+    // miniPlayerState don't invalidate every reader of LocalNowPlaying.
+    val nowPlayingMarker by remember(state) {
+        derivedStateOf { state.miniPlayerState.toNowPlayingMarker() }
+    }
 
     val activeSection = state.activeSection
     // Docked navigation bar (Design D). Section content already sits above the system
@@ -306,6 +311,7 @@ fun PlexAlbumScreen(
         LocalAppLayoutInfo provides layoutInfo,
         LocalOverscrollFactory provides null,
         LocalArtworkPalette provides nowPlayingPalette,
+        LocalNowPlaying provides nowPlayingMarker,
         LocalSharedTransitionScope provides this@SharedTransitionLayout,
     ) {
     Box(
