@@ -350,6 +350,34 @@ class SonosController {
         avTransport(room, "SetPlayMode", "<NewPlayMode>${xmlEscape(mode)}</NewPlayMode>")
     }
 
+    /** The transport's source: `x-rincon-queue:...` while the device queue is selected. */
+    suspend fun getMediaUri(room: SonosRoom): String? = withContext(Dispatchers.IO) {
+        parseXml(avTransport(room, "GetMediaInfo")).textOfFirstTag("CurrentURI")
+    }
+
+    suspend fun getPlayMode(room: SonosRoom): String? = withContext(Dispatchers.IO) {
+        parseXml(avTransport(room, "GetTransportSettings")).textOfFirstTag("PlayMode")
+    }
+
+    /** Reads the room's queue (Q:0) in pages, up to [limit] entries. */
+    suspend fun browseQueue(room: SonosRoom, limit: Int = 2_000): List<SonosQueueBrowseEntry> = withContext(Dispatchers.IO) {
+        val result = mutableListOf<SonosQueueBrowseEntry>()
+        while (result.size < limit) {
+            val response = parseXml(soapRequest(
+                controlUrl = "${room.coordinatorBaseUrl}/MediaServer/ContentDirectory/Control",
+                serviceType = "urn:schemas-upnp-org:service:ContentDirectory:1",
+                action = "Browse",
+                innerXml = "<ObjectID>Q:0</ObjectID><BrowseFlag>BrowseDirectChildren</BrowseFlag><Filter>*</Filter>" +
+                    "<StartingIndex>${result.size}</StartingIndex><RequestedCount>$SONOS_BROWSE_PAGE</RequestedCount><SortCriteria></SortCriteria>",
+            ))
+            val page = parseQueueDidl(response.textOfFirstTag("Result").orEmpty())
+            result += page
+            val total = response.textOfFirstTag("TotalMatches")?.toIntOrNull() ?: result.size
+            if (page.isEmpty() || result.size >= total) break
+        }
+        result.take(limit)
+    }
+
     private fun useQueue(room: SonosRoom) {
         avTransport(
             room,
@@ -541,7 +569,20 @@ data class SonosQueueItem(
     )
 }
 
+/** One entry read back from the Sonos queue. */
+data class SonosQueueBrowseEntry(val url: String, val mimeType: String?)
+
 private const val SONOS_QUEUE_BATCH = 16
+private const val SONOS_BROWSE_PAGE = 100
+
+internal fun parseQueueDidl(didl: String): List<SonosQueueBrowseEntry> {
+    if (didl.isBlank()) return emptyList()
+    return parseXml(didl).getElementsByTagName("item").toElementList().mapNotNull { item ->
+        val res = item.getElementsByTagName("res").toElementList().firstOrNull() ?: return@mapNotNull null
+        val url = res.textContent?.trim()?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+        SonosQueueBrowseEntry(url, res.getAttribute("protocolInfo").split(':').getOrNull(2)?.takeIf { it.isNotBlank() && it != "*" })
+    }
+}
 
 internal fun sonosQueueUri(coordinatorUuid: String): String = "x-rincon-queue:$coordinatorUuid#0"
 
@@ -666,10 +707,7 @@ private fun soapRequest(controlUrl: String, serviceType: String, action: String,
         output.write(requestBytes)
         output.flush()
 
-        val rawResponse = socket.getInputStream().readFully()
-        val headerEnd = rawResponse.indexOf("\r\n\r\n")
-        val headerText = if (headerEnd >= 0) rawResponse.substring(0, headerEnd) else rawResponse
-        val responseBody = if (headerEnd >= 0) rawResponse.substring(headerEnd + 4) else ""
+        val (headerText, responseBody) = splitHttpResponse(socket.getInputStream().readBytes())
         val statusLine = headerText.lineSequence().firstOrNull().orEmpty()
         val statusCode = statusLine
             .split(' ')
@@ -694,6 +732,43 @@ private fun parseHeaderValue(payload: String, headerName: String): String? =
         ?.substringAfter(':')
         ?.trim()
         ?.takeIf { it.isNotBlank() }
+
+/**
+ * Splits a raw HTTP/1.1 response into header text and the UTF-8 body. Large replies (a
+ * queue Browse) arrive with `Transfer-Encoding: chunked`; the chunk sizes count bytes, so
+ * the body is de-chunked before decoding.
+ */
+internal fun splitHttpResponse(raw: ByteArray): Pair<String, String> {
+    var headerEnd = -1
+    for (i in 0..raw.size - 4) {
+        if (raw[i] == '\r'.code.toByte() && raw[i + 1] == '\n'.code.toByte() &&
+            raw[i + 2] == '\r'.code.toByte() && raw[i + 3] == '\n'.code.toByte()) { headerEnd = i; break }
+    }
+    if (headerEnd < 0) return String(raw, StandardCharsets.UTF_8) to ""
+    val headers = String(raw, 0, headerEnd, StandardCharsets.ISO_8859_1)
+    val body = raw.copyOfRange(headerEnd + 4, raw.size)
+    val chunked = headers.lineSequence().any {
+        it.substringBefore(':').trim().equals("Transfer-Encoding", true) && it.substringAfter(':').contains("chunked", true)
+    }
+    return headers to String(if (chunked) dechunk(body) else body, StandardCharsets.UTF_8)
+}
+
+private fun dechunk(body: ByteArray): ByteArray {
+    val out = java.io.ByteArrayOutputStream(body.size)
+    var pos = 0
+    while (pos < body.size) {
+        var lineEnd = pos
+        while (lineEnd + 1 < body.size && !(body[lineEnd] == '\r'.code.toByte() && body[lineEnd + 1] == '\n'.code.toByte())) lineEnd++
+        if (lineEnd + 1 >= body.size) break
+        val size = String(body, pos, lineEnd - pos, StandardCharsets.ISO_8859_1).substringBefore(';').trim().toIntOrNull(16) ?: break
+        if (size == 0) break
+        val start = lineEnd + 2
+        val end = (start + size).coerceAtMost(body.size)
+        out.write(body, start, end - start)
+        pos = end + 2
+    }
+    return out.toByteArray()
+}
 
 private fun InputStream.readFully(): String =
     bufferedReader(StandardCharsets.UTF_8).use { it.readText() }

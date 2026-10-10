@@ -28,6 +28,10 @@ import com.lux032.musicbridge.sonos.SonosRoom
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
@@ -791,6 +795,108 @@ internal class AppStatePlaybackCoordinator(
         }
     }
 
+    // --- Adopting the speaker's queue -------------------------------------------------------
+
+    private class AdoptedSonosQueue(
+        val tracks: List<PlexTrackStream>,
+        val reusedKnown: Boolean,
+        val refs: List<AdoptedQueueRef>,
+        val index: Int,
+        val status: SonosPlaybackStatus,
+        val playMode: PlaybackMode?,
+    )
+
+    /**
+     * Selecting a room while nothing renders here (idle, or the paused session restored
+     * after a cold start) first looks at the speaker: when it is already playing a 032
+     * queue — pushed earlier by this app or by the web panel — the player adopts it (track,
+     * position, pause state, play mode) instead of later re-pushing the stale saved session
+     * over it. Anything else on the speaker is left untouched and the selection stays as is.
+     */
+    private fun adoptSonosQueueIfPlaying(room: SonosRoom) {
+        val snapshot = state.miniPlayerState
+        val generation = playbackRequestGeneration.get()
+        val stillIdle = {
+            playbackRequestGeneration.get() == generation && state.miniPlayerState === snapshot &&
+                (state.selectedPlaybackTarget as? PlaybackTarget.Sonos)?.room?.coordinatorUuid == room.coordinatorUuid
+        }
+        state.scope.launch {
+            val adopted = try {
+                loadAdoptableSonosQueue(room, snapshot?.tracks.orEmpty())
+            } catch (cancel: CancellationException) {
+                throw cancel
+            } catch (error: Exception) {
+                Log.w(LOG_TAG, "sonos queue adopt probe failed: ${error.message}")
+                null
+            } ?: return@launch
+            if (!stillIdle()) return@launch
+            applyAdoptedSonosQueue(room, adopted, snapshot)
+        }
+    }
+
+    private suspend fun loadAdoptableSonosQueue(room: SonosRoom, known: List<PlexTrackStream>): AdoptedSonosQueue? {
+        val controller = state.sonosController
+        val status = controller.getPlaybackStatus(room)
+        if (status.transportState !in ADOPTABLE_TRANSPORT_STATES) return null
+        if (controller.getMediaUri(room)?.startsWith("x-rincon-queue:") != true) return null
+        val servers = state.serverProfiles.filter { it.type == MusicServerType.Music032 }.map { profile ->
+            Music032ServerRef(profile.id, profile.baseUrl, setOf(profile.mediaToken.trim(), profile.token.trim()).filter { it.isNotEmpty() }.toSet())
+        }
+        val refs = resolveAdoptableQueue(controller.browseQueue(room, SONOS_QUEUE_MAX_TRACKS + 1), servers) ?: return null
+        val index = resolveSonosQueueIndex(refs.map { it.entry() }, status) ?: return null
+        val reuse = reusableTracks(refs, known)
+        val tracks = if (reuse) known else fetchQueueTracks(refs) ?: return null
+        val playMode = runCatching { playbackModeFromSonos(controller.getPlayMode(room)) }.getOrNull()
+        return AdoptedSonosQueue(tracks, reuse, refs, index, status, playMode)
+    }
+
+    /** Loads the tracks of a foreign queue (e.g. pushed by the web panel); null if any is gone. */
+    private suspend fun fetchQueueTracks(refs: List<AdoptedQueueRef>): List<PlexTrackStream>? = coroutineScope {
+        val permits = Semaphore(ADOPT_FETCH_CONCURRENCY)
+        val unique = refs.map { it.sourceId to it.ratingKey }.distinct()
+        val fetched = unique.map { key ->
+            async {
+                permits.withPermit {
+                    key to state.clientFor(key.first).fetchTrackStream(key.second)
+                }
+            }
+        }.awaitAll().toMap()
+        refs.map { fetched[it.sourceId to it.ratingKey] ?: return@coroutineScope null }
+    }
+
+    private fun applyAdoptedSonosQueue(room: SonosRoom, adopted: AdoptedSonosQueue, snapshot: MiniPlayerState?) {
+        val track = adopted.tracks[adopted.index]
+        val ref = adopted.refs[adopted.index]
+        val position = ((adopted.status.relTimeSeconds ?: 0) * 1_000L + ref.offsetMs)
+            .let { p -> track.durationMillis?.let(p::coerceAtMost) ?: p }
+        Log.i(LOG_TAG, "adopt sonos queue room=${room.roomName} size=${adopted.tracks.size} index=${adopted.index} " +
+            "positionMs=$position reused=${adopted.reusedKnown}")
+        restoredQueue = null
+        nextPlaybackRequestGeneration()
+        state.albumPlaybackJob?.cancel()
+        state.playbackReportingJob?.cancel()
+        sonosQueue = SonosQueueSession(room.coordinatorUuid, adopted.refs.map { it.entry() })
+        activeSonosPlan = ActiveSonosPlan(ref.sourceId, ref.ratingKey, ref.kind, ref.url, ref.mime)
+        if (ref.kind == SonosPlanKind.LIVE_MP3) set032RestartSeek(track, ref.offsetMs)
+        adopted.playMode?.let { state.playbackMode = it }
+        state.selectPlaybackTarget(PlaybackTarget.Sonos(room))
+        state.volumeSyncKey += 1
+        syncSleepTimerRoom(room)
+        state.miniPlayerState = MiniPlayerState(
+            album = resolveAlbumForTrack(track, snapshot?.album?.takeIf { adopted.reusedKnown }),
+            tracks = adopted.tracks,
+            currentIndex = adopted.index,
+            target = PlaybackTarget.Sonos(room),
+            isPaused = adopted.status.transportState != "PLAYING" && adopted.status.transportState != "TRANSITIONING",
+            currentPositionMillis = position,
+            durationMillis = track.durationMillis,
+        )
+        startPlaybackReporting(room, adopted.tracks, adopted.index, position,
+            autoAdvanceWhenStopped = false, continueChain = true)
+        state.errorMessage = null
+        state.actionMessage = "已同步 ${room.roomName} 正在播放的队列"
+    }
+
     /** Mirrors a "play next" / "add to queue" into the speaker queue. */
     private fun enqueueIntoSonosQueue(
         room: SonosRoom,
@@ -1425,6 +1531,7 @@ internal class AppStatePlaybackCoordinator(
             state.selectPlaybackTarget(target)
             state.miniPlayerState = restored.copy(target = target)
             state.volumeSyncKey += 1
+            if (target is PlaybackTarget.Sonos) adoptSonosQueueIfPlaying(target.room)
             return
         }
         if (target == PlaybackTarget.LocalDevice) {
@@ -1438,6 +1545,7 @@ internal class AppStatePlaybackCoordinator(
                 is PlaybackTarget.Sonos -> "已选择 Sonos 房间: ${target.room.roomName}"
             }
             state.volumeSyncKey += 1
+            if (target is PlaybackTarget.Sonos) adoptSonosQueueIfPlaying(target.room)
             return
         }
         val sameTarget = when (target) {
@@ -2251,6 +2359,8 @@ internal class AppStatePlaybackCoordinator(
     private companion object {
         const val LOG_TAG = "MBPlayback"
         const val TRANSCODE_RESTART_STATE_GRACE_MILLIS = 4_000L
+        const val ADOPT_FETCH_CONCURRENCY = 8
+        val ADOPTABLE_TRANSPORT_STATES = setOf("PLAYING", "PAUSED_PLAYBACK", "TRANSITIONING")
     }
 
     private suspend fun reportTimelineSafely(

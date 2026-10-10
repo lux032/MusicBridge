@@ -3,6 +3,7 @@ package com.lux032.musicbridge
 import com.lux032.musicbridge.plex.PlexTrackStream
 import com.lux032.musicbridge.sonos.SonosController
 import com.lux032.musicbridge.sonos.SonosPlaybackStatus
+import com.lux032.musicbridge.sonos.SonosQueueBrowseEntry
 import com.lux032.musicbridge.sonos.SonosQueueItem
 import com.lux032.musicbridge.sonos.SonosRoom
 import com.sun.net.httpserver.HttpServer
@@ -88,6 +89,7 @@ class SonosQueueTest {
     private lateinit var server: HttpServer
     private val actions = mutableListOf<Pair<String, String>>()
     private var rejectBatch = false
+    private var browseQueue: List<String> = emptyList()
 
     @Before fun startFake() {
         server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
@@ -98,6 +100,16 @@ class SonosQueueTest {
             val fail = action == "AddMultipleURIsToQueue" && rejectBatch
             val inner = when (action) {
                 "GetMediaInfo" -> "<CurrentURI>x-sonosapi-stream:radio</CurrentURI><NrTracks>1</NrTracks>"
+                "GetTransportSettings" -> "<PlayMode>SHUFFLE_NOREPEAT</PlayMode>"
+                "Browse" -> {
+                    val start = Regex("<StartingIndex>(\\d+)</StartingIndex>").find(body)!!.groupValues[1].toInt()
+                    val page = browseQueue.drop(start).take(100)
+                    val didl = "<DIDL-Lite xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns=\"urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/\">" +
+                        page.joinToString("") { "<item id=\"Q:0/x\"><dc:title>t</dc:title><res protocolInfo=\"http-get:*:audio/flac:*\">${it.replace("&", "&amp;")}</res></item>" } +
+                        "</DIDL-Lite>"
+                    "<Result>${didl.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")}</Result>" +
+                        "<NumberReturned>${page.size}</NumberReturned><TotalMatches>${browseQueue.size}</TotalMatches>"
+                }
                 else -> ""
             }
             val response = if (fail) {
@@ -106,7 +118,8 @@ class SonosQueueTest {
                 "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\"><s:Body><u:${action}Response xmlns:u=\"x\">$inner</u:${action}Response></s:Body></s:Envelope>"
             }
             val bytes = response.toByteArray()
-            exchange.sendResponseHeaders(if (fail) 500 else 200, bytes.size.toLong())
+            // Real speakers send large replies (Browse) chunked.
+            exchange.sendResponseHeaders(if (fail) 500 else 200, if (action == "Browse") 0L else bytes.size.toLong())
             exchange.responseBody.use { it.write(bytes) }
         }
         server.start()
@@ -134,6 +147,98 @@ class SonosQueueTest {
         rejectBatch = true
         SonosController().replaceQueue(room(), items(3), startIndex = 0)
         assertEquals(3, actions.count { it.first == "AddURIToQueue" })
+    }
+
+    @Test fun chunkedResponsesAreDecodedByBytes() {
+        val body = "<r>卧室 音乐</r>".toByteArray(Charsets.UTF_8)
+        // Split inside a multi-byte character, as a speaker may do.
+        val first = body.copyOfRange(0, 5)
+        val second = body.copyOfRange(5, body.size)
+        val raw = java.io.ByteArrayOutputStream().apply {
+            write("HTTP/1.1 200 OK\r\nTRANSFER-ENCODING: chunked\r\n\r\n".toByteArray())
+            write("${first.size.toString(16)}\r\n".toByteArray()); write(first); write("\r\n".toByteArray())
+            write("${second.size.toString(16)};ext=1\r\n".toByteArray()); write(second); write("\r\n0\r\n\r\n".toByteArray())
+        }.toByteArray()
+        val (headers, decoded) = com.lux032.musicbridge.sonos.splitHttpResponse(raw)
+        assertTrue(headers.startsWith("HTTP/1.1 200"))
+        assertEquals("<r>卧室 音乐</r>", decoded)
+        val plain = com.lux032.musicbridge.sonos.splitHttpResponse("HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\n<a/>".toByteArray())
+        assertEquals("<a/>", plain.second)
+    }
+
+    @Test fun browseQueueReadsAllPages() = runBlocking {
+        browseQueue = (1..230).map { "http://10.0.0.2:4533/api/v1/tracks/$it/stream?mediaToken=t&x=1" }
+        val controller = SonosController()
+        val read = controller.browseQueue(room())
+        assertEquals(230, read.size)
+        assertEquals(browseQueue[229], read[229].url)
+        assertEquals("audio/flac", read[0].mimeType)
+        assertEquals(3, actions.count { it.first == "Browse" })
+        assertEquals("x-sonosapi-stream:radio", controller.getMediaUri(room()))
+        assertEquals("SHUFFLE_NOREPEAT", controller.getPlayMode(room()))
+    }
+
+    private val servers = listOf(
+        Music032ServerRef("home", "https://music.example.com:7085", setOf("media-tok", "api-tok")),
+        Music032ServerRef("other", "http://192.168.9.9:4533", setOf("other-tok")),
+    )
+
+    private fun browsed(vararg urls: String) = urls.map { SonosQueueBrowseEntry(it, "audio/flac") }
+
+    @Test fun adoptsWebPanelQueueByMediaTokenAcrossHosts() {
+        // The web panel pushes LAN addresses; the app profile uses the public domain.
+        val refs = resolveAdoptableQueue(browsed(
+            "http://192.168.50.10:4533/api/v1/tracks/12/stream?mediaToken=media-tok",
+            "http://192.168.50.10:4533/api/v1/tracks/13/transcode.flac?mediaToken=media-tok&maxSampleRate=48000",
+            "http://192.168.50.10:4533/api/v1/tracks/14/transcode.mp3?mediaToken=media-tok&bitrate=320&offsetMs=65000",
+        ), servers)!!
+        assertEquals(listOf("home", "home", "home"), refs.map { it.sourceId })
+        assertEquals(listOf("12", "13", "14"), refs.map { it.ratingKey })
+        assertEquals(listOf(SonosPlanKind.ORIGINAL, SonosPlanKind.STATIC_FLAC, SonosPlanKind.LIVE_MP3), refs.map { it.kind })
+        assertEquals(65_000L, refs[2].offsetMs)
+        assertFalse(refs[2].url.contains("offsetMs"))
+        assertEquals("audio/flac", refs[0].mime)
+    }
+
+    @Test fun adoptionFallsBackToBaseUrlAndRejectsForeignQueues() {
+        val byHost = resolveAdoptableQueue(browsed("http://192.168.9.9:4533/api/v1/tracks/5/stream?mediaToken=rotated"), servers)!!
+        assertEquals("other", byHost.single().sourceId)
+        // A subpath deployment behind a reverse proxy.
+        val sub = resolveAdoptableQueue(browsed("https://h/music/api/v1/tracks/7/stream?mediaToken=media-tok"), servers)!!
+        assertEquals("7", sub.single().ratingKey)
+        // Any foreign entry (Plex, streaming service, no token) leaves the speaker alone.
+        assertNull(resolveAdoptableQueue(browsed(
+            "http://192.168.50.10:4533/api/v1/tracks/12/stream?mediaToken=media-tok",
+            "http://10.0.0.3:32400/library/parts/99/file.flac?X-Plex-Token=x",
+        ), servers))
+        assertNull(resolveAdoptableQueue(browsed("x-sonos-spotify:spotify%3atrack%3a1?sid=9"), servers))
+        assertNull(resolveAdoptableQueue(browsed("http://192.168.50.10:4533/api/v1/tracks/12/stream"), servers))
+        assertNull(resolveAdoptableQueue(emptyList(), servers))
+        assertNull(resolveAdoptableQueue(browsed("http://h/api/v1/tracks/1/stream?mediaToken=x"), emptyList()))
+        // With one 032 server an unknown token / host still maps to it.
+        assertEquals("home", resolveAdoptableQueue(browsed("http://x:1/api/v1/tracks/1/stream?mediaToken=x"), servers.take(1))!!.single().sourceId)
+    }
+
+    @Test fun adoptedQueueResolvesPositionAndReusesSavedSession() {
+        val refs = resolveAdoptableQueue(browsed(
+            "http://192.168.50.10:4533/api/v1/tracks/1/stream?mediaToken=media-tok",
+            "http://192.168.50.10:4533/api/v1/tracks/2/transcode.mp3?mediaToken=media-tok&bitrate=320&offsetMs=5000",
+        ), servers)!!
+        val status = SonosPlaybackStatus("PLAYING",
+            "http://192.168.50.10:4533/api/v1/tracks/2/transcode.mp3?mediaToken=media-tok&bitrate=320&offsetMs=5000", 10, 200, 2)
+        assertEquals(1, resolveSonosQueueIndex(refs.map { it.entry() }, status))
+        val saved = listOf(track("1", "home"), track("2", "home"))
+        assertTrue(reusableTracks(refs, saved))
+        assertFalse(reusableTracks(refs, saved.reversed()))
+        assertFalse(reusableTracks(refs, listOf(track("1", "other"), track("2", "other"))))
+    }
+
+    @Test fun sonosPlayModesMapBack() {
+        assertEquals(PlaybackMode.Sequential, playbackModeFromSonos("NORMAL"))
+        assertEquals(PlaybackMode.RepeatAll, playbackModeFromSonos("REPEAT_ALL"))
+        assertEquals(PlaybackMode.RepeatOne, playbackModeFromSonos("REPEAT_ONE"))
+        assertEquals(PlaybackMode.Shuffle, playbackModeFromSonos("SHUFFLE"))
+        assertNull(playbackModeFromSonos(null))
     }
 
     @Test fun insertAndJumpReselectQueue() = runBlocking {
