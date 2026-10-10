@@ -991,7 +991,9 @@ class AppState(
             withContext(playbackSessionIo) { playbackSessionStore.clear() }
             return
         }
-        val target = saved.sonosRoom?.let { PlaybackTarget.Sonos(it) } ?: PlaybackTarget.LocalDevice
+        // Restore the queue and progress, not the output device: every cold start uses
+        // this device, even when the saved session was playing on Sonos.
+        val target = PlaybackTarget.LocalDevice
         playbackMode = saved.playbackMode
         selectPlaybackTarget(target)
         miniPlayerState = MiniPlayerState(
