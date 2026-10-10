@@ -294,6 +294,120 @@ class SonosController {
         )
     }
 
+    // --- Device-side play queue -------------------------------------------------------
+    // Album/playlist pushes load the whole list into the speaker's own queue and point the
+    // transport at it (x-rincon-queue), so Sonos advances by itself: playback continues
+    // with the phone asleep, offline or the app killed.
+
+    /** Replaces the room's queue with [items] and starts [startIndex] (0-based). */
+    suspend fun replaceQueue(
+        room: SonosRoom,
+        items: List<SonosQueueItem>,
+        startIndex: Int,
+        positionSeconds: Int = 0,
+        play: Boolean = true,
+    ) = withContext(Dispatchers.IO) {
+        avTransport(room, "RemoveAllTracksFromQueue")
+        appendToQueue(room, items)
+        if (items.isEmpty()) return@withContext
+        useQueue(room)
+        retryWhileTransitioning {
+            avTransport(room, "Seek", "<Unit>TRACK_NR</Unit><Target>${startIndex.coerceIn(0, items.lastIndex) + 1}</Target>")
+        }
+        if (!play) return@withContext
+        avTransport(room, "Play", "<Speed>1</Speed>")
+        if (positionSeconds > 0) retryWhileTransitioning { seek(room, positionSeconds) }
+    }
+
+    /** Inserts [items] before queue position [atIndex] (0-based; out of range appends). */
+    suspend fun insertIntoQueue(room: SonosRoom, items: List<SonosQueueItem>, atIndex: Int) =
+        withContext(Dispatchers.IO) {
+            if (atIndex < 0) {
+                appendToQueue(room, items)
+            } else {
+                items.forEachIndexed { offset, item -> addToQueue(room, item, atIndex + 1 + offset) }
+            }
+        }
+
+    /** Swaps one queue entry (e.g. a live transcode re-opened at an offset). */
+    suspend fun replaceQueueItem(room: SonosRoom, index: Int, item: SonosQueueItem) = withContext(Dispatchers.IO) {
+        avTransport(room, "RemoveTrackFromQueue", "<ObjectID>Q:0/${index + 1}</ObjectID><UpdateID>0</UpdateID>")
+        addToQueue(room, item, index + 1)
+    }
+
+    /** Jumps to queue position [index] (0-based) and plays, re-selecting the queue if needed. */
+    suspend fun playQueueIndex(room: SonosRoom, index: Int, positionSeconds: Int = 0) = withContext(Dispatchers.IO) {
+        val media = parseXml(avTransport(room, "GetMediaInfo"))
+        if (media.textOfFirstTag("CurrentURI")?.startsWith("x-rincon-queue:") != true) useQueue(room)
+        retryWhileTransitioning {
+            avTransport(room, "Seek", "<Unit>TRACK_NR</Unit><Target>${index + 1}</Target>")
+        }
+        avTransport(room, "Play", "<Speed>1</Speed>")
+        if (positionSeconds > 0) retryWhileTransitioning { seek(room, positionSeconds) }
+    }
+
+    suspend fun setPlayMode(room: SonosRoom, mode: String) = withContext(Dispatchers.IO) {
+        avTransport(room, "SetPlayMode", "<NewPlayMode>${xmlEscape(mode)}</NewPlayMode>")
+    }
+
+    private fun useQueue(room: SonosRoom) {
+        avTransport(
+            room,
+            "SetAVTransportURI",
+            "<CurrentURI>${xmlEscape(sonosQueueUri(room.coordinatorUuid))}</CurrentURI><CurrentURIMetaData></CurrentURIMetaData>",
+        )
+    }
+
+    /** Appends in AddMultipleURIsToQueue batches of 16; old firmware falls back to single adds. */
+    private fun appendToQueue(room: SonosRoom, items: List<SonosQueueItem>) {
+        items.chunked(SONOS_QUEUE_BATCH).forEachIndexed { chunkIndex, chunk ->
+            val batch = runCatching {
+                avTransport(
+                    room,
+                    "AddMultipleURIsToQueue",
+                    "<UpdateID>0</UpdateID><NumberOfURIs>${chunk.size}</NumberOfURIs>" +
+                        "<EnqueuedURIs>${xmlEscape(chunk.joinToString(" ") { it.url })}</EnqueuedURIs>" +
+                        "<EnqueuedURIsMetaData>${xmlEscape(chunk.joinToString(" ") { it.didl() })}</EnqueuedURIsMetaData>" +
+                        "<ContainerURI></ContainerURI><ContainerMetaData></ContainerMetaData>" +
+                        "<DesiredFirstTrackNumberEnqueued>0</DesiredFirstTrackNumberEnqueued><EnqueueAsNext>0</EnqueueAsNext>",
+                )
+            }
+            if (batch.isFailure) {
+                items.drop(chunkIndex * SONOS_QUEUE_BATCH).forEach { addToQueue(room, it, 0) }
+                return
+            }
+        }
+    }
+
+    private fun addToQueue(room: SonosRoom, item: SonosQueueItem, desiredTrackNumber: Int) {
+        avTransport(
+            room,
+            "AddURIToQueue",
+            "<EnqueuedURI>${xmlEscape(item.url)}</EnqueuedURI><EnqueuedURIMetaData>${xmlEscape(item.didl())}</EnqueuedURIMetaData>" +
+                "<DesiredFirstTrackNumberEnqueued>$desiredTrackNumber</DesiredFirstTrackNumberEnqueued><EnqueueAsNext>0</EnqueueAsNext>",
+        )
+    }
+
+    private fun avTransport(room: SonosRoom, action: String, args: String = ""): String = soapRequest(
+        controlUrl = "${room.coordinatorBaseUrl}/MediaRenderer/AVTransport/Control",
+        serviceType = "urn:schemas-upnp-org:service:AVTransport:1",
+        action = action,
+        innerXml = "<InstanceID>0</InstanceID>$args",
+    )
+
+    /** Sonos answers 701 while still TRANSITIONING right after Play / SetAVTransportURI. */
+    private suspend fun retryWhileTransitioning(block: suspend () -> Unit) {
+        var last: Throwable? = null
+        repeat(6) {
+            val result = runCatching { block() }
+            if (result.isSuccess) return
+            last = result.exceptionOrNull()
+            if (last?.message?.contains("<errorCode>701</errorCode>") != true) throw last!!
+            kotlinx.coroutines.delay(300)
+        }
+        throw last!!
+    }
+
     suspend fun pause(room: SonosRoom) = withContext(Dispatchers.IO) {
         soapRequest(
             controlUrl = "${room.coordinatorBaseUrl}/MediaRenderer/AVTransport/Control",
@@ -348,6 +462,7 @@ class SonosController {
         SonosPlaybackStatus(
             transportState = transportRoot.textOfFirstTag("CurrentTransportState").orEmpty(),
             currentTrackUri = positionRoot.textOfFirstTag("TrackURI"),
+            queueTrackNumber = positionRoot.textOfFirstTag("Track")?.toIntOrNull(),
             relTimeSeconds = positionRoot.textOfFirstTag("RelTime")?.toDurationSeconds(),
             trackDurationSeconds = positionRoot.textOfFirstTag("TrackDuration")?.toDurationSeconds(),
         )
@@ -401,7 +516,34 @@ data class SonosPlaybackStatus(
     val currentTrackUri: String?,
     val relTimeSeconds: Int?,
     val trackDurationSeconds: Int?,
+    /** 1-based queue position while the transport plays the queue. */
+    val queueTrackNumber: Int? = null,
 )
+
+/** One entry of the Sonos device queue with its DIDL-Lite metadata. */
+data class SonosQueueItem(
+    val url: String,
+    val title: String,
+    val albumTitle: String?,
+    val artist: String? = null,
+    val albumArtUrl: String? = null,
+    val mimeType: String? = null,
+    val durationMillis: Long? = null,
+) {
+    fun didl(): String = buildTrackMetadata(
+        trackUrl = url,
+        title = title,
+        albumTitle = albumTitle.orEmpty(),
+        mimeType = mimeType,
+        creator = artist,
+        albumArtUrl = albumArtUrl,
+        durationMillis = durationMillis,
+    )
+}
+
+private const val SONOS_QUEUE_BATCH = 16
+
+internal fun sonosQueueUri(coordinatorUuid: String): String = "x-rincon-queue:$coordinatorUuid#0"
 
 private fun buildTrackMetadata(
     trackUrl: String,
@@ -409,6 +551,8 @@ private fun buildTrackMetadata(
     albumTitle: String,
     mimeType: String? = null,
     creator: String? = null,
+    albumArtUrl: String? = null,
+    durationMillis: Long? = null,
 ): String = buildString {
     val protocolInfo = "http-get:*:${mimeType?.takeIf { it.isNotBlank() } ?: guessMimeType(trackUrl)}:*"
     append("""<DIDL-Lite xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/" xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/">""")
@@ -416,10 +560,15 @@ private fun buildTrackMetadata(
     append("<dc:title>${xmlEscape(title)}</dc:title>")
     creator?.takeIf { it.isNotBlank() }?.let {
         append("<dc:creator>${xmlEscape(it)}</dc:creator>")
+        append("<upnp:artist>${xmlEscape(it)}</upnp:artist>")
     }
     append("<upnp:album>${xmlEscape(albumTitle)}</upnp:album>")
+    albumArtUrl?.takeIf { it.isNotBlank() }?.let {
+        append("<upnp:albumArtURI>${xmlEscape(it)}</upnp:albumArtURI>")
+    }
     append("<upnp:class>object.item.audioItem.musicTrack</upnp:class>")
-    append("""<res protocolInfo="$protocolInfo">${xmlEscape(trackUrl)}</res>""")
+    val duration = durationMillis?.takeIf { it > 0L }?.let { """ duration="${(it / 1000L).toInt().toSonosDuration()}.000"""" }.orEmpty()
+    append("""<res protocolInfo="$protocolInfo"$duration>${xmlEscape(trackUrl)}</res>""")
     append("</item></DIDL-Lite>")
 }
 

@@ -23,6 +23,7 @@ import com.lux032.musicbridge.plex.withSonosHiResTranscodeMode
 import com.lux032.musicbridge.service.PlaybackForegroundService
 import com.lux032.musicbridge.sonos.SonosDiscovery
 import com.lux032.musicbridge.sonos.SonosPlaybackStatus
+import com.lux032.musicbridge.sonos.SonosQueueItem
 import com.lux032.musicbridge.sonos.SonosRoom
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -110,6 +111,12 @@ internal class AppStatePlaybackCoordinator(
     private var pending032Fallback = false
     private var current032Fallback = false
 
+    /** The speaker-side queue loaded by [startQueuePlaybackOnSonos]; null in push mode. */
+    @Volatile private var sonosQueue: SonosQueueSession? = null
+
+    private fun sonosQueueFor(room: SonosRoom?, tracks: List<PlexTrackStream>): SonosQueueSession? =
+        sonosQueue?.takeIf { room != null && it.roomUuid == room.coordinatorUuid && it.mirrors(tracks) }
+
     private fun is032Source(track: PlexTrackStream): Boolean =
         runCatching { state.clientFor(track.sourceId) is Music032Client }.getOrNull()
             ?: Music032TranscodeUrls.isOriginalStream(track.streamUrl)
@@ -186,6 +193,7 @@ internal class AppStatePlaybackCoordinator(
     init {
         SleepTimerController.onExpired = { room ->
             activeSonosPlan = null
+            sonosQueue = null
             pending032Plan = null
             playbackRequestGeneration.incrementAndGet()
             state.albumPlaybackJob?.cancel()
@@ -243,6 +251,10 @@ internal class AppStatePlaybackCoordinator(
         continueChain: Boolean = false,
     ) {
         val targetTrack = tracks.getOrNull(trackIndex) ?: return
+        if (canUseSonosQueue(tracks, ::is032Source)) {
+            startQueuePlaybackOnSonos(album, tracks, trackIndex, room, initialPositionMillis, continueChain)
+            return
+        }
         val resumesLiveTranscodeDirectMp3 = initialPositionMillis > 0L && !is032Source(targetTrack) && targetTrack.isConfiguredDirectMp3()
         transcodeRestartSeek = if (resumesLiveTranscodeDirectMp3) {
             TranscodeRestartSeek(
@@ -378,6 +390,11 @@ internal class AppStatePlaybackCoordinator(
         initialPositionMillis: Long,
         continueChain: Boolean = false,
     ) {
+        if (canUseSonosQueue(albumTrackResult.tracks, ::is032Source)) {
+            startQueuePlaybackOnSonos(albumTrackResult.album, albumTrackResult.tracks, startIndex, room,
+                initialPositionMillis, continueChain)
+            return
+        }
         val initialTrack = albumTrackResult.tracks.getOrNull(startIndex)
         val resumesLiveTranscodeDirectMp3 = initialPositionMillis > 0L && initialTrack != null && !is032Source(initialTrack) && initialTrack.isConfiguredDirectMp3()
         transcodeRestartSeek = if (resumesLiveTranscodeDirectMp3) {
@@ -553,6 +570,256 @@ internal class AppStatePlaybackCoordinator(
                     state.errorMessage = error.message ?: "未知错误"
                     state.isPlaybackCommandLoading = false
                 }
+            }
+        }
+    }
+
+    // --- Sonos device queue ---------------------------------------------------------------
+
+    /**
+     * Loads [tracks] into the speaker's own queue and starts [startIndex]. Sonos then plays
+     * the list by itself; the reporting loop only follows its position. The first track is
+     * prepared (hydrated / FLAC warmed) before the push, the rest warm in the background.
+     */
+    private fun startQueuePlaybackOnSonos(
+        album: PlexAlbum,
+        tracks: List<PlexTrackStream>,
+        startIndex: Int,
+        room: SonosRoom,
+        initialPositionMillis: Long,
+        continueChain: Boolean,
+    ) {
+        val startTrack = tracks.getOrNull(startIndex) ?: return
+        transcodeRestartSeek = null
+        val requestGeneration = nextPlaybackRequestGeneration()
+        val displayAlbum = resolveAlbumForTrack(startTrack, album)
+        val offset = initialPositionMillis.coerceAtLeast(0L)
+        stopLocalPlaybackForSonosHandover()
+        state.albumPlaybackJob?.cancel()
+        state.playbackReportingJob?.cancel()
+        state.appPreferences.markAlbumPlayed(displayAlbum.sourceId, displayAlbum.ratingKey)
+        state.recentPlayedAlbumKeys = state.appPreferences.loadRecentPlayedAlbumKeys(displayAlbum.sourceId)
+        state.selectPlaybackTarget(PlaybackTarget.Sonos(room))
+        state.volumeSyncKey += 1
+        syncSleepTimerRoom(room)
+        state.miniPlayerState = MiniPlayerState(
+            album = displayAlbum,
+            tracks = tracks,
+            currentIndex = startIndex,
+            target = PlaybackTarget.Sonos(room),
+            isPaused = false,
+            currentPositionMillis = offset,
+            durationMillis = startTrack.durationMillis,
+        )
+        PlaybackForegroundService.start(
+            context = state.context,
+            title = startTrack.title,
+            subtitle = "正在推送到 ${room.roomName}",
+            isPaused = false,
+            artworkUrl = startTrack.thumbUrl,
+        )
+        state.isPlaybackCommandLoading = true
+        state.errorMessage = null
+        state.actionMessage = null
+        state.albumPlaybackJob = state.scope.launch {
+            runCatching {
+                val prepared = prepareSonosTrack(startTrack) { isCurrentPlaybackRequest(requestGeneration) }
+                ensureCurrentPlaybackRequest(requestGeneration)
+                val startPlan = prepared.plan ?: error(Strings.music032SonosFallbackUnavailable)
+                val startUrl = if (startPlan.kind == SonosPlanKind.LIVE_MP3)
+                    Music032TranscodeUrls.withOffsetMs(startPlan.url, offset, prepared.track.durationMillis)
+                else startPlan.url
+                val entries = tracks.mapIndexed { index, track ->
+                    if (index == startIndex) {
+                        SonosQueueEntry(track.sourceId, track.ratingKey, startPlan.kind, startPlan.url, startPlan.mime)
+                    } else {
+                        sonosQueueEntryFor(hydrate032Track(track))
+                    }
+                }
+                val items = entries.mapIndexed { index, entry ->
+                    sonosQueueItem(tracks[index], if (index == startIndex) entry.copy(url = startUrl) else entry, displayAlbum)
+                }
+                state.plexTranscodeProxy.cancelPendingDownload()
+                state.sonosController.replaceQueue(
+                    room = room,
+                    items = items,
+                    startIndex = startIndex,
+                    positionSeconds = if (shouldSonosSeekAfterPush(startPlan.kind, offset)) (offset / 1_000L).toInt() else 0,
+                )
+                ensureCurrentPlaybackRequest(requestGeneration)
+                sonosQueue = SonosQueueSession(room.coordinatorUuid, entries)
+                record032Plan(prepared.track, startPlan, startUrl)
+                current032Fallback = startPlan.fellBackFromFlac
+                set032RestartSeek(prepared.track, if (startPlan.kind == SonosPlanKind.LIVE_MP3) offset else 0L)
+                runCatching { state.sonosController.setPlayMode(room, sonosPlayModeFor(state.playbackMode)) }
+                entries
+            }.onSuccess { entries ->
+                if (isCurrentPlaybackRequest(requestGeneration)) {
+                    state.isPlaybackCommandLoading = false
+                    startPlaybackReporting(
+                        room,
+                        tracks,
+                        startIndex,
+                        offset,
+                        autoAdvanceWhenStopped = false,
+                        continueChain = continueChain,
+                    )
+                    state.actionMessage = sonosPushMessage(
+                        if (tracks.size > 1) "已将 ${tracks.size} 首加入 ${room.roomName} 的播放队列"
+                        else "已将 ${startTrack.title} 推送到 ${room.roomName}",
+                        current032Fallback,
+                    )
+                    warmSonosQueue(entries, startIndex)
+                }
+            }.onFailure { error ->
+                if (error !is CancellationException && isCurrentPlaybackRequest(requestGeneration)) {
+                    state.errorMessage = error.message ?: "未知错误"
+                    state.isPlaybackCommandLoading = false
+                }
+            }
+        }
+    }
+
+    /** Plans one queue entry without blocking (no FLAC warm-up; see [warmSonosQueue]). */
+    private fun sonosQueueEntryFor(track: PlexTrackStream): SonosQueueEntry {
+        val caps = (runCatching { state.clientFor(track.sourceId) }.getOrNull() as? Music032Client)?.capabilities()
+        val original = SonosPlan(track.streamUrl, Music032Json.original032MimeType(track.sourceAudioCodec, null), SonosPlanKind.ORIGINAL)
+        val plan = plan032(track, state.opusTranscodeMode, state.sonosHiResTranscodeMode, caps).getOrDefault(original)
+        return SonosQueueEntry(track.sourceId, track.ratingKey, plan.kind, plan.url, plan.mime ?: track.playbackMimeType)
+    }
+
+    private fun sonosQueueItem(track: PlexTrackStream, entry: SonosQueueEntry, album: PlexAlbum?): SonosQueueItem =
+        SonosQueueItem(
+            url = entry.url,
+            title = track.title,
+            albumTitle = track.albumTitle ?: album?.title,
+            artist = track.artistName,
+            albumArtUrl = track.thumbUrl,
+            mimeType = entry.mime,
+            durationMillis = track.durationMillis,
+        )
+
+    /**
+     * Builds the 48 kHz FLAC cache of the queued hi-res tracks in play order, so the speaker
+     * finds them ready later; stops as soon as the queue is replaced. Without the app the
+     * server still builds a missing entry on the speaker's first request.
+     */
+    private fun warmSonosQueue(entries: List<SonosQueueEntry>, startIndex: Int) {
+        val pending = (1..entries.size).map { entries[(startIndex + it) % entries.size] }
+            .filter { it.kind == SonosPlanKind.STATIC_FLAC }
+            .distinctBy { it.url }
+        if (pending.isEmpty()) return
+        val isCurrent = { sonosQueue?.entries?.any { e -> e.url == pending.first().url } == true }
+        state.scope.launch(Dispatchers.IO) {
+            for (entry in pending) {
+                if (!isCurrent()) break
+                try {
+                    Music032Warmup.prepare(entry.url, budgetMillis = 300_000L, isCurrent = isCurrent)
+                } catch (cancel: CancellationException) {
+                    break
+                } catch (_: Exception) { /* Best effort: the server builds it on demand. */ }
+            }
+        }
+    }
+
+    /** Queue-panel tap / next / previous / resume inside a loaded speaker queue. */
+    private fun jumpWithinSonosQueue(
+        session: SonosQueueSession,
+        playerState: MiniPlayerState,
+        index: Int,
+        positionMillis: Long,
+        room: SonosRoom,
+    ) {
+        val track = playerState.tracks[index]
+        val entry = session.entries[index]
+        val position = positionMillis.coerceAtLeast(0L)
+        val commandGeneration = playbackToggleGeneration.incrementAndGet()
+        activeSonosPlan = ActiveSonosPlan(entry.sourceId, entry.ratingKey, entry.kind, entry.url, entry.mime)
+        transcodeRestartSeek = null
+        state.miniPlayerState = playerState.copy(
+            album = resolveAlbumForTrack(track, playerState.album),
+            currentIndex = index,
+            isPaused = false,
+            currentPositionMillis = position,
+            durationMillis = track.durationMillis,
+        )
+        state.isPlaybackCommandLoading = true
+        state.errorMessage = null
+        state.scope.launch {
+            runCatching {
+                if (entry.kind == SonosPlanKind.LIVE_MP3) {
+                    // A live MP3 cannot seek: re-open the entry at the offset (or from 0).
+                    val url = Music032TranscodeUrls.withOffsetMs(entry.url, position, track.durationMillis)
+                    state.sonosController.replaceQueueItem(room, index, sonosQueueItem(track, entry.copy(url = url), playerState.album))
+                    set032RestartSeek(track, position)
+                    state.sonosController.playQueueIndex(room, index)
+                } else {
+                    state.sonosController.playQueueIndex(room, index, (position / 1_000L).toInt())
+                }
+            }.onSuccess {
+                if (commandGeneration == playbackToggleGeneration.get()) {
+                    state.actionMessage = sonosPushMessage("正在播放：${track.title}", false)
+                }
+            }.onFailure { error ->
+                if (error !is CancellationException && commandGeneration == playbackToggleGeneration.get()) {
+                    state.errorMessage = error.message ?: "未知错误"
+                }
+            }
+            if (commandGeneration == playbackToggleGeneration.get()) state.isPlaybackCommandLoading = false
+            if (state.playbackReportingJob?.isActive != true && sonosQueue === session) {
+                startPlaybackReporting(room, playerState.tracks, index, position,
+                    autoAdvanceWhenStopped = false, continueChain = true)
+            }
+        }
+    }
+
+    /**
+     * Re-points the current track at [url] (live transcode resume / seek). In queue mode the
+     * queue entry is swapped in place so Sonos keeps advancing through the rest of the queue.
+     */
+    private suspend fun pushSonosUrl(room: SonosRoom, track: PlexTrackStream, url: String, albumTitle: String, mime: String?) {
+        val player = state.miniPlayerState
+        val session = player?.let { sonosQueueFor(room, it.tracks) }
+        val index = player?.currentIndex ?: -1
+        val entry = session?.entries?.getOrNull(index)
+        if (entry != null && entry.ratingKey == track.ratingKey && entry.sourceId == track.sourceId) {
+            state.sonosController.replaceQueueItem(room, index, SonosQueueItem(url, track.title, albumTitle,
+                track.artistName, track.thumbUrl, mime, track.durationMillis))
+            state.sonosController.playQueueIndex(room, index)
+        } else {
+            state.sonosController.playTrack(room, url, track.title, albumTitle, mime)
+        }
+    }
+
+    /** Mirrors a "play next" / "add to queue" into the speaker queue. */
+    private fun enqueueIntoSonosQueue(
+        room: SonosRoom,
+        session: SonosQueueSession,
+        insertIndex: Int,
+        tracks: List<PlexTrackStream>,
+        previousSize: Int,
+    ) {
+        if (!canUseSonosQueue(tracks, ::is032Source)) {
+            // Non-032 tracks cannot live in the speaker queue; it keeps playing on its own.
+            sonosQueue = null
+            return
+        }
+        val added = tracks.map(::sonosQueueEntryFor)
+        val updated = session.copy(entries = session.entries.toMutableList().apply { addAll(insertIndex, added) })
+        sonosQueue = updated
+        state.scope.launch {
+            runCatching {
+                state.sonosController.insertIntoQueue(
+                    room,
+                    added.mapIndexed { i, entry -> sonosQueueItem(tracks[i], entry, null) },
+                    if (insertIndex >= previousSize) -1 else insertIndex,
+                )
+            }.onSuccess {
+                warmSonosQueue(updated.entries, (insertIndex - 1).coerceAtLeast(0))
+            }.onFailure { error ->
+                if (error is CancellationException) return@onFailure
+                if (sonosQueue === updated) sonosQueue = null
+                state.errorMessage = error.message ?: "无法加入 Sonos 队列"
             }
         }
     }
@@ -738,6 +1005,10 @@ internal class AppStatePlaybackCoordinator(
             sourceId = playlistResult.playlist.sourceId.ifBlank { tracks.firstOrNull()?.sourceId.orEmpty() },
         )
         val initialAlbum = tracks.firstOrNull()?.let { resolveAlbumForTrack(it, fakeAlbum) } ?: fakeAlbum
+        if (canUseSonosQueue(tracks, ::is032Source)) {
+            startQueuePlaybackOnSonos(fakeAlbum, tracks, 0, room, 0L, continueChain = false)
+            return
+        }
         state.miniPlayerState = MiniPlayerState(
             album = initialAlbum,
             tracks = tracks,
@@ -934,8 +1205,7 @@ internal class AppStatePlaybackCoordinator(
                         }
                         val outcome = runCatching {
                             state.plexTranscodeProxy.cancelPendingDownload()
-                            state.sonosController.playTrack(room, url, currentTrack.title,
-                                currentTrack.albumTitle ?: latest.album.title, active032.mime)
+                            pushSonosUrl(room, currentTrack, url, currentTrack.albumTitle ?: latest.album.title, active032.mime)
                         }
                         if (commandGeneration == playbackToggleGeneration.get() && activePlanFor(currentTrack) == active032) {
                             outcome.onSuccess {
@@ -996,6 +1266,12 @@ internal class AppStatePlaybackCoordinator(
 
     fun updatePlaybackMode(mode: PlaybackMode) {
         state.playbackMode = mode
+        state.miniPlayerState?.let { player ->
+            val room = player.sonosRoom
+            if (room != null && sonosQueueFor(room, player.tracks) != null) {
+                state.scope.launch { runCatching { state.sonosController.setPlayMode(room, sonosPlayModeFor(mode)) } }
+            }
+        }
         if (state.miniPlayerState?.target == PlaybackTarget.LocalDevice) {
             state.localPlaybackCoordinator.applyPlaybackMode(mode)
         }
@@ -1056,6 +1332,7 @@ internal class AppStatePlaybackCoordinator(
             PlaybackTarget.LocalDevice -> {
                 activeSonosPlan = null
                 pending032Plan = null
+                sonosQueue = null
                 if (playerState.target == PlaybackTarget.LocalDevice) {
                     // Same renderer: seek inside the live ExoPlayer queue.
                     state.localPlaybackCoordinator.playLocalIndex(targetIndex, positionMillis)
@@ -1113,6 +1390,13 @@ internal class AppStatePlaybackCoordinator(
             ?.let {
                 state.music032ReporterFor(it.sourceId)?.requestEnd(ReporterEndReason.Skipped)
             }
+        // Queue mode: the speaker already holds the list — just jump inside it.
+        val queueSession = sonosQueueFor(targetRoom, playerState.tracks)
+            ?.takeIf { playerState.sonosRoom?.coordinatorUuid == targetRoom.coordinatorUuid }
+        if (queueSession != null && target != null) {
+            jumpWithinSonosQueue(queueSession, playerState, targetIndex, positionMillis, targetRoom)
+            return
+        }
         val currentTrackResult = state.trackResult?.takeIf { result ->
             result.album.ratingKey == playerState.album.ratingKey &&
                 result.album.sourceId == playerState.album.sourceId &&
@@ -1240,12 +1524,12 @@ internal class AppStatePlaybackCoordinator(
                     Log.i(LOG_TAG, "opus seek restart targetMs=$targetMillis generation=$seekGeneration")
                     if (active032 != null || prepared?.plan != null) ensureCurrent032Seek(targetTrack, room, seekGeneration)
                     state.plexTranscodeProxy.cancelPendingDownload()
-                    state.sonosController.playTrack(
+                    pushSonosUrl(
                         room = room,
-                        trackUrl = seekUrl,
-                        title = effectiveTrack.title,
+                        track = effectiveTrack,
+                        url = seekUrl,
                         albumTitle = effectiveTrack.albumTitle ?: playerState.album.title,
-                        mimeType = if (active032 != null) active032.mime
+                        mime = if (active032 != null) active032.mime
                             else if (prepared?.plan != null) prepared.plan.mime else effectiveTrack.playbackMimeType,
                     )
                     if (seekRequestGeneration.get() == seekGeneration) {
@@ -1297,6 +1581,14 @@ internal class AppStatePlaybackCoordinator(
             return
         }
 
+        // A speaker-side 032 queue cannot hold Plex tracks (proxy/transcode sessions need the
+        // phone): refuse instead of silently dropping them at the end of the speaker queue.
+        if (!isRestoredSessionPending && sonosQueueFor(playerState.sonosRoom, playerState.tracks) != null &&
+            !canUseSonosQueue(tracks, ::is032Source)) {
+            state.actionMessage = null
+            state.errorMessage = "Sonos 正在播放 032 队列，Plex 曲目无法加入，请单独播放"
+            return
+        }
         val insertIndex = when (placement) {
             QueuePlacement.Next -> (playerState.currentIndex + 1).coerceAtMost(playerState.tracks.size)
             QueuePlacement.End -> playerState.tracks.size
@@ -1312,6 +1604,11 @@ internal class AppStatePlaybackCoordinator(
             restoredQueue = updatedTracks
         } else if (playerState.target == PlaybackTarget.LocalDevice) {
             state.localPlaybackCoordinator.insertIntoLocalQueue(insertIndex, tracks)
+        } else {
+            val room = playerState.sonosRoom
+            sonosQueueFor(room, playerState.tracks)?.let { session ->
+                enqueueIntoSonosQueue(room!!, session, insertIndex, tracks, playerState.tracks.size)
+            }
         }
         state.errorMessage = null
         state.actionMessage = when (placement) {
@@ -1505,7 +1802,11 @@ internal class AppStatePlaybackCoordinator(
 
                 val currentQueue = latestMiniPlayerState.tracks
                 val status = runCatching { state.sonosController.getPlaybackStatus(room) }.getOrNull() ?: continue
-                val resolvedTrack = resolveActiveTrack(currentQueue, latestMiniPlayerState, status) ?: continue
+                // Queue mode: Sonos advances on its own; map its queue position back.
+                val queueSession = sonosQueueFor(room, currentQueue)
+                val queueIndex = queueSession?.let { resolveSonosQueueIndex(it.entries, status) }
+                val resolvedTrack = queueIndex?.let(currentQueue::getOrNull)
+                    ?: resolveActiveTrack(currentQueue, latestMiniPlayerState, status) ?: continue
                 val playbackState = status.toPlexPlaybackState()
                 val rawPositionMillis = ((status.relTimeSeconds ?: 0) * 1_000L).coerceAtLeast(0L)
                 val restartSeek = transcodeRestartSeek?.takeIf {
@@ -1545,6 +1846,9 @@ internal class AppStatePlaybackCoordinator(
                     transcodeRestartSeek = null
                     activeSonosPlan = activeSonosPlan?.takeIf {
                         retainSonosPlanForTrack(it.sourceId, it.ratingKey, resolvedTrack)
+                    }
+                    queueSession?.entries?.getOrNull(queueIndex ?: -1)?.let { entry ->
+                        activeSonosPlan = ActiveSonosPlan(entry.sourceId, entry.ratingKey, entry.kind, entry.url, entry.mime)
                     }
                     // A track change observed by this loop is an auto-advance or an
                     // external controller switch: end the old 032 session with the real
@@ -1643,7 +1947,7 @@ internal class AppStatePlaybackCoordinator(
                 val effectivePaused = playbackState == "paused" || playbackState == "stopped"
                 state.miniPlayerState = latestMiniPlayerState.copy(
                     album = currentTrack.resolvePlaybackAlbum(state.allAlbums, latestMiniPlayerState.album),
-                    currentIndex = currentQueue.indexOfFirst { it.ratingKey == currentTrack.ratingKey && it.sourceId == currentTrack.sourceId }
+                    currentIndex = queueIndex ?: currentQueue.indexOfFirst { it.ratingKey == currentTrack.ratingKey && it.sourceId == currentTrack.sourceId }
                         .takeIf { it >= 0 } ?: latestMiniPlayerState.currentIndex,
                     isPaused = effectivePaused,
                     currentPositionMillis = currentTrackTimeMillis,
@@ -1809,6 +2113,7 @@ internal class AppStatePlaybackCoordinator(
 
     private fun nextPlaybackRequestGeneration(): Long {
         activeSonosPlan = null
+        sonosQueue = null
         pending032Plan = null
         current032Fallback = false
         playbackToggleGeneration.incrementAndGet()
