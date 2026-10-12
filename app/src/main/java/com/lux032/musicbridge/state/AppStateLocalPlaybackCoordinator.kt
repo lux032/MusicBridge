@@ -123,6 +123,7 @@ internal class AppStateLocalPlaybackCoordinator(
                 if (current.target != PlaybackTarget.LocalDevice) return
                 val track = current.tracks.getOrNull(index) ?: return
                 val engine = state.localPlaybackEngine
+                state.recordPlayedAlbum(track.resolvePlaybackAlbum(state.allAlbums, current.album))
                 sessionDriver.onEngineTransition(
                     newTrack = track,
                     reason = reason,
@@ -335,15 +336,14 @@ internal class AppStateLocalPlaybackCoordinator(
         }
         // Keep the active session aligned with the local engine after an output switch.
         state.selectPlaybackTarget(PlaybackTarget.LocalDevice)
-        state.appPreferences.markAlbumPlayed(album.sourceId, album.ratingKey)
-        state.recentPlayedAlbumKeys = state.appPreferences.loadRecentPlayedAlbumKeys(album.sourceId)
-
         // Resolve downloaded tracks to local mirror stream items so that offline artwork & lyrics
         // are properly bound to MiniPlayerState even when offline.
         val resolvedTracks = tracks.map(::resolveTrackWithLocalDownload)
 
+        val displayAlbum = resolvedTracks[safeIndex].resolvePlaybackAlbum(state.allAlbums, album)
+        state.recordPlayedAlbum(displayAlbum)
         state.miniPlayerState = MiniPlayerState(
-            album = resolvedTracks.getOrNull(safeIndex)?.resolvePlaybackAlbum(state.allAlbums, album) ?: album,
+            album = displayAlbum,
             tracks = resolvedTracks,
             currentIndex = safeIndex,
             target = PlaybackTarget.LocalDevice,

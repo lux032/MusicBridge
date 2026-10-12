@@ -277,8 +277,7 @@ internal class AppStatePlaybackCoordinator(
         stopLocalPlaybackForSonosHandover()
         state.albumPlaybackJob?.cancel()
         state.playbackReportingJob?.cancel()
-        state.appPreferences.markAlbumPlayed(displayAlbum.sourceId, displayAlbum.ratingKey)
-        state.recentPlayedAlbumKeys = state.appPreferences.loadRecentPlayedAlbumKeys(displayAlbum.sourceId)
+        state.recordPlayedAlbum(displayAlbum)
         state.selectPlaybackTarget(PlaybackTarget.Sonos(room))
         state.volumeSyncKey += 1
         syncSleepTimerRoom(room)
@@ -417,13 +416,14 @@ internal class AppStatePlaybackCoordinator(
         stopLocalPlaybackForSonosHandover()
         state.albumPlaybackJob?.cancel()
         state.playbackReportingJob?.cancel()
-        state.appPreferences.markAlbumPlayed(albumTrackResult.album.sourceId, albumTrackResult.album.ratingKey)
-        state.recentPlayedAlbumKeys = state.appPreferences.loadRecentPlayedAlbumKeys(albumTrackResult.album.sourceId)
+        val displayAlbum = initialTrack?.resolvePlaybackAlbum(state.allAlbums, albumTrackResult.album)
+            ?: albumTrackResult.album
+        state.recordPlayedAlbum(displayAlbum)
         state.selectPlaybackTarget(PlaybackTarget.Sonos(room))
         state.volumeSyncKey += 1
         syncSleepTimerRoom(room)
         state.miniPlayerState = MiniPlayerState(
-            album = albumTrackResult.album,
+            album = displayAlbum,
             tracks = albumTrackResult.tracks,
             currentIndex = startIndex,
             target = PlaybackTarget.Sonos(room),
@@ -532,6 +532,7 @@ internal class AppStatePlaybackCoordinator(
                                 continueChain = continueChain,
                             )
                         }
+                        state.recordPlayedAlbum(track.resolvePlaybackAlbum(state.allAlbums, state.miniPlayerState?.album))
                         state.miniPlayerState = state.miniPlayerState?.let { current -> current.copy(
                             album = track.resolvePlaybackAlbum(state.allAlbums, current.album),
                             currentIndex = index,
@@ -601,8 +602,7 @@ internal class AppStatePlaybackCoordinator(
         stopLocalPlaybackForSonosHandover()
         state.albumPlaybackJob?.cancel()
         state.playbackReportingJob?.cancel()
-        state.appPreferences.markAlbumPlayed(displayAlbum.sourceId, displayAlbum.ratingKey)
-        state.recentPlayedAlbumKeys = state.appPreferences.loadRecentPlayedAlbumKeys(displayAlbum.sourceId)
+        state.recordPlayedAlbum(displayAlbum)
         state.selectPlaybackTarget(PlaybackTarget.Sonos(room))
         state.volumeSyncKey += 1
         syncSleepTimerRoom(room)
@@ -2053,8 +2053,10 @@ internal class AppStatePlaybackCoordinator(
                 // STOPPED is not playing. Showing a pause icon in that state makes the next
                 // tap send Pause again (UPnP 701) instead of recovering playback.
                 val effectivePaused = playbackState == "paused" || playbackState == "stopped"
+                val displayAlbum = currentTrack.resolvePlaybackAlbum(state.allAlbums, latestMiniPlayerState.album)
+                if (playbackState == "playing") state.recordPlayedAlbum(displayAlbum)
                 state.miniPlayerState = latestMiniPlayerState.copy(
-                    album = currentTrack.resolvePlaybackAlbum(state.allAlbums, latestMiniPlayerState.album),
+                    album = displayAlbum,
                     currentIndex = queueIndex ?: currentQueue.indexOfFirst { it.ratingKey == currentTrack.ratingKey && it.sourceId == currentTrack.sourceId }
                         .takeIf { it >= 0 } ?: latestMiniPlayerState.currentIndex,
                     isPaused = effectivePaused,

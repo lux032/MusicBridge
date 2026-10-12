@@ -51,6 +51,17 @@ git clone https://github.com/lux032/MusicBridge.git
 2. Open in Android Studio
 3. Build and run on your device
 
+### Automatic APK builds with GitHub Actions
+
+Every push and Pull Request update runs JVM unit tests and builds Debug and Release APKs. You can also start a build manually under **Actions → Build Android APK → Run workflow**.
+
+After a successful run, download `MusicBridge-apks-<run-number>` from its **Artifacts** section. Extract the archive to get both installable APKs and `SHA256SUMS.txt`. APKs and the Release obfuscation mapping are retained for 30 days; test reports for 14 days.
+
+- CI uses JDK 21, Android SDK 36, and the repository's Gradle Wrapper. No secrets are required.
+- The Release APK is shrunk and obfuscated but uses the project's existing debug-signing fallback when no production keystore is configured. These are test builds; the workflow does not publish GitHub Releases.
+- Debug signing keys may differ between CI runs and local builds, so in-place upgrades are not guaranteed. A signature mismatch requires uninstalling the previous app (which clears local data); use a fixed production signing key for long-term distribution.
+- Failed unit tests prevent APK upload; test reports remain available for troubleshooting. Emulator/device instrumentation tests are not included in this workflow.
+
 ## Configuration
 
 On first launch:

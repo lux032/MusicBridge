@@ -325,6 +325,15 @@ class AppState(
             )
     }
 
+    /** Record the actual current album, not the album used to seed a mixed queue. */
+    internal fun recordPlayedAlbum(album: PlexAlbum) {
+        val keys = appPreferences.recordPlayedAlbum(album)
+        // Playback may continue on another server while its library is not selected.
+        if (album.sourceId == connectionPreferences.id) {
+            recentPlayedAlbumKeys = keys
+        }
+    }
+
     val recentAddedAlbums: List<PlexAlbum> by derivedStateOf {
         allAlbums
             .sortedWith(
