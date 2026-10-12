@@ -41,10 +41,41 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      # Never expose the Release signing key to pull request builds.
+      - name: Restore Release keystore
+        if: github.event_name != 'pull_request'
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::error::Missing KEYSTORE_BASE64 secret"
+            exit 1
+          fi
+          umask 077
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.keystore"
+
       # The repository's gradlew is not executable; invoke it through bash.
-      # Release builds use the app's existing debug-signing fallback (no secrets).
+      # Pull requests keep the existing debug-signing fallback.
       - name: Run unit tests and build Debug / Release APKs
-        run: bash gradlew :app:testDebugUnitTest :app:assembleDebug :app:assembleRelease --console=plain --stacktrace
+        env:
+          KEYSTORE_FILE: ${{ github.event_name != 'pull_request' && format('{0}/release.keystore', runner.temp) || '' }}
+          KEYSTORE_PASSWORD: ${{ github.event_name != 'pull_request' && secrets.KEYSTORE_PASSWORD || '' }}
+          KEY_ALIAS: ${{ github.event_name != 'pull_request' && secrets.KEY_ALIAS || '' }}
+          KEY_PASSWORD: ${{ github.event_name != 'pull_request' && secrets.KEY_PASSWORD || '' }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" != "pull_request" ]; then
+            for name in KEYSTORE_FILE KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
+              if [ -z "${!name}" ]; then
+                echo "::error::Missing signing setting: $name"
+                exit 1
+              fi
+            done
+          fi
+          bash gradlew :app:testDebugUnitTest :app:assembleDebug :app:assembleRelease --console=plain --stacktrace
+
+      - name: Clean up Release keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release.keystore"
 
       - name: Upload unit test reports
         if: always()
