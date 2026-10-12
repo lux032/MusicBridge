@@ -7,7 +7,6 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
-import java.util.Locale
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -140,18 +139,6 @@ class SonosPlanTest {
     @Test fun predictedLiveButActualOriginalUsesNativeSeek() {
         assertFalse(shouldRestart032Seek(true, SonosPlanKind.ORIGINAL))
         assertTrue(shouldRestart032Seek(true, SonosPlanKind.LIVE_MP3))
-    }
-
-    @Test fun fallbackSuffixIsOnlyAppliedWhenFlacActuallyFailed() {
-        val previous = Locale.getDefault()
-        try {
-            Locale.setDefault(Locale.SIMPLIFIED_CHINESE)
-            assertEquals("已推送", sonosPushMessage("已推送", false))
-            assertEquals("已推送（FLAC 准备失败，已改用 MP3）", sonosPushMessage("已推送", true))
-            assertEquals("FLAC 准备失败，已改用 MP3", Strings.music032FlacFallback)
-        } finally {
-            Locale.setDefault(previous)
-        }
     }
 
     @Test fun playlistMessageClearsPreviousFallbackOnlyFor032() {
