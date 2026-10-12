@@ -110,3 +110,54 @@ jobs:
           path: app/build/outputs/mapping/release/mapping.txt
           if-no-files-found: error
           retention-days: 30
+
+  publish:
+    name: Publish signed test APK
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download built APKs
+        uses: actions/download-artifact@v4
+        with:
+          name: MusicBridge-apks-${{ github.run_number }}
+          path: artifacts
+
+      - name: Publish directly installable Release APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          tag="test-build-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
+          apk="MusicBridge-release-${GITHUB_RUN_NUMBER}.apk"
+          (cd artifacts && sha256sum "$apk" > RELEASE-SHA256SUMS.txt)
+          notes="$RUNNER_TEMP/release-notes.md"
+          printf '%s\n' \
+            '## 正式签名测试包' \
+            '' \
+            '直接下载下方 Release APK 即可安装，无需解压。此预发布使用正式签名，但不代表稳定版本。' \
+            '' \
+            "- 源分支/标签：\`${GITHUB_REF_NAME}\`" \
+            "- 提交：\`${GITHUB_SHA}\`" \
+            "- 构建记录：https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            '' \
+            '覆盖安装需要已有应用使用相同签名；应用版本号沿用源码配置。' \
+            > "$notes"
+          gh release create "$tag" \
+            "artifacts/$apk" \
+            artifacts/RELEASE-SHA256SUMS.txt \
+            --target "$GITHUB_SHA" \
+            --title "测试构建 #${GITHUB_RUN_NUMBER}（${GITHUB_REF_NAME}，第 ${GITHUB_RUN_ATTEMPT} 次运行）" \
+            --notes-file "$notes" \
+            --prerelease \
+            --latest=false
+          {
+            echo '### 正式签名测试 APK'
+            echo "- [直接下载 APK](https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}/${apk})"
+            echo "- [查看测试 Release](https://github.com/${GITHUB_REPOSITORY}/releases/tag/${tag})"
+          } >> "$GITHUB_STEP_SUMMARY"
