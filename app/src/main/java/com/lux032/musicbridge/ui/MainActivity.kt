@@ -28,6 +28,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.LocalOverscrollFactory
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -217,7 +218,8 @@ fun PlexAlbumScreen(
         if (activeSection == AppSection.PlaybackDetail) {
             20.dp
         } else if (hasMiniPlayer) {
-            miniPlayerHeightPx.toDp() + navigationBottomPadding + 16.dp
+            miniPlayerHeightPx.toDp() + navigationBottomPadding -
+                (if (isNavigationRailVisible) systemBarBottomPadding else 0.dp) + 16.dp
         } else {
             navigationBottomPadding + 20.dp
         }
@@ -226,7 +228,8 @@ fun PlexAlbumScreen(
         if (activeSection == AppSection.PlaybackDetail) {
             24.dp
         } else if (hasMiniPlayer) {
-            miniPlayerHeightPx.toDp() + navigationBottomPadding + systemBarBottomPadding + 12.dp
+            miniPlayerHeightPx.toDp() + navigationBottomPadding +
+                (if (isNavigationRailVisible) 0.dp else systemBarBottomPadding) + 12.dp
         } else {
             navigationBottomPadding + systemBarBottomPadding + 12.dp
         }
@@ -339,17 +342,14 @@ fun PlexAlbumScreen(
         modifier = Modifier.fillMaxSize(),
     ) {
         if (isNavigationRailVisible) {
-            // The rail keeps the scaffold padding the Row used to supply.
-            Box(
-                modifier = Modifier
-                    .fillMaxHeight()
-                    .padding(contentPadding),
-            ) {
-                AppNavigationRail(
-                    primarySection = state.primarySection,
-                    onSectionChange = state::switchPrimarySection,
-                )
-            }
+            // The rail owns its system insets; do not apply scaffold insets twice.
+            AppNavigationRail(
+                primarySection = state.primarySection,
+                modifier = Modifier.padding(
+                    bottom = if (hasMiniPlayer) with(density) { miniPlayerHeightPx.toDp() } else 0.dp,
+                ),
+                onSectionChange = state::switchPrimarySection,
+            )
         }
         Box(
             modifier = Modifier
@@ -365,7 +365,7 @@ fun PlexAlbumScreen(
         val currentSection = currentEntry.section
         pageStateHolder.SaveableStateProvider(currentEntry.id) {
         CompositionLocalProvider(LocalAnimatedVisibilityScope provides this) {
-        Box(
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxSize()
                 .then(
@@ -373,6 +373,9 @@ fun PlexAlbumScreen(
                     else Modifier.padding(contentPadding)
                 ),
         ) {
+        // Pages select columns from their actual safe space, not the window behind the rail.
+        val pageLayoutInfo = AppLayoutInfo(width = maxWidth, height = maxHeight)
+        CompositionLocalProvider(LocalAppLayoutInfo provides pageLayoutInfo) {
 
             if (currentSection == AppSection.AllAlbums) {
                 val savedPos = state.getSavedLazyScrollPosition(AppSection.AllAlbums)
@@ -898,6 +901,8 @@ fun PlexAlbumScreen(
         }
         }
 
+        }
+
         if (!isNavigationRailVisible) {
             // The dock tucks away under the opening player. On collapse it is simply there,
             // opaque and still, while the player sheet drops behind it — a rising dock
@@ -926,11 +931,14 @@ fun PlexAlbumScreen(
             }
         }
 
+        }
+    }
+
+        // Global playback spans the window, including below the rail.
         // The mini player stays composed while the full player is open so its shared
         // elements can morph to/from the player page; caller-managed visibility hides the
         // pill itself in that state. This AnimatedVisibility only animates playback
-        // start/stop (slide the bar in/out). Fully-qualified call: the plain function must
-        // win over RowScope.AnimatedVisibility, which shadows it inside the outer Row.
+        // start/stop (slide the bar in/out).
         androidx.compose.animation.AnimatedVisibility(
             visible = hasMiniPlayer,
             modifier = Modifier
@@ -1006,8 +1014,6 @@ fun PlexAlbumScreen(
             }
         }
 
-        }
-    }
     }
     }
 }

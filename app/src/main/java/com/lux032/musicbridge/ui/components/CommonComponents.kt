@@ -2,6 +2,8 @@ package com.lux032.musicbridge
 
 import android.content.Context
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -195,18 +197,19 @@ internal fun AppNavigationRail(
     modifier: Modifier = Modifier,
     onSectionChange: (AppSection) -> Unit,
 ) {
-    val systemBarPadding = WindowInsets.systemBars.asPaddingValues()
+    val systemBarPadding = WindowInsets.safeDrawing.asPaddingValues()
 
     Surface(
         modifier = modifier
             .fillMaxHeight()
-            .width(104.dp),
+            .width(NavigationRailWidth),
         color = dockColor(),
         shadowElevation = 0.dp,
     ) {
         Column(
             modifier = Modifier
                 .fillMaxHeight()
+                .verticalScroll(rememberScrollState())
                 .padding(
                     top = systemBarPadding.calculateTopPadding() + 20.dp,
                     bottom = systemBarPadding.calculateBottomPadding() + 20.dp,

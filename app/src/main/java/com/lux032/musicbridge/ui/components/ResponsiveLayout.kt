@@ -19,7 +19,9 @@ internal data class AppLayoutInfo(
     val isTablet: Boolean get() = width >= 600.dp
     val isLandscape: Boolean get() = width > height
     val isWide: Boolean get() = width >= 840.dp && width > height
-    val useNavigationRail: Boolean get() = isWide
+    // Navigation follows window space, independently of the detail pane breakpoint.
+    // Short landscape windows retain bottom navigation so destinations remain reachable.
+    val useNavigationRail: Boolean get() = width >= 600.dp && height >= 480.dp
     val horizontalPadding: Dp get() = if (isTablet) 24.dp else 16.dp
     val contentSpacing: Dp get() = if (isTablet) 20.dp else 16.dp
     val albumGridMinimumWidth: Dp
@@ -64,6 +66,8 @@ internal data class AppLayoutInfo(
             else -> 156.dp
         }
 }
+
+internal val NavigationRailWidth = 80.dp
 
 internal val LocalAppLayoutInfo = staticCompositionLocalOf {
     AppLayoutInfo(width = 360.dp, height = 640.dp)
