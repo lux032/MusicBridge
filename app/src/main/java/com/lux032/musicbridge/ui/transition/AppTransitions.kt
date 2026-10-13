@@ -96,7 +96,7 @@ val PlayerBoundsTransform: BoundsTransform = BoundsTransform { _: Rect, _: Rect 
  * - Pop (back): exact mirror — detail exits right, list returns from the left parallax.
  * - Tab switch: gentle fade + slight rise, no lateral motion (tabs aren't ordered).
  */
-fun AnimatedContentTransitionScope<AppSection>.sectionTransitionSpec(
+fun AnimatedContentTransitionScope<NavigationEntry>.sectionTransitionSpec(
     action: NavAction,
 ): ContentTransform {
     // Collapse: ONE opaque thing moves — the player page drops as a sheet with all its
@@ -104,7 +104,7 @@ fun AnimatedContentTransitionScope<AppSection>.sectionTransitionSpec(
     // and still; the dock is static on top. Earlier attempts layered a flying artwork, a
     // fading/scaling underlay and a fading mini bar on the moving sheet, and the
     // overlapping semi-transparent motions read as ghosting.
-    if (initialState == AppSection.PlaybackDetail && action == NavAction.Pop) {
+    if (initialState.section == AppSection.PlaybackDetail && action == NavAction.Pop) {
         return ContentTransform(
             targetContentEnter = EnterTransition.None,
             initialContentExit = slideOutVertically(
@@ -115,8 +115,8 @@ fun AnimatedContentTransitionScope<AppSection>.sectionTransitionSpec(
             sizeTransform = SizeTransform(clip = false),
         )
     }
-    val playerInvolved = targetState == AppSection.PlaybackDetail ||
-        initialState == AppSection.PlaybackDetail
+    val playerInvolved = targetState.section == AppSection.PlaybackDetail ||
+        initialState.section == AppSection.PlaybackDetail
     if (playerInvolved) {
         return ContentTransform(
             targetContentEnter = fadeIn(tween(TransitionDurations.PlayerFadeInMillis)),
