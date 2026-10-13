@@ -528,7 +528,7 @@ internal class AppStateLocalPlaybackCoordinator(
         state.miniPlayerState = playerState.copy(
             album = track.resolvePlaybackAlbum(state.allAlbums, playerState.album),
             currentIndex = newIndex,
-            isPaused = false,
+            isPaused = !engine.isPlayRequested,
             isBuffering = state.localPlaybackEngine.isBuffering,
             currentPositionMillis = state.localPlaybackEngine.currentPositionMillis,
             durationMillis = track.durationMillis,

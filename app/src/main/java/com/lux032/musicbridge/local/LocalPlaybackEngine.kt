@@ -1221,6 +1221,7 @@ class LocalPlaybackEngine(
             val commands = player.availableCommands
             if (!currentItemIsLiveTranscode() || durationMillis == null) return commands
             return commands.buildUpon()
+                .add(Player.COMMAND_SEEK_TO_PREVIOUS)
                 .add(Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM)
                 .add(Player.COMMAND_SEEK_BACK)
                 .add(Player.COMMAND_SEEK_FORWARD)
@@ -2081,13 +2082,13 @@ class LocalPlaybackEngine(
             "SEEK_REQUEST",
             "action=seekToPrevious source=$source positionMs=$currentPositionMillis",
         )
-        val item = queueItems.getOrNull(currentIndex)
-        if (currentPositionMillis > player.maxSeekToPreviousPosition) {
-            if (item?.url?.isLiveTranscodeUrl() == true) {
-                seekToInternal(0L, source)
-            } else {
-                player.seekTo(0L)
-            }
+        if (queueItems.getOrNull(currentIndex) == null) return
+        if (com.lux032.musicbridge.core.shouldRestartOnPrevious(
+                currentPositionMillis,
+                player.hasPreviousMediaItem(),
+                player.maxSeekToPreviousPosition,
+            )) {
+            seekToInternal(0L, source)
         } else {
             advanceToPreviousMediaItem()
         }

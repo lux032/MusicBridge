@@ -451,9 +451,8 @@ internal fun PlaybackDetailSection(
                 )
                 Key(
                     onClick = onPrevious,
-                    // Local playback's previous also means "restart this track", so it stays
-                    // tappable even on the first/only track.
-                    enabled = currentState.target == PlaybackTarget.LocalDevice || currentState.currentIndex > 0,
+                    // Previous also restarts the first/only track on every output.
+                    enabled = currentState.tracks.getOrNull(currentState.currentIndex) != null,
                     modifier = Modifier.size(skipSize),
                     shape = RoundedCornerShape(skipSize / 3),
                     contentDescription = Strings.previous,

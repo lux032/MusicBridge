@@ -156,7 +156,6 @@ internal class AppStatePlaybackCoordinator(
     private var restoredQueue: List<PlexTrackStream>? = null
 
     /** Mirrors ExoPlayer's default maxSeekToPreviousPosition used by the local engine. */
-    private val restartThresholdMillis = 3_000L
 
     val isRestoredSessionPending: Boolean
         get() = restoredQueue != null && state.miniPlayerState?.tracks === restoredQueue
@@ -1385,15 +1384,16 @@ internal class AppStatePlaybackCoordinator(
     }
 
     /**
-     * Previous-button entry point. Local playback restarts the current track first and
-     * only steps back on a quick second press (standard music-app behavior, mirrored by
-     * the media notification). Sonos keeps a plain skip — the speaker owns its timeline.
+     * Past the opening three seconds, restart; near the start, go back if possible.
+     * The first/only track can always restart, on both local and Sonos outputs.
      */
     fun playPrevious() {
         val playerState = state.miniPlayerState ?: return
         if (isRestoredSessionPending) {
             // Same rule as the engine: past the first few seconds, "previous" restarts.
-            val index = if (playerState.currentPositionMillis > restartThresholdMillis) {
+            val index = if (com.lux032.musicbridge.core.shouldRestartOnPrevious(
+                    playerState.currentPositionMillis, playerState.currentIndex > 0,
+                )) {
                 playerState.currentIndex
             } else {
                 (playerState.currentIndex - 1).coerceAtLeast(0)
@@ -1405,9 +1405,14 @@ internal class AppStatePlaybackCoordinator(
             state.localPlaybackCoordinator.playLocalPrevious(playerState)
             return
         }
-        val newIndex = (playerState.currentIndex - 1).coerceAtLeast(0)
-        if (newIndex != playerState.currentIndex) {
-            playQueueIndex(newIndex, 0L, playerState.target)
+        if (com.lux032.musicbridge.core.shouldRestartOnPrevious(
+                playerState.currentPositionMillis, playerState.currentIndex > 0,
+            )) {
+            // Seek, rather than re-selecting the queue item: preserve pause state and
+            // the current listening session. The optimistic cursor permits a second press.
+            seekPlayback(playerState, 0L)
+        } else {
+            playQueueIndex(playerState.currentIndex - 1, 0L, playerState.target)
         }
     }
 
@@ -1836,9 +1841,7 @@ internal class AppStatePlaybackCoordinator(
                 val playerState = state.miniPlayerState
                 if (playerState != null && playerState.sonosRoom != null) {
                     when (action) {
-                        PlaybackForegroundService.PlaybackAction.Previous -> {
-                            if (playerState.currentIndex > 0) playQueueIndex(playerState.currentIndex - 1, 0L, playerState.target)
-                        }
+                        PlaybackForegroundService.PlaybackAction.Previous -> playPrevious()
                         PlaybackForegroundService.PlaybackAction.TogglePause -> togglePause(playerState)
                         PlaybackForegroundService.PlaybackAction.Next -> {
                             if (playerState.currentIndex < playerState.tracks.lastIndex) playQueueIndex(playerState.currentIndex + 1, 0L, playerState.target)
