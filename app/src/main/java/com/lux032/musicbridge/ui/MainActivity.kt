@@ -53,6 +53,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -196,6 +198,16 @@ fun PlexAlbumScreen(
     }
 
     val activeSection = state.activeSection
+    val activeEntry = state.navigationEntries.last()
+    val pageStateHolder = rememberSaveableStateHolder()
+    val retainedEntryIds = remember { mutableSetOf<Long>() }
+    val entryIds = state.navigationEntries.map { it.id }
+    LaunchedEffect(entryIds) {
+        // removeState also disables saving for an outgoing page still animating after pop.
+        (retainedEntryIds - entryIds.toSet()).forEach(pageStateHolder::removeState)
+        retainedEntryIds.clear()
+        retainedEntryIds.addAll(entryIds)
+    }
     // Docked navigation bar (Design D). Section content already sits above the system
     // navigation inset, so only the bar's own content height counts here.
     val bottomNavigationHeight = DockedNavigationHeight
@@ -345,11 +357,13 @@ fun PlexAlbumScreen(
                 .fillMaxHeight(),
         ) {
         AnimatedContent(
-            targetState = activeSection,
+            targetState = activeEntry,
             modifier = Modifier.fillMaxSize(),
             transitionSpec = { sectionTransitionSpec(state.lastNavAction) },
             label = "sectionTransition",
-        ) { currentSection ->
+        ) { currentEntry ->
+        val currentSection = currentEntry.section
+        pageStateHolder.SaveableStateProvider(currentEntry.id) {
         CompositionLocalProvider(LocalAnimatedVisibilityScope provides this) {
         Box(
             modifier = Modifier
@@ -547,20 +561,8 @@ fun PlexAlbumScreen(
                         )
                     }
                 } else if (currentSection == AppSection.ArtistAlbums) {
-                    val savedPos = state.getSavedLazyScrollPosition(AppSection.ArtistAlbums)
-                    val artistAlbumsListState = rememberLazyListState(
-                        initialFirstVisibleItemIndex = savedPos.index,
-                        initialFirstVisibleItemScrollOffset = savedPos.offset,
-                    )
-                    DisposableEffect(Unit) {
-                        onDispose {
-                            state.saveLazyScrollPosition(
-                                AppSection.ArtistAlbums,
-                                artistAlbumsListState.firstVisibleItemIndex,
-                                artistAlbumsListState.firstVisibleItemScrollOffset,
-                            )
-                        }
-                    }
+                    val artistAlbumsListState = rememberLazyListState()
+                    var artistPageLoaded by rememberSaveable { mutableStateOf(false) }
                     val selectedArtistIdentity = state.selectedArtist?.let { it.ratingKey ?: it.name }
                     DisposableEffect(selectedArtistIdentity) {
                         onDispose { state.cancelArtistTracks() }
@@ -577,10 +579,16 @@ fun PlexAlbumScreen(
                         }
                     }
                     LaunchedEffect(selectedArtistIdentity) {
-                        artistAlbumsListState.scrollToItem(0)
                         state.selectedArtist?.let {
-                            state.loadArtistTracks(it)
-                            state.loadArtistAlbums(it)
+                            // Returning must not clear paginated tracks: the restored list
+                            // would otherwise shrink and clamp its saved scroll position.
+                            if (!artistPageLoaded ||
+                                (state.artistTracks.isEmpty() && state.artistTracksTotal > 0 && state.artistTracksError == null)
+                            ) {
+                                state.loadArtistTracks(it)
+                                state.loadArtistAlbums(it)
+                                artistPageLoaded = true
+                            }
                         }
                     }
                     val downloadedTrackKeys by state.downloadedTrackKeys.collectAsState()
@@ -885,6 +893,7 @@ fun PlexAlbumScreen(
                     Box(modifier = Modifier.fillMaxSize())
                 }
             }
+        }
         }
         }
         }

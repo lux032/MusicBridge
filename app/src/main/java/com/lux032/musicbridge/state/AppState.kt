@@ -211,7 +211,10 @@ class AppState(
         notify = { message -> actionMessage = message },
     )
 
-    val navigationStack = mutableStateListOf(AppSection.Home)
+    private var nextNavigationEntryId = 1L
+    val navigationEntries = mutableStateListOf(NavigationEntry(0L, AppSection.Home))
+    val navigationStack: List<AppSection>
+        get() = navigationEntries.map { it.section }
     val serverProfiles = mutableStateListOf<MusicServerProfile>().apply { addAll(initialProfiles) }
     var primarySection by mutableStateOf(AppSection.Home)
     var connectionPreferences by mutableStateOf(initialPreferences)
@@ -397,7 +400,7 @@ class AppState(
 
     fun navigateTo(section: AppSection) {
         if (navigationStack.lastOrNull() == section) return
-        navigationStack.add(section)
+        navigationEntries.add(NavigationEntry(nextNavigationEntryId++, section))
         lastNavAction = NavAction.Push
     }
 
@@ -406,8 +409,8 @@ class AppState(
         when {
             existing == navigationStack.lastIndex -> return
             existing >= 0 -> {
-                while (navigationStack.lastIndex > existing) {
-                    navigationStack.removeAt(navigationStack.lastIndex)
+                while (navigationEntries.lastIndex > existing) {
+                    navigationEntries.removeAt(navigationEntries.lastIndex)
                 }
                 lastNavAction = NavAction.Pop
             }
@@ -416,8 +419,8 @@ class AppState(
     }
 
     fun replaceWith(section: AppSection) {
-        navigationStack.clear()
-        navigationStack.add(section)
+        navigationEntries.clear()
+        navigationEntries.add(NavigationEntry(nextNavigationEntryId++, section))
         lastNavAction = NavAction.TabSwitch
     }
 
@@ -427,8 +430,8 @@ class AppState(
     }
 
     fun navigateBack() {
-        if (navigationStack.size > 1) {
-            navigationStack.removeAt(navigationStack.lastIndex)
+        if (navigationEntries.size > 1) {
+            navigationEntries.removeAt(navigationEntries.lastIndex)
             lastNavAction = NavAction.Pop
         }
     }

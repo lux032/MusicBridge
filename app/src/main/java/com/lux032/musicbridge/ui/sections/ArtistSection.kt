@@ -658,7 +658,14 @@ internal fun ArtistAlbumsSection(
     val allTracksListState = rememberLazyListState()
     val activeListState = if (showingAllTracks) allTracksListState else listState
     BackHandler(enabled = showingAllTracks) { showingAllTracks = false }
-    LaunchedEffect(trackSort, trackOrder) { allTracksListState.scrollToItem(0) }
+    var appliedTrackSorting by rememberSaveable { mutableStateOf("$trackSort:$trackOrder") }
+    LaunchedEffect(trackSort, trackOrder) {
+        val sorting = "$trackSort:$trackOrder"
+        if (appliedTrackSorting != sorting) {
+            allTracksListState.scrollToItem(0)
+            appliedTrackSorting = sorting
+        }
+    }
     LaunchedEffect(showingAllTracks, artistTracks.size, hasMoreTracks, isArtistTracksLoading, tracksError) {
         if (!showingAllTracks) return@LaunchedEffect
         snapshotFlow {
