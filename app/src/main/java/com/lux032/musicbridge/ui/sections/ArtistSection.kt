@@ -1130,6 +1130,7 @@ private fun ArtistTrackRow(
             onDownloadAction = {
                 if (isDownloaded) onDeleteDownloadedTrack(track) else onDownloadTrack(track)
             },
+            onAddToPlaylist = addTrackToPlaylistAction(track),
         )
     }
 }

@@ -15,6 +15,7 @@ Download the latest APK from [Releases](https://github.com/lux032/MusicBridge/re
 ## Features
 
 - Browse Plex and 032 Music Server libraries (albums, artists, playlists, favorites)
+- Create and manage 032 Music Server playlists: new playlist, add tracks or whole albums from any More menu, remove with undo, rename, delete
 - Save multiple music servers and switch between them directly from Settings
 - Keep library caches, recently played albums, and sync timestamps isolated per server
 - Discover and control Sonos speakers on your network

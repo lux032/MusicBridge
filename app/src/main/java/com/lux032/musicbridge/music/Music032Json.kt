@@ -174,6 +174,8 @@ internal object Music032Json {
         thumbUrl = mediaUrl(value.optString("artworkUrl"), baseUrl, mediaToken),
         leafCount = value.optInt("itemCount"),
         sourceId = sourceId,
+        description = value.optString("description").trim(),
+        revision = if (value.has("revision")) value.optLong("revision") else null,
     )
 
     fun mediaUrl(path: String, baseUrl: String, mediaToken: String): String? {

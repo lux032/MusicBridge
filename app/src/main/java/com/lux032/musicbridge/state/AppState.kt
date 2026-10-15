@@ -135,6 +135,7 @@ class AppState(
     val activeDownloadProgress = offlineDownloadManager.downloadProgress
     private val libraryCoordinator = AppStateLibraryCoordinator(this)
     private val playbackCoordinator = AppStatePlaybackCoordinator(this)
+    private val playlistCoordinator = AppStatePlaylistCoordinator(this)
     private val musicSourceClients = java.util.concurrent.ConcurrentHashMap<String, CachedMusicSourceClient>()
     private val music032Reporters = java.util.concurrent.ConcurrentHashMap<String, Music032PlaybackReporter>()
 
@@ -289,6 +290,14 @@ class AppState(
     private var aiGenerationJob: Job? = null
     private var aiGenerationToken: Long = 0L
     var aiPlaylistDescription by mutableStateOf<String?>(null)
+        internal set
+    /** Pending "add to playlist" picker; non-null shows the sheet. */
+    var playlistAddRequest by mutableStateOf<PlaylistAddition?>(null)
+        internal set
+    /** Latest playlist write feedback for the global snackbar. */
+    var playlistNotice by mutableStateOf<PlaylistNotice?>(null)
+        internal set
+    var isPlaylistMutating by mutableStateOf(false)
         internal set
 
     val activeSection: AppSection
@@ -731,6 +740,7 @@ class AppState(
         artistChoices = emptyList()
         isResolvingArtist = false
         selectedPlaylist = null
+        playlistAddRequest = null
         trackResult = null
         playlistTrackResult = null
         albumSearchResults = emptyList()
@@ -764,6 +774,43 @@ class AppState(
     fun openFavoriteTracks() = libraryCoordinator.openFavoriteTracks()
 
     fun openPlaylistDetail(playlist: PlexPlaylist) = libraryCoordinator.openPlaylistDetail(playlist)
+
+    // --- Playlist editing (032 servers) ---------------------------------------------------
+
+    /** True when the active server supports creating / editing playlists (032 only). */
+    val canCreatePlaylists: Boolean
+        get() = connectionPreferences.type == MusicServerType.Music032 && connectionPreferences.hasCredentials()
+
+    fun canAddToPlaylist(sourceId: String): Boolean = playlistCoordinator.canAddFrom(sourceId)
+
+    fun canEditPlaylist(playlist: PlexPlaylist): Boolean = playlistCoordinator.canEditPlaylist(playlist)
+
+    fun requestAddToPlaylist(addition: PlaylistAddition) = playlistCoordinator.requestAdd(addition)
+
+    fun dismissAddToPlaylist() {
+        playlistAddRequest = null
+    }
+
+    suspend fun createPlaylist(
+        name: String,
+        description: String,
+        addition: PlaylistAddition? = null,
+    ): Result<PlexPlaylist> = playlistCoordinator.create(name, description, addition)
+
+    fun openCreatedPlaylist(playlist: PlexPlaylist) = playlistCoordinator.openCreated(playlist)
+
+    fun addToPlaylist(playlist: PlexPlaylist, addition: PlaylistAddition) = playlistCoordinator.addTo(playlist, addition)
+
+    suspend fun updatePlaylist(playlist: PlexPlaylist, name: String, description: String): Result<PlexPlaylist> =
+        playlistCoordinator.update(playlist, name, description)
+
+    suspend fun deletePlaylist(playlist: PlexPlaylist): Result<Unit> = playlistCoordinator.delete(playlist)
+
+    fun removeTrackFromOpenPlaylist(track: PlexTrackStream) = playlistCoordinator.removeTrack(track)
+
+    fun consumePlaylistNotice(id: Long) {
+        if (playlistNotice?.id == id) playlistNotice = null
+    }
 
     fun replaceAlbumInState(updatedAlbum: PlexAlbum) = libraryCoordinator.replaceAlbumInState(updatedAlbum)
 

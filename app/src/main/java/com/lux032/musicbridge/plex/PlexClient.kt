@@ -187,6 +187,10 @@ data class PlexPlaylist(
     val thumbUrl: String?,
     val leafCount: Int,
     val sourceId: String = "",
+    /** Free-text note (032 only; Plex playlists have none). */
+    val description: String = "",
+    /** 032 optimistic-concurrency revision; null when unknown (Plex, local cache rows). */
+    val revision: Long? = null,
 )
 
 data class PlexPlaylistsResult(

@@ -314,6 +314,14 @@ fun PlexAlbumScreen(
     
     val isBottomBarVisible = activeSection != AppSection.PlaybackDetail
     val overlayRoom = state.selectedSonosRoom
+    // Track / album menus read this to offer "添加到歌单" (032 servers only).
+    val playlistEditor = remember(state, state.canCreatePlaylists) {
+        if (state.canCreatePlaylists) {
+            PlaylistEditor(canAdd = state::canAddToPlaylist, requestAdd = state::requestAddToPlaylist)
+        } else {
+            null
+        }
+    }
 
     // Only the player lays out edge-to-edge (it applies the system bar insets itself);
     // every other section sits inside the scaffold's safe padding while the root gradient
@@ -328,6 +336,7 @@ fun PlexAlbumScreen(
         LocalArtworkPalette provides nowPlayingPalette,
         LocalNowPlaying provides nowPlayingMarker,
         LocalSharedTransitionScope provides this@SharedTransitionLayout,
+        LocalPlaylistEditor provides playlistEditor,
     ) {
     Box(
         modifier = modifier
@@ -469,6 +478,9 @@ fun PlexAlbumScreen(
                             isSyncing = state.isPlaylistSyncing,
                             syncProgress = state.playlistSyncProgress,
                             onSyncAllPlaylists = state::syncAllPlaylistsTracks,
+                            canCreatePlaylist = state.canCreatePlaylists,
+                            onCreatePlaylist = { name, description -> state.createPlaylist(name, description) },
+                            onOpenCreatedPlaylist = state::openCreatedPlaylist,
                         )
                     }
                 } else if (currentSection == AppSection.PlaylistDetail) {
@@ -499,6 +511,12 @@ fun PlexAlbumScreen(
                             aiDescription = state.aiPlaylistDescription,
                             onSaveToPlex = state::saveCurrentAiPlaylistToPlex,
                             onSonicRadio = state::startSonicRadio,
+                            canEditPlaylist = state.playlistTrackResult?.playlist?.let(state::canEditPlaylist) == true,
+                            onRemoveTrack = state::removeTrackFromOpenPlaylist,
+                            onUpdatePlaylist = { playlist, name, description ->
+                                state.updatePlaylist(playlist, name, description)
+                            },
+                            onDeletePlaylist = { playlist -> state.deletePlaylist(playlist) },
                             onPlayTrack = { playlist, track, index ->
                                 val currentResult = state.playlistTrackResult
                                 if (currentResult != null) {
@@ -970,6 +988,31 @@ fun PlexAlbumScreen(
                 onOpenPlayback = state::openPlaybackDetail,
             )
         }
+
+        state.playlistAddRequest?.let { addition ->
+            AddToPlaylistSheet(
+                addition = addition,
+                playlists = state.playlists,
+                isMutating = state.isPlaylistMutating,
+                onPick = { playlist -> state.addToPlaylist(playlist, addition) },
+                onCreate = { name, description -> state.createPlaylist(name, description, addition) },
+                onDismiss = state::dismissAddToPlaylist,
+            )
+        }
+
+        // Playlist write feedback sits just above the docked chrome (room bar / navigation).
+        PlaylistNoticeHost(
+            notice = state.playlistNotice,
+            onConsumed = state::consumePlaylistNotice,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .zIndex(2f)
+                .padding(
+                    start = layoutInfo.horizontalPadding,
+                    end = layoutInfo.horizontalPadding,
+                    bottom = volumeOverlayBottomPadding,
+                ),
+        )
 
         if (state.artistChoices.isNotEmpty()) {
             ArtistChoiceDialog(

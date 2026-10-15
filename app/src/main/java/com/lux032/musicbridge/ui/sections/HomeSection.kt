@@ -293,6 +293,7 @@ private fun RecentPlayedShelfSection(
                                 playAction(album)
                             }
                         },
+                        onAddToPlaylist = addAlbumToPlaylistAction(album),
                     )
                 }
             }

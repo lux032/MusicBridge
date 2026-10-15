@@ -458,6 +458,7 @@ internal fun AlbumCoverCard(
                     playAction()
                 }
             },
+            onAddToPlaylist = addAlbumToPlaylistAction(album),
         )
     }
 }
@@ -492,6 +493,8 @@ internal fun QueueActionMenu(
     downloadLabel: String? = null,
     onDownloadAction: (() -> Unit)? = null,
     onSonicRadio: (() -> Unit)? = null,
+    onAddToPlaylist: (() -> Unit)? = null,
+    onRemoveFromPlaylist: (() -> Unit)? = null,
 ) {
     DropdownMenu(expanded = expanded, onDismissRequest = onDismiss, shape = RoundedCornerShape(16.dp)) {
         if (onPlay != null) {
@@ -537,6 +540,34 @@ internal fun QueueActionMenu(
                     onSonicRadio()
                 },
             )
+            HorizontalDivider(
+                color = KeyColors.Line,
+                modifier = Modifier.padding(vertical = 4.dp),
+            )
+        }
+        if (onAddToPlaylist != null || onRemoveFromPlaylist != null) {
+            if (onAddToPlaylist != null) {
+                DropdownMenuItem(
+                    text = { Text(Strings.addToPlaylist) },
+                    leadingIcon = { Icon(Icons.Filled.LibraryAdd, contentDescription = null) },
+                    onClick = {
+                        onDismiss()
+                        onAddToPlaylist()
+                    },
+                )
+            }
+            if (onRemoveFromPlaylist != null) {
+                DropdownMenuItem(
+                    text = { Text(Strings.removeFromPlaylist) },
+                    leadingIcon = {
+                        Icon(Icons.Filled.PlaylistRemove, contentDescription = null, tint = AppColors.TextSecondary)
+                    },
+                    onClick = {
+                        onDismiss()
+                        onRemoveFromPlaylist()
+                    },
+                )
+            }
             HorizontalDivider(
                 color = KeyColors.Line,
                 modifier = Modifier.padding(vertical = 4.dp),

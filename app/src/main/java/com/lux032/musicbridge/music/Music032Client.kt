@@ -259,6 +259,61 @@ class Music032Client(
         PlexPlaylistTracksResult(profile.displayName, resolvedPlaylist, tracks)
     }
 
+    /**
+     * Creates a playlist. Tracks are added in the same server transaction; ids the server no
+     * longer knows are skipped (opt-in `invalidTracks: skip`) instead of failing the create.
+     * `invalidTracks` is only sent with tracks: the server rejects unknown JSON fields, so an
+     * empty create stays compatible with servers that predate the skip policy.
+     */
+    suspend fun createPlaylist(
+        name: String,
+        description: String,
+        trackIds: List<String> = emptyList(),
+    ): Music032PlaylistCreated = withContext(Dispatchers.IO) {
+        val root = JSONObject(request("POST", "/api/v1/playlists", Music032PlaylistRequests.create(name, description, trackIds)))
+        Music032PlaylistRequests.parseCreated(root) { parsePlaylist(it) }
+    }
+
+    suspend fun updatePlaylist(id: String, name: String, description: String): PlexPlaylist = withContext(Dispatchers.IO) {
+        val body = JSONObject().put("name", name.trim()).put("description", description.trim())
+        parsePlaylist(JSONObject(request("PATCH", "/api/v1/playlists/${id.playlistId()}", body)))
+    }
+
+    suspend fun deletePlaylist(id: String) = withContext(Dispatchers.IO) {
+        request("DELETE", "/api/v1/playlists/${id.playlistId()}")
+        Unit
+    }
+
+    /** Appends tracks (first occurrence order, duplicates skipped server-side). */
+    suspend fun appendPlaylistTracks(id: String, trackIds: List<String>): Music032PlaylistItemResult = withContext(Dispatchers.IO) {
+        val body = JSONObject().put("trackIds", Music032PlaylistRequests.trackIdArray(trackIds))
+        Music032PlaylistRequests.parseItemResult(JSONObject(request("POST", "/api/v1/playlists/${id.playlistId()}/items/append", body)))
+    }
+
+    /** Appends a whole album in its effective disc/track order. */
+    suspend fun appendPlaylistAlbum(id: String, albumId: String): Music032PlaylistItemResult = withContext(Dispatchers.IO) {
+        val album = albumId.toLongOrNull()?.takeIf { it > 0 } ?: error("无效的专辑 ID")
+        val body = JSONObject().put("albumId", album)
+        Music032PlaylistRequests.parseItemResult(JSONObject(request("POST", "/api/v1/playlists/${id.playlistId()}/items/append", body)))
+    }
+
+    /** Removes tracks; a stale [expectedRevision] answers 409 `playlist_conflict` without mutation. */
+    suspend fun removePlaylistTracks(id: String, trackIds: List<String>, expectedRevision: Long): Music032PlaylistItemResult = withContext(Dispatchers.IO) {
+        val body = JSONObject()
+            .put("trackIds", Music032PlaylistRequests.trackIdArray(trackIds))
+            .put("expectedRevision", expectedRevision)
+        Music032PlaylistRequests.parseItemResult(JSONObject(request("POST", "/api/v1/playlists/${id.playlistId()}/items/remove", body)))
+    }
+
+    /** Additive undo: re-inserts one track at [index] (clamped server-side). */
+    suspend fun insertPlaylistTrack(id: String, trackId: String, index: Int): Music032PlaylistItemResult = withContext(Dispatchers.IO) {
+        val track = trackId.toLongOrNull() ?: error("无效的曲目 ID")
+        val body = JSONObject().put("trackId", track).put("index", index.coerceAtLeast(0))
+        Music032PlaylistRequests.parseItemResult(JSONObject(request("POST", "/api/v1/playlists/${id.playlistId()}/items/insert", body)))
+    }
+
+    private fun String.playlistId(): Long = toLongOrNull()?.takeIf { it > 0 } ?: error("无效的歌单 ID")
+
     override suspend fun setAlbumFavorite(ratingKey: String, isFavorite: Boolean) = withContext(Dispatchers.IO) {
         request(if (isFavorite) "PUT" else "DELETE", "/api/v1/albums/$ratingKey/favorite")
         clearArtistDetails()
@@ -424,10 +479,13 @@ class Music032Client(
             ?.use { it.readText() }
             .orEmpty()
         if (status !in 200..299) {
-            val message = runCatching {
-                JSONObject(response).optJSONObject("error")?.optString("message")
-            }.getOrNull().orEmpty().ifBlank { response.take(300) }
-            throw Music032HttpException(status, "032 Music Server HTTP $status：$message")
+            val error = runCatching { JSONObject(response).optJSONObject("error") }.getOrNull()
+            val message = error?.optString("message").orEmpty().ifBlank { response.take(300) }
+            throw Music032HttpException(
+                status,
+                "032 Music Server HTTP $status：$message",
+                code = error?.optString("code")?.takeIf { it.isNotBlank() },
+            )
         }
         return response
     }
@@ -452,7 +510,11 @@ class Music032Client(
 internal fun shouldCacheArtistDetail(requestGeneration: Long, currentGeneration: Long): Boolean =
     requestGeneration == currentGeneration
 
-internal class Music032HttpException(val status: Int, message: String) : IllegalStateException(message)
+internal class Music032HttpException(
+    val status: Int,
+    message: String,
+    val code: String? = null,
+) : IllegalStateException(message)
 
 enum class MediaTokenProbeResult { OK, INVALID, UNKNOWN }
 

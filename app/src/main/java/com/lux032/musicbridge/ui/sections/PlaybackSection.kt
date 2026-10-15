@@ -884,6 +884,12 @@ internal fun PlaybackDetailSection(
                     sleepTimerInputError = null
                     isSleepTimerDialogVisible = true
                 }
+                addTrackToPlaylistAction(currentTrack)?.let { addToPlaylist ->
+                    MoreSheetAction(Icons.Filled.LibraryAdd, Strings.addToPlaylist) {
+                        isMoreSheetVisible = false
+                        addToPlaylist()
+                    }
+                }
                 MoreSheetAction(Icons.Filled.Album, Strings.viewAlbum) {
                     isMoreSheetVisible = false
                     onAlbumClick(displayAlbum)
@@ -1624,6 +1630,7 @@ private fun AlbumDetailHeroWide(
                     onDownloadAlbum(album, trackResult.tracks)
                 }
             },
+            onAddToPlaylist = addAlbumToPlaylistAction(album, trackResult.tracks.size),
         )
     }
 
@@ -1774,6 +1781,7 @@ private fun AlbumActionRow(
                     showActionQueueMenu = false
                     onQueueAlbum(album, placement)
                 },
+                onAddToPlaylist = addAlbumToPlaylistAction(album, trackResult.tracks.size),
             )
         }
     }
@@ -1862,6 +1870,7 @@ private fun AlbumDetailHeroCompact(
                         onDownloadAlbum(album, trackResult.tracks)
                     }
                 },
+                onAddToPlaylist = addAlbumToPlaylistAction(album, trackResult.tracks.size),
             )
         }
 
@@ -2079,6 +2088,7 @@ private fun AlbumTrackRow(
             onDownloadAction = {
                 if (isDownloaded) onDeleteDownloadedTrack(track) else onDownloadTrack(track)
             },
+            onAddToPlaylist = addTrackToPlaylistAction(track),
         )
     }
 }
