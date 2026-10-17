@@ -18,6 +18,16 @@ internal object Music032TranscodeUrls {
         return "${match.groupValues[1]}$ratingKey/transcode.$format$originalQuery$suffix"
     }
 
+    /**
+     * `lyrics.lrc` of a 032 original stream (same media token). New servers resolve online
+     * lyrics there too, so downloads keep lyrics even when the track has no local ones.
+     */
+    fun lyricsUrl(streamUrl: String, ratingKey: String): String? {
+        val match = stream.matchEntire(streamUrl) ?: return null
+        if (match.groupValues[2] != ratingKey) return null
+        return "${match.groupValues[1]}$ratingKey/lyrics.lrc${match.groupValues[3]}"
+    }
+
     fun isLive(url: String): Boolean = live.containsMatchIn(url.substringBefore('?').substringBefore('#'))
 
     fun clampedOffsetMs(offsetMs: Long, durationMs: Long?): Long =

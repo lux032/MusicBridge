@@ -29,7 +29,7 @@ Download the latest APK from [Releases](https://github.com/lux032/MusicBridge/re
 - Play on this device, or discover and control Sonos speakers on your network, and switch output at any time
 - Real-time playback control and status: queue, play modes, sleep timer, quality badges
 - Offline downloads of original files (single tracks or whole albums), played directly from local storage when offline
-- Lyrics: server or downloaded lyrics first; when none exist, synced lyrics are matched automatically from NetEase / lrclib.net (same matching strategy as 032musicplayer)
+- Lyrics: 032 Music Server provides the lyrics (local lyrics first, otherwise matched from NetEase / LRCLIB and cached by the server); search for other lyrics or clear them from the lyrics page, for every device. With server translation enabled, show bilingual or translation-only lyrics (NetEase lyrics include a Simplified Chinese translation). Downloads keep their lyrics. Plex sources fall back to the in-app NetEase / lrclib.net lookup
 
 ### General
 

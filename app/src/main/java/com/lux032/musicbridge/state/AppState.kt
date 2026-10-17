@@ -30,6 +30,7 @@ import com.lux032.musicbridge.local.LocalAudioCache
 import com.lux032.musicbridge.local.LocalPlaybackEngine
 import com.lux032.musicbridge.local.LocalPlaybackService
 import com.lux032.musicbridge.local.NetworkQualityMonitor
+import com.lux032.musicbridge.music.LyricsTranslationSettings
 import com.lux032.musicbridge.music.MediaTokenProbeResult
 import com.lux032.musicbridge.music.Music032CapabilitiesStore
 import com.lux032.musicbridge.music.Music032Client
@@ -123,6 +124,13 @@ class AppState(
     var albumSortOption by mutableStateOf(appPreferences.loadAlbumSortOption())
         private set
     var albumFavoritesOnly by mutableStateOf(appPreferences.loadAlbumFavoritesOnly())
+        private set
+
+    /** Lyrics come from the 032 server (or the in-app lookup for Plex); see [TrackLyricsRepository]. */
+    internal val lyricsRepository = TrackLyricsRepository { sourceId -> runCatching { clientFor(sourceId) }.getOrNull() }
+    internal var lyricsTranslationSettings by mutableStateOf(
+        appPreferences.loadLyricsTranslationSettings(Strings.defaultLyricsLanguage),
+    )
         private set
     var albumDecadeFilter by mutableStateOf(appPreferences.loadAlbumDecadeFilter())
         private set
@@ -565,6 +573,11 @@ class AppState(
     fun updateAlbumSortOption(option: AlbumSortOption) {
         albumSortOption = option
         appPreferences.saveAlbumSortOption(option)
+    }
+
+    internal fun updateLyricsTranslationSettings(settings: LyricsTranslationSettings) {
+        lyricsTranslationSettings = settings
+        appPreferences.saveLyricsTranslationSettings(settings)
     }
 
     fun updateAlbumFavoritesOnly(enabled: Boolean) {

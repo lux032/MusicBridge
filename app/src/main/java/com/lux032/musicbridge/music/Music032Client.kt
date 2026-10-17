@@ -349,6 +349,56 @@ class Music032Client(
         Unit
     }
 
+    // --- Lyrics (features.lyricsOnline / lyricsTranslation) --------------------------------
+
+    /** Lyrics resolved by the server; null when the track has none (404). */
+    internal suspend fun fetchLyrics(trackId: String): Music032TrackLyrics? = withContext(Dispatchers.IO) {
+        try {
+            Music032LyricsJson.parseLyrics(request("GET", "/api/v1/tracks/${trackId.trackIdPath()}/lyrics"))
+        } catch (error: Music032HttpException) {
+            if (error.status == 404) null else throw error
+        }
+    }
+
+    internal suspend fun searchLyrics(name: String, artist: String, durationMillis: Long?): List<Music032LyricsCandidate> =
+        withContext(Dispatchers.IO) {
+            val query = buildList {
+                add("name=${URLEncoder.encode(name.trim(), "UTF-8")}")
+                add("artist=${URLEncoder.encode(artist.trim(), "UTF-8")}")
+                durationMillis?.takeIf { it > 0 }?.let { add("durationMs=$it") }
+            }.joinToString("&")
+            Music032LyricsJson.parseSearch(request("GET", "/api/v1/lyrics/search?$query", readTimeoutMillis = LYRICS_READ_TIMEOUT_MILLIS))
+        }
+
+    /** Uses one search result as this track's lyrics on the server (every client sees it). */
+    internal suspend fun bindLyrics(trackId: String, candidate: Music032LyricsCandidate): Music032TrackLyrics =
+        withContext(Dispatchers.IO) {
+            val body = JSONObject()
+                .put("source", candidate.source)
+                .put("id", candidate.id)
+                .put("name", candidate.name)
+                .put("artist", candidate.artist)
+            Music032LyricsJson.parseLyrics(
+                request("PUT", "/api/v1/tracks/${trackId.trackIdPath()}/lyrics/source", body, LYRICS_READ_TIMEOUT_MILLIS),
+            )
+        }
+
+    /** Drops the online lyrics and stops automatic lookups; local lyrics are unaffected. */
+    internal suspend fun clearLyrics(trackId: String) = withContext(Dispatchers.IO) {
+        request("DELETE", "/api/v1/tracks/${trackId.trackIdPath()}/lyrics/source")
+        Unit
+    }
+
+    /** Line-by-line translation aligned to the server lyric lines (AI or NetEase's own). */
+    internal suspend fun translateLyrics(trackId: String, targetLanguage: String): List<String> = withContext(Dispatchers.IO) {
+        val body = JSONObject().put("targetLanguage", targetLanguage)
+        Music032LyricsJson.parseTranslation(
+            request("POST", "/api/v1/tracks/${trackId.trackIdPath()}/lyrics/translation", body, TRANSLATION_READ_TIMEOUT_MILLIS),
+        )
+    }
+
+    private fun String.trackIdPath(): Long = toLongOrNull()?.takeIf { it > 0 } ?: error("无效的曲目 ID")
+
     override suspend fun setAlbumFavorite(ratingKey: String, isFavorite: Boolean) = withContext(Dispatchers.IO) {
         request(if (isFavorite) "PUT" else "DELETE", "/api/v1/albums/$ratingKey/favorite")
         clearArtistDetails()
@@ -490,12 +540,12 @@ class Music032Client(
         return result
     }
 
-    private fun request(method: String, path: String, body: JSONObject? = null): String {
+    private fun request(method: String, path: String, body: JSONObject? = null, readTimeoutMillis: Int = 30_000): String {
         val target = if (path.startsWith("http://") || path.startsWith("https://")) path else "$baseUrl$path"
         val connection = (URL(target).openConnection() as HttpURLConnection).apply {
             requestMethod = method
             connectTimeout = 15_000
-            readTimeout = 30_000
+            readTimeout = readTimeoutMillis
             instanceFollowRedirects = true
             doInput = true
             setRequestProperty("Accept", "application/json")
@@ -539,6 +589,9 @@ class Music032Client(
         const val SYNC_PAGE_SIZE = 1000
         const val PLAYBACK_EVENT_CONNECT_TIMEOUT_MILLIS = 5_000
         const val PLAYBACK_EVENT_READ_TIMEOUT_MILLIS = 5_000
+        /** Server online lookups take up to ~20 s; AI translation of a long song takes longer. */
+        const val LYRICS_READ_TIMEOUT_MILLIS = 45_000
+        const val TRANSLATION_READ_TIMEOUT_MILLIS = 180_000
     }
 }
 

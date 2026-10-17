@@ -12,6 +12,8 @@ import kotlinx.coroutines.withContext
 data class PlexLyricLine(
     val timeMillis: Long,
     val text: String,
+    /** Server translation of [text] (032 sources only). */
+    val translation: String? = null,
 )
 
 data class PlexLyrics(

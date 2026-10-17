@@ -5,6 +5,8 @@ import androidx.core.content.edit
 import org.json.JSONArray
 import org.json.JSONObject
 import com.lux032.musicbridge.ai.AiSettings
+import com.lux032.musicbridge.music.LyricsTranslationMode
+import com.lux032.musicbridge.music.LyricsTranslationSettings
 import com.lux032.musicbridge.music.Music032PersistedSession
 import com.lux032.musicbridge.music.Music032ReporterPreferences
 import java.util.UUID
@@ -393,6 +395,23 @@ class AppPreferences(context: Context) {
         sharedPreferences.edit { putString(KEY_ALBUM_SORT_OPTION, option.name) }
     }
 
+    internal fun loadLyricsTranslationSettings(defaultLanguage: String): LyricsTranslationSettings = LyricsTranslationSettings(
+        enabled = sharedPreferences.getBoolean(KEY_LYRICS_TRANSLATION_ENABLED, false),
+        mode = LyricsTranslationMode.entries.firstOrNull {
+            it.name == sharedPreferences.getString(KEY_LYRICS_TRANSLATION_MODE, null)
+        } ?: LyricsTranslationMode.Bilingual,
+        targetLanguage = sharedPreferences.getString(KEY_LYRICS_TRANSLATION_LANGUAGE, null)
+            ?.takeIf { it in LyricsTranslationSettings.LANGUAGES } ?: defaultLanguage,
+    )
+
+    internal fun saveLyricsTranslationSettings(settings: LyricsTranslationSettings) {
+        sharedPreferences.edit {
+            putBoolean(KEY_LYRICS_TRANSLATION_ENABLED, settings.enabled)
+            putString(KEY_LYRICS_TRANSLATION_MODE, settings.mode.name)
+            putString(KEY_LYRICS_TRANSLATION_LANGUAGE, settings.targetLanguage)
+        }
+    }
+
     fun loadAlbumFavoritesOnly(): Boolean =
         sharedPreferences.getBoolean(KEY_ALBUM_FAVORITES_ONLY, false)
 
@@ -493,6 +512,9 @@ class AppPreferences(context: Context) {
         private const val KEY_LOCAL_PRECACHE_CELLULAR = "local_precache_cellular_v1"
         private const val KEY_ALBUM_SORT_OPTION = "album_sort_option_v1"
         private const val KEY_ALBUM_FAVORITES_ONLY = "album_favorites_only_v1"
+        private const val KEY_LYRICS_TRANSLATION_ENABLED = "lyrics_translation_enabled_v1"
+        private const val KEY_LYRICS_TRANSLATION_MODE = "lyrics_translation_mode_v1"
+        private const val KEY_LYRICS_TRANSLATION_LANGUAGE = "lyrics_translation_language_v1"
         private const val KEY_ALBUM_DECADE_FILTER = "album_decade_filter_v1"
         private const val KEY_ARTIST_PRESENTATION = "artist_presentation_v1"
         private const val KEY_ARTIST_FAVORITES_ONLY = "artist_favorites_only_v1"

@@ -5,6 +5,7 @@ import android.util.Log
 import androidx.media3.datasource.DefaultHttpDataSource
 import com.lux032.musicbridge.local.LocalAudioCache
 import com.lux032.musicbridge.local.originalCacheKey
+import com.lux032.musicbridge.music.Music032TranscodeUrls
 import com.lux032.musicbridge.plex.PlexTrackStream
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -317,9 +318,11 @@ class OfflineDownloadManager(
 
         // 4. Companion Lyrics download (best-effort)
         var localLyricPath: String? = null
-        if (!track.lyricUrl.isNullOrBlank()) {
+        val lyricUrl = track.lyricUrl?.takeIf { it.isNotBlank() }
+            ?: Music032TranscodeUrls.lyricsUrl(track.streamUrl, track.ratingKey)
+        if (lyricUrl != null) {
             val lyricFile = File(lyricsDir, "${track.sourceId}_${track.ratingKey}.lrc")
-            if (downloadCompanionAsset(track.lyricUrl, lyricFile)) {
+            if (downloadCompanionAsset(lyricUrl, lyricFile)) {
                 localLyricPath = lyricFile.absolutePath
             }
         }
@@ -357,7 +360,8 @@ class OfflineDownloadManager(
         return try {
             val connection = URL(sourceUrl).openConnection() as HttpURLConnection
             connection.connectTimeout = 10_000
-            connection.readTimeout = 15_000
+            // 032 lyrics.lrc may look lyrics up online first (up to ~20 s).
+            connection.readTimeout = 30_000
             connection.inputStream.buffered().use { input ->
                 tmp.outputStream().buffered().use { output ->
                     input.copyTo(output)

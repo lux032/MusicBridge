@@ -71,9 +71,7 @@ import com.lux032.musicbridge.plex.PlexAlbumTracksResult
 import com.lux032.musicbridge.plex.PlexTrackStream
 import com.lux032.musicbridge.plex.isFavorite
 import com.lux032.musicbridge.plex.playbackUrlIdentity
-import com.lux032.musicbridge.plex.PlexLyricLine
-import com.lux032.musicbridge.plex.PlexLyrics
-import com.lux032.musicbridge.plex.loadTrackLyrics
+import com.lux032.musicbridge.music.LyricsTranslationSettings
 import com.lux032.musicbridge.plex.willTranscodeLocally
 import com.lux032.musicbridge.music.Music032LocalTranscode
 import coil3.compose.AsyncImage
@@ -118,6 +116,9 @@ internal fun PlaybackDetailSection(
     onRefreshRooms: () -> Unit,
     onStartSleepTimer: (Int, Int) -> Unit,
     onCancelSleepTimer: () -> Unit,
+    lyricsRepository: TrackLyricsRepository,
+    lyricsTranslationSettings: LyricsTranslationSettings,
+    onLyricsTranslationSettingsChange: (LyricsTranslationSettings) -> Unit,
     sonosVolume: Float = 0f,
     hasLoadedSonosVolume: Boolean = false,
     onVolumeChange: ((Float) -> Unit)? = null,
@@ -160,15 +161,8 @@ internal fun PlaybackDetailSection(
     var sleepTimerMinutes by remember { mutableIntStateOf(30) }
     var sleepTimerInputError by remember { mutableStateOf<String?>(null) }
     var optimisticFavorite by remember(currentTrack.sourceId, currentTrack.ratingKey) { mutableStateOf(currentTrack.isFavorite) }
-    var lyrics by remember(currentTrack.sourceId, currentTrack.ratingKey) { mutableStateOf(PlexLyrics(emptyList(), isSynced = false)) }
-    var isLyricsLoading by remember(currentTrack.sourceId, currentTrack.ratingKey) { mutableStateOf(false) }
-
-    LaunchedEffect(currentTrack.sourceId, currentTrack.ratingKey, currentTrack.lyricUrl) {
-        isLyricsLoading = true
-        // Server/downloaded lyrics first; falls back to NetEase / lrclib.net when none exist.
-        lyrics = loadTrackLyrics(currentTrack)
-        isLyricsLoading = false
-    }
+    // 032 servers resolve lyrics (and translate them); Plex falls back to the in-app lookup.
+    val lyricsState = rememberTrackLyricsState(currentTrack, lyricsRepository, lyricsTranslationSettings)
     LaunchedEffect(currentTrack.isFavorite, isFavoriteLoading) {
         if (!isFavoriteLoading) optimisticFavorite = currentTrack.isFavorite
     }
@@ -769,12 +763,14 @@ internal fun PlaybackDetailSection(
             topBar()
 
             if (selectedPlayerPage == 1) {
-                LyricsView(
-                    lines = lyrics.lines,
-                    isSynced = lyrics.isSynced,
+                LyricsPanel(
+                    track = currentTrack,
+                    state = lyricsState,
+                    settings = lyricsTranslationSettings,
+                    onSettingsChange = onLyricsTranslationSettingsChange,
+                    repository = lyricsRepository,
                     positionMillis = currentState.currentPositionMillis,
                     listState = lyricsListState,
-                    isLoading = isLyricsLoading,
                     palette = palette,
                     onSeekLine = { line -> onSeek(currentState, line.timeMillis) },
                     modifier = Modifier.fillMaxWidth().weight(1f),
@@ -1218,81 +1214,6 @@ private fun OutputTargetOption(
     }
 }
 
-@Composable
-private fun LyricsView(
-    lines: List<PlexLyricLine>,
-    isSynced: Boolean,
-    positionMillis: Long,
-    listState: LazyListState,
-    isLoading: Boolean,
-    palette: ArtworkPalette,
-    onSeekLine: (PlexLyricLine) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val isUserDragging by listState.interactionSource.collectIsDraggedAsState()
-    var autoFollowSuspended by remember { mutableStateOf(false) }
-    var suspensionGeneration by remember { mutableIntStateOf(0) }
-    val activeIndex = if (isSynced) lines.indexOfLast { it.timeMillis <= positionMillis }.coerceAtLeast(0) else -1
-
-    LaunchedEffect(isUserDragging) {
-        if (isUserDragging) {
-            autoFollowSuspended = true
-            suspensionGeneration++
-        } else if (autoFollowSuspended) {
-            val generation = ++suspensionGeneration
-            snapshotFlow { listState.isScrollInProgress }
-                .filter { inProgress -> !inProgress }
-                .first()
-            delay(3_000)
-            if (generation == suspensionGeneration) autoFollowSuspended = false
-        }
-    }
-    LaunchedEffect(activeIndex, isSynced, autoFollowSuspended) {
-        if (isSynced && activeIndex >= 0 && !autoFollowSuspended) {
-            listState.animateScrollToItem(activeIndex, scrollOffset = -120)
-        }
-    }
-    LazyColumn(
-        state = listState,
-        modifier = modifier,
-        contentPadding = PaddingValues(vertical = 160.dp),
-        verticalArrangement = Arrangement.spacedBy(20.dp),
-    ) {
-        if (lines.isEmpty()) {
-            item(key = "empty-lyrics") {
-                Box(modifier = Modifier.fillParentMaxHeight().fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    Crossfade(targetState = isLoading, label = "lyrics_loading") { loading ->
-                        if (loading) {
-                            CircularProgressIndicator(color = palette.accent, modifier = Modifier.size(28.dp), strokeWidth = 3.dp)
-                        } else {
-                            Text(Strings.noLyrics, color = AppColors.TextSecondary, style = MaterialTheme.typography.titleMedium)
-                        }
-                    }
-                }
-            }
-        }
-        itemsIndexed(lines) { index, line ->
-            val isActive = isSynced && index == activeIndex
-            Text(
-                text = line.text,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .clickable(enabled = isSynced) {
-                        autoFollowSuspended = false
-                        suspensionGeneration++
-                        onSeekLine(line)
-                    }
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
-                color = if (isActive) palette.accent else AppColors.TextSecondary.copy(alpha = 0.72f),
-                style = if (isActive) MaterialTheme.typography.headlineSmall else MaterialTheme.typography.titleMedium,
-                fontWeight = if (isActive) FontWeight.Bold else FontWeight.Medium,
-                textAlign = TextAlign.Center,
-            )
-        }
-    }
-}
-
 internal fun originalAudioQualityBadges(codec: String?, bitDepth: Int?, sampleRate: Int?): List<String> = buildList {
     codec?.takeIf { it.isNotBlank() }?.let { add(it.uppercase(Locale.ROOT)) }
     bitDepth?.takeIf { it > 0 }?.let { add("${it}bit") }
@@ -1335,7 +1256,7 @@ private fun PlexTrackStream.trackDetailText(
     .ifBlank { sourceAudioCodec?.uppercase(Locale.ROOT) ?: "—" }
 
 @Composable
-private fun MoreSheetAction(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, onClick: () -> Unit) {
+internal fun MoreSheetAction(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, onClick: () -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable(onClick = onClick).padding(12.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),

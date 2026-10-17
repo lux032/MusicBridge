@@ -582,6 +582,9 @@ fun PlexAlbumScreen(
                                 state.startSleepTimer(hours, minutes)
                             },
                             onCancelSleepTimer = state::cancelSleepTimer,
+                            lyricsRepository = state.lyricsRepository,
+                            lyricsTranslationSettings = state.lyricsTranslationSettings,
+                            onLyricsTranslationSettingsChange = state::updateLyricsTranslationSettings,
                             sonosVolume = state.sonosVolume,
                             hasLoadedSonosVolume = state.hasLoadedSonosVolume,
                             onVolumeChange = state.miniPlayerState?.sonosRoom?.let { room ->
