@@ -6,7 +6,9 @@
 
 [中文](./README.md) | English
 
-An Android app that bridges Plex or 032 Music Server libraries to Sonos speakers.
+An Android client for [032 Music Server](https://github.com/lux032/032music-server): browse your self-hosted music library on your phone and play it locally or on Sonos speakers.
+
+MusicBridge is built primarily for 032 Music Server (playlists, Daily Mixes and durable playback sessions are 032-only features) while remaining compatible with Plex Media Server. For desktop, see [032musicplayer](https://github.com/lux032/032musicplayer).
 
 ## Download
 
@@ -14,17 +16,26 @@ Download the latest APK from [Releases](https://github.com/lux032/MusicBridge/re
 
 ## Features
 
-- Browse Plex and 032 Music Server libraries (albums, artists, playlists, favorites)
-- Create and manage 032 Music Server playlists: new playlist, add tracks or whole albums from any More menu, remove with undo, rename, delete
-- 032 Music Server Daily Mixes: a swipeable home row of the mixes the server builds each day; play, like / dislike (optional reasons), replace, save as playlist, and "don't recommend" for single tracks
-- Save multiple music servers and switch between them directly from Settings
-- Keep library caches, recently played albums, and sync timestamps isolated per server
-- Discover and control Sonos speakers on your network
-- Stream music from Plex or 032 Music Server to Sonos
-- Real-time playback control and status
-- Sync favorites, playback progress, and scrobbles to the active music server
-- Durable playback sessions for 032 Music Server (apiRevision 3): every play is a server-side session with ordered events, so play counts, skips and breakpoints stay correct across output switches, repeat loops, app restarts and crashes
-- Material Design 3 UI
+### 032 Music Server
+
+- Browse albums, artists, playlists and favorites
+- Playlist management: new playlist, add tracks or whole albums from any More menu, remove with undo, rename, delete
+- Daily Mixes: a swipeable home row of the mixes the server builds each day; play, like / dislike (optional reasons), replace, save as playlist, and "don't recommend" for single tracks
+- Durable playback sessions (apiRevision 3): every play is a server-side session with ordered events, so play counts, skips and breakpoints stay correct across output switches, repeat loops, app restarts and crashes
+- Favorites and play history synced back to the server
+
+### Playback
+
+- Play on this device, or discover and control Sonos speakers on your network, and switch output at any time
+- Real-time playback control and status: queue, play modes, sleep timer, quality badges
+- Offline downloads of original files (single tracks or whole albums), played directly from local storage when offline
+- Lyrics: server or downloaded lyrics first; when none exist, synced lyrics are matched automatically from NetEase / lrclib.net (same matching strategy as 032musicplayer)
+
+### General
+
+- Save multiple music servers and switch between them from Settings; library caches, recently played albums and sync timestamps stay isolated per server
+- Plex Media Server compatibility (browsing, playback, favorites and progress sync)
+- Dark Material Design 3 UI tinted from the current album artwork, with phone and tablet layouts
 
 ## 032 playback sessions
 
@@ -41,8 +52,8 @@ When the active server is 032 Music Server, playback is reported through a dedic
 ## Requirements
 
 - Android 7.0 (API 24) or higher
-- Plex Media Server or 032 Music Server
-- Sonos speakers on the same network
+- [032 Music Server](https://github.com/lux032/032music-server) (recommended) or Plex Media Server
+- Optional: Sonos speakers on the same network (local playback works without Sonos)
 
 ## Setup
 
@@ -67,11 +78,10 @@ After a successful run, download `MusicBridge-apks-<run-number>` from its **Arti
 ## Configuration
 
 On first launch:
-1. Add a server in Settings and choose either `Plex` or `032 Music Server`
-2. For Plex, enter a Plex token, or use your Plex username and password for discovery
-3. For 032 Music Server, enter its URL (for example `http://192.168.1.100:4533`) and API token; the API token is also used for media when the media token is blank
-4. Click any saved server card in Settings to switch servers
-5. Select a discovered Sonos speaker and start playing
+1. Add a server in Settings, choose `032 Music Server`, and enter its URL (for example `http://192.168.1.100:4533`) and API token; the API token is also used for media when the media token is blank
+2. For Plex, choose `Plex` and enter a Plex token, or use your Plex username and password for discovery
+3. Click any saved server card in Settings to switch servers
+4. Pick an output on the player screen: this device, or a discovered Sonos speaker
 
 Existing Plex settings are migrated automatically. The first launch of this version rebuilds only the local music cache; it does not delete server-side music or metadata.
 

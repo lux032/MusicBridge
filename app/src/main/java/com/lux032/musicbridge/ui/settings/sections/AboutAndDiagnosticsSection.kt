@@ -83,7 +83,7 @@ fun AboutAndDiagnosticsSection(
         // App Version item
         SettingsItem(
             title = "MusicBridge",
-            subtitle = "Music Server to Sonos Bridge",
+            subtitle = "032 Music Server Android 客户端 · 本机 / Sonos 播放",
             value = "v${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
             icon = Icons.Filled.Info,
         )
