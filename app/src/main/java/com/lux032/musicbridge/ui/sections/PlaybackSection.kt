@@ -73,8 +73,7 @@ import com.lux032.musicbridge.plex.isFavorite
 import com.lux032.musicbridge.plex.playbackUrlIdentity
 import com.lux032.musicbridge.plex.PlexLyricLine
 import com.lux032.musicbridge.plex.PlexLyrics
-import com.lux032.musicbridge.plex.fetchPlexLyrics
-import com.lux032.musicbridge.plex.resolvePlexLyricUrl
+import com.lux032.musicbridge.plex.loadTrackLyrics
 import com.lux032.musicbridge.plex.willTranscodeLocally
 import com.lux032.musicbridge.music.Music032LocalTranscode
 import coil3.compose.AsyncImage
@@ -166,11 +165,8 @@ internal fun PlaybackDetailSection(
 
     LaunchedEffect(currentTrack.sourceId, currentTrack.ratingKey, currentTrack.lyricUrl) {
         isLyricsLoading = true
-        lyrics = runCatching {
-            resolvePlexLyricUrl(currentTrack)?.let { fetchPlexLyrics(it) }
-                ?: PlexLyrics(emptyList(), isSynced = false)
-        }.onFailure { Log.d("PlexLyrics", "Lyrics unavailable for ${currentTrack.ratingKey}", it) }
-            .getOrDefault(PlexLyrics(emptyList(), isSynced = false))
+        // Server/downloaded lyrics first; falls back to NetEase / lrclib.net when none exist.
+        lyrics = loadTrackLyrics(currentTrack)
         isLyricsLoading = false
     }
     LaunchedEffect(currentTrack.isFavorite, isFavoriteLoading) {
