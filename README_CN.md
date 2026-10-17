@@ -58,9 +58,9 @@ git clone https://github.com/lux032/MusicBridge.git
 
 构建成功后，在运行详情页的 **Artifacts** 下载 `MusicBridge-apks-<运行编号>`，解压后即可获得两个可安装的 APK 和 `SHA256SUMS.txt` 校验文件。APK 保留 30 天；测试报告保留 14 天，Release 混淆映射保留 30 天。
 
-- CI 使用 JDK 21、Android SDK 36 和项目自带的 Gradle Wrapper，不需要配置 Secrets。
-- Release APK 开启压缩和混淆，但没有正式签名密钥时会沿用项目现有的 debug 签名回退逻辑。这些包用于测试，不会自动发布到 GitHub Releases。
-- 不同 CI 运行的 debug 签名可能不同，也可能与本地安装包不同，不能保证覆盖安装。签名不匹配时需要卸载旧应用（会清除本地数据）；长期分发应先配置固定的正式签名密钥。
+- CI 使用 JDK 21、Android SDK 36 和项目自带的 Gradle Wrapper。非 PR 构建必须配置 `KEYSTORE_BASE64`、`KEYSTORE_PASSWORD`、`KEY_ALIAS`、`KEY_PASSWORD` 四个 Secrets，缺失时构建失败，不会回退到 debug 签名发布。
+- Release APK 开启压缩和混淆。分支推送及手动构建会自动发布正式签名的测试预发布；推送与应用版本匹配的 `v*` 标签（例如版本 `1.0.0` 对应 `v1.0.0`）会在测试和构建成功后发布正式 Release 并标记为 Latest。
+- PR 构建不使用正式签名密钥。覆盖安装要求应用 ID、签名一致且版本码不降低；签名不匹配时需要卸载旧应用（会清除本地数据）。
 - 单元测试失败时不会上传 APK，可下载测试报告排查原因；此流程不包含需要模拟器或真机的仪器测试。
 
 ## 配置

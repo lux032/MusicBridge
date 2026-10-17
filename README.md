@@ -59,9 +59,9 @@ Every push and Pull Request update runs JVM unit tests and builds Debug and Rele
 
 After a successful run, download `MusicBridge-apks-<run-number>` from its **Artifacts** section. Extract the archive to get both installable APKs and `SHA256SUMS.txt`. APKs and the Release obfuscation mapping are retained for 30 days; test reports for 14 days.
 
-- CI uses JDK 21, Android SDK 36, and the repository's Gradle Wrapper. No secrets are required.
-- The Release APK is shrunk and obfuscated but uses the project's existing debug-signing fallback when no production keystore is configured. These are test builds; the workflow does not publish GitHub Releases.
-- Debug signing keys may differ between CI runs and local builds, so in-place upgrades are not guaranteed. A signature mismatch requires uninstalling the previous app (which clears local data); use a fixed production signing key for long-term distribution.
+- CI uses JDK 21, Android SDK 36, and the repository's Gradle Wrapper. Non-PR builds require the `KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`, and `KEY_PASSWORD` secrets; missing credentials fail the build rather than publishing a debug-signed APK.
+- Release APKs are shrunk and obfuscated. Branch pushes and manual builds publish production-signed test prereleases. Pushing a `v*` tag matching the app version (for example, `v1.0.0` for version `1.0.0`) publishes a stable Release marked Latest after tests and builds succeed.
+- PR builds never use the production signing key. In-place upgrades require the same application ID and signature and a non-decreasing version code. A signature mismatch requires uninstalling the previous app, which clears local data.
 - Failed unit tests prevent APK upload; test reports remain available for troubleshooting. Emulator/device instrumentation tests are not included in this workflow.
 
 ## Configuration
