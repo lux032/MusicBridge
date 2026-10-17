@@ -291,6 +291,11 @@ internal fun PlaylistDetailSection(
     onRemoveTrack: (PlexTrackStream) -> Unit = {},
     onUpdatePlaylist: suspend (PlexPlaylist, String, String) -> Result<*> = { _, _, _ -> Result.success(Unit) },
     onDeletePlaylist: suspend (PlexPlaylist) -> Result<*> = { Result.success(Unit) },
+    dailyMix: DailyMixDetailState? = null,
+    onRateDailyMix: (Int, List<String>) -> Unit = { _, _ -> },
+    onReplaceDailyMix: () -> Unit = {},
+    onSaveDailyMix: () -> Unit = {},
+    onToggleRecommendationBlock: (PlexTrackStream) -> Unit = {},
     nowPlaying: NowPlayingMarker? = LocalNowPlaying.current,
 ) {
     val currentResult = playlistResult
@@ -399,6 +404,10 @@ internal fun PlaylistDetailSection(
                     verticalArrangement = Arrangement.spacedBy(16.dp),
                 ) {
                     PlaylistDetailHeroWide(
+                        dailyMix = dailyMix,
+                        onRateDailyMix = onRateDailyMix,
+                        onReplaceDailyMix = onReplaceDailyMix,
+                        onSaveDailyMix = onSaveDailyMix,
                         playlistResult = currentResult,
                         outputTargetName = outputTargetName,
                         isPlaybackLoading = isPlaybackLoading,
@@ -438,6 +447,13 @@ internal fun PlaylistDetailSection(
                                 onSonicRadio = onSonicRadio,
                                 onRemoveFromPlaylist = removeTrack,
                                 nowPlaying = nowPlaying?.takeIf { it.matches(track) },
+                                isExplore = dailyMix != null && track.ratingKey in dailyMix.exploreTrackIds,
+                                isRecommendationBlocked = dailyMix != null && track.ratingKey in dailyMix.blockedTrackIds,
+                                onToggleRecommendationBlock = if (dailyMix != null) {
+                                    { onToggleRecommendationBlock(track) }
+                                } else {
+                                    null
+                                },
                             )
                         }
                     }
@@ -455,6 +471,10 @@ internal fun PlaylistDetailSection(
             ) {
                 item(key = "playlist-summary", contentType = "playlist-summary") {
                     PlaylistDetailHeroCompact(
+                        dailyMix = dailyMix,
+                        onRateDailyMix = onRateDailyMix,
+                        onReplaceDailyMix = onReplaceDailyMix,
+                        onSaveDailyMix = onSaveDailyMix,
                         playlistResult = currentResult,
                         outputTargetName = outputTargetName,
                         isPlaybackLoading = isPlaybackLoading,
@@ -489,6 +509,13 @@ internal fun PlaylistDetailSection(
                             onSonicRadio = onSonicRadio,
                             onRemoveFromPlaylist = removeTrack,
                             nowPlaying = nowPlaying?.takeIf { it.matches(track) },
+                            isExplore = dailyMix != null && track.ratingKey in dailyMix.exploreTrackIds,
+                            isRecommendationBlocked = dailyMix != null && track.ratingKey in dailyMix.blockedTrackIds,
+                            onToggleRecommendationBlock = if (dailyMix != null) {
+                                { onToggleRecommendationBlock(track) }
+                            } else {
+                                null
+                            },
                         )
                     }
                 }
@@ -499,6 +526,10 @@ internal fun PlaylistDetailSection(
 
 @Composable
 private fun PlaylistDetailHeroWide(
+    dailyMix: DailyMixDetailState?,
+    onRateDailyMix: (Int, List<String>) -> Unit,
+    onReplaceDailyMix: () -> Unit,
+    onSaveDailyMix: () -> Unit,
     playlistResult: PlexPlaylistTracksResult,
     outputTargetName: String,
     isPlaybackLoading: Boolean,
@@ -512,23 +543,35 @@ private fun PlaylistDetailHeroWide(
         modifier = Modifier.fillMaxWidth(),
         contentAlignment = Alignment.Center,
     ) {
-        AsyncAlbumArtwork(
-            imageUrl = playlist.thumbUrl,
-            title = playlist.title,
-            modifier = Modifier
-                .widthIn(max = 300.dp)
-                .fillMaxWidth()
-                .aspectRatio(1f)
-                .clip(RoundedCornerShape(14.dp)),
-            thumbnailSize = 300.dp,
-        )
+        val coverModifier = Modifier
+            .widthIn(max = 300.dp)
+            .fillMaxWidth()
+            .aspectRatio(1f)
+            .clip(RoundedCornerShape(14.dp))
+        if (dailyMix != null) {
+            Box(coverModifier) { DailyMixMosaic(dailyMix.mix.coverUrls, playlist.title, 300.dp) }
+        } else {
+            AsyncAlbumArtwork(
+                imageUrl = playlist.thumbUrl,
+                title = playlist.title,
+                modifier = coverModifier,
+                thumbnailSize = 300.dp,
+            )
+        }
     }
-    PlaylistHeroText(playlistResult, aiDescription, onSaveToPlex, centered = false)
+    PlaylistHeroText(playlistResult, aiDescription, onSaveToPlex, centered = false, themeLine = dailyMix?.mix?.themeLine())
     PlaylistActionRow(playlistResult, outputTargetName, isPlaybackLoading, onPlayPlaylist, onShufflePlaylist)
+    if (dailyMix != null) {
+        DailyMixFeedbackPanel(dailyMix, onRateDailyMix, onReplaceDailyMix, onSaveDailyMix)
+    }
 }
 
 @Composable
 private fun PlaylistDetailHeroCompact(
+    dailyMix: DailyMixDetailState?,
+    onRateDailyMix: (Int, List<String>) -> Unit,
+    onReplaceDailyMix: () -> Unit,
+    onSaveDailyMix: () -> Unit,
     playlistResult: PlexPlaylistTracksResult,
     outputTargetName: String,
     isPlaybackLoading: Boolean,
@@ -542,21 +585,30 @@ private fun PlaylistDetailHeroCompact(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        AsyncAlbumArtwork(
-            imageUrl = playlist.thumbUrl,
-            title = playlist.title,
-            modifier = Modifier
-                .padding(top = 4.dp)
-                .fillMaxWidth(0.6f)
-                .widthIn(max = 280.dp)
-                .aspectRatio(1f)
-                .clip(RoundedCornerShape(14.dp)),
-            thumbnailSize = 280.dp,
-        )
+        val coverModifier = Modifier
+            .padding(top = 4.dp)
+            .fillMaxWidth(0.6f)
+            .widthIn(max = 280.dp)
+            .aspectRatio(1f)
+            .clip(RoundedCornerShape(14.dp))
+        if (dailyMix != null) {
+            Box(coverModifier) { DailyMixMosaic(dailyMix.mix.coverUrls, playlist.title, 280.dp) }
+        } else {
+            AsyncAlbumArtwork(
+                imageUrl = playlist.thumbUrl,
+                title = playlist.title,
+                modifier = coverModifier,
+                thumbnailSize = 280.dp,
+            )
+        }
         Spacer(Modifier.height(18.dp))
-        PlaylistHeroText(playlistResult, aiDescription, onSaveToPlex, centered = true)
+        PlaylistHeroText(playlistResult, aiDescription, onSaveToPlex, centered = true, themeLine = dailyMix?.mix?.themeLine())
         Spacer(Modifier.height(18.dp))
         PlaylistActionRow(playlistResult, outputTargetName, isPlaybackLoading, onPlayPlaylist, onShufflePlaylist)
+        if (dailyMix != null) {
+            Spacer(Modifier.height(12.dp))
+            DailyMixFeedbackPanel(dailyMix, onRateDailyMix, onReplaceDailyMix, onSaveDailyMix)
+        }
         Spacer(Modifier.height(8.dp))
     }
 }
@@ -567,6 +619,7 @@ private fun PlaylistHeroText(
     aiDescription: String?,
     onSaveToPlex: () -> Unit,
     centered: Boolean,
+    themeLine: String? = null,
 ) {
     val playlist = playlistResult.playlist
     val align = if (centered) TextAlign.Center else TextAlign.Start
@@ -592,6 +645,14 @@ private fun PlaylistHeroText(
             color = AppColors.TextTertiary,
             style = MaterialTheme.typography.bodySmall,
         )
+        if (!themeLine.isNullOrBlank()) {
+            Text(
+                themeLine,
+                color = LocalArtworkPalette.current.accent,
+                style = MaterialTheme.typography.labelLarge,
+                textAlign = align,
+            )
+        }
         if (playlist.description.isNotBlank() && !playlist.ratingKey.startsWith("ai:")) {
             Text(
                 playlist.description,
@@ -652,6 +713,9 @@ private fun PlaylistDetailTrackRow(
     onSonicRadio: (PlexTrackStream) -> Unit,
     onRemoveFromPlaylist: ((PlexTrackStream) -> Unit)? = null,
     nowPlaying: NowPlayingMarker? = null,
+    isExplore: Boolean = false,
+    isRecommendationBlocked: Boolean = false,
+    onToggleRecommendationBlock: (() -> Unit)? = null,
 ) {
     var showQueueMenu by remember { mutableStateOf(false) }
     val isCurrent = nowPlaying != null
@@ -693,7 +757,7 @@ private fun PlaylistDetailTrackRow(
                 ) {
                     Text(
                         text = track.title,
-                        color = nowPlayingTitleColor(isCurrent),
+                        color = if (isRecommendationBlocked && !isCurrent) AppColors.TextTertiary else nowPlayingTitleColor(isCurrent),
                         style = MaterialTheme.typography.bodyLarge,
                         fontWeight = if (isCurrent) FontWeight.SemiBold else FontWeight.Medium,
                         maxLines = 1,
@@ -716,6 +780,22 @@ private fun PlaylistDetailTrackRow(
                                 modifier = Modifier.size(12.dp),
                                 strokeWidth = 2.dp,
                                 color = palette.accent,
+                            )
+                        }
+                        if (isExplore) {
+                            Text(
+                                Strings.exploreTrack,
+                                color = palette.accent,
+                                style = MaterialTheme.typography.labelSmall,
+                                maxLines = 1,
+                            )
+                        }
+                        if (isRecommendationBlocked) {
+                            Text(
+                                Strings.blockRecommendation,
+                                color = AppColors.TextTertiary,
+                                style = MaterialTheme.typography.labelSmall,
+                                maxLines = 1,
                             )
                         }
                         if (subtitle.isNotEmpty()) {
@@ -773,6 +853,8 @@ private fun PlaylistDetailTrackRow(
             },
             onAddToPlaylist = addTrackToPlaylistAction(track),
             onRemoveFromPlaylist = onRemoveFromPlaylist?.let { remove -> { remove(track) } },
+            recommendationBlocked = isRecommendationBlocked,
+            onToggleRecommendationBlock = onToggleRecommendationBlock,
         )
     }
 }

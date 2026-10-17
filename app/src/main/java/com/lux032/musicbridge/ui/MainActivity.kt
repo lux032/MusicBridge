@@ -517,6 +517,13 @@ fun PlexAlbumScreen(
                                 state.updatePlaylist(playlist, name, description)
                             },
                             onDeletePlaylist = { playlist -> state.deletePlaylist(playlist) },
+                            dailyMix = state.openDailyMix?.takeIf {
+                                state.playlistTrackResult?.playlist?.ratingKey == dailyMixPlaylistKey(it.mix.id)
+                            },
+                            onRateDailyMix = state::rateOpenDailyMix,
+                            onReplaceDailyMix = state::replaceOpenDailyMix,
+                            onSaveDailyMix = state::saveOpenDailyMix,
+                            onToggleRecommendationBlock = state::toggleRecommendationBlock,
                             onPlayTrack = { playlist, track, index ->
                                 val currentResult = state.playlistTrackResult
                                 if (currentResult != null) {
@@ -838,7 +845,12 @@ fun PlexAlbumScreen(
                         },
                         onOpenFavorites = { state.navigateTo(AppSection.FavoriteCollection) },
                         onOpenRecentAdded = { state.navigateTo(AppSection.RecentAdded) },
+                        dailyMixes = state.dailyMixes,
+                        playingMixKey = state.miniPlayerState?.album?.ratingKey?.takeIf { it.startsWith("mix:") },
+                        onOpenDailyMix = state::openDailyMixDetail,
+                        onPlayDailyMix = { mix, shuffle -> state.playDailyMix(mix, shuffle) },
                     )
+                    LaunchedEffect(state.connectionPreferences.id) { state.loadDailyMixes() }
                 } else if (currentSection == AppSection.Settings) {
                     val scrollState = rememberScrollState(
                         initial = state.getSavedScrollValue(AppSection.Settings),

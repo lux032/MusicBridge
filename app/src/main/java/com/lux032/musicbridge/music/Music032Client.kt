@@ -314,6 +314,41 @@ class Music032Client(
 
     private fun String.playlistId(): Long = toLongOrNull()?.takeIf { it > 0 } ?: error("无效的歌单 ID")
 
+    // --- Daily mixes (server feature `dailyMixes`) ---------------------------------------
+
+    /** Today's mixes; the first call of a day may wait for generation and answer `generating`. */
+    suspend fun fetchDailyMixes(): Music032DailyMixes = withContext(Dispatchers.IO) {
+        Music032DailyMixJson.parseList(JSONObject(request("GET", "/api/v1/daily-mixes")), ::mediaUrl)
+    }
+
+    suspend fun fetchDailyMix(id: Long): Music032DailyMixDetail = withContext(Dispatchers.IO) {
+        Music032DailyMixJson.parseDetail(JSONObject(request("GET", "/api/v1/daily-mixes/$id")), ::mediaUrl, ::parseTrack)
+    }
+
+    /** [value] 1 like, -1 dislike (with optional reasons), 0 clears the rating. */
+    suspend fun rateDailyMix(id: Long, value: Int, reasons: List<String> = emptyList()): Music032DailyMix = withContext(Dispatchers.IO) {
+        val body = Music032DailyMixJson.ratingBody(value, reasons)
+        Music032DailyMixJson.parseMix(JSONObject(request("PUT", "/api/v1/daily-mixes/$id/rating", body)), ::mediaUrl)
+    }
+
+    /** Replaces one of today's mixes; 429 `replacement_limit` when the daily budget is spent. */
+    suspend fun regenerateDailyMix(id: Long): Music032DailyMix = withContext(Dispatchers.IO) {
+        Music032DailyMixJson.parseMix(JSONObject(request("POST", "/api/v1/daily-mixes/$id/regenerate")), ::mediaUrl)
+    }
+
+    /** Copies the mix into a new ordinary playlist (default name “title · day”). */
+    suspend fun saveDailyMix(id: Long): PlexPlaylist = withContext(Dispatchers.IO) {
+        val root = JSONObject(request("POST", "/api/v1/daily-mixes/$id/save"))
+        parsePlaylist(root.optJSONObject("playlist") ?: root)
+    }
+
+    /** Excludes a track from (or returns it to) future recommendations. */
+    suspend fun setRecommendationBlock(trackId: String, blocked: Boolean) = withContext(Dispatchers.IO) {
+        val id = trackId.toLongOrNull()?.takeIf { it > 0 } ?: error("无效的曲目 ID")
+        request(if (blocked) "PUT" else "DELETE", "/api/v1/tracks/$id/recommendation-block")
+        Unit
+    }
+
     override suspend fun setAlbumFavorite(ratingKey: String, isFavorite: Boolean) = withContext(Dispatchers.IO) {
         request(if (isFavorite) "PUT" else "DELETE", "/api/v1/albums/$ratingKey/favorite")
         clearArtistDetails()

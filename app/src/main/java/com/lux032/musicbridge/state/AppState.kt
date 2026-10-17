@@ -33,6 +33,7 @@ import com.lux032.musicbridge.local.NetworkQualityMonitor
 import com.lux032.musicbridge.music.MediaTokenProbeResult
 import com.lux032.musicbridge.music.Music032CapabilitiesStore
 import com.lux032.musicbridge.music.Music032Client
+import com.lux032.musicbridge.music.Music032DailyMix
 import com.lux032.musicbridge.music.Music032PlaybackReporter
 import com.lux032.musicbridge.music.Music032ReporterApi
 import com.lux032.musicbridge.music.MusicSourceClient
@@ -136,6 +137,7 @@ class AppState(
     private val libraryCoordinator = AppStateLibraryCoordinator(this)
     private val playbackCoordinator = AppStatePlaybackCoordinator(this)
     private val playlistCoordinator = AppStatePlaylistCoordinator(this)
+    private val dailyMixCoordinator = AppStateDailyMixCoordinator(this)
     private val musicSourceClients = java.util.concurrent.ConcurrentHashMap<String, CachedMusicSourceClient>()
     private val music032Reporters = java.util.concurrent.ConcurrentHashMap<String, Music032PlaybackReporter>()
 
@@ -298,6 +300,12 @@ class AppState(
     var playlistNotice by mutableStateOf<PlaylistNotice?>(null)
         internal set
     var isPlaylistMutating by mutableStateOf(false)
+        internal set
+    /** 032 daily mixes for the home banner. */
+    var dailyMixes by mutableStateOf(DailyMixHomeState())
+        internal set
+    /** Daily mix shown in the playlist page; matched by [dailyMixPlaylistKey]. */
+    var openDailyMix by mutableStateOf<DailyMixDetailState?>(null)
         internal set
 
     val activeSection: AppSection
@@ -746,6 +754,7 @@ class AppState(
         albumSearchResults = emptyList()
         hasLoadedLocalAlbums = false
         errorMessage = null
+        dailyMixCoordinator.reset()
     }
 
     fun openAlbumDetail(album: PlexAlbum) = libraryCoordinator.openAlbumDetail(album)
@@ -807,6 +816,26 @@ class AppState(
     suspend fun deletePlaylist(playlist: PlexPlaylist): Result<Unit> = playlistCoordinator.delete(playlist)
 
     fun removeTrackFromOpenPlaylist(track: PlexTrackStream) = playlistCoordinator.removeTrack(track)
+
+    /** Global snackbar (playlist writes, daily mix feedback). */
+    internal fun notifyPlaylist(message: String, actionLabel: String? = null, isError: Boolean = false, onAction: (() -> Unit)? = null) =
+        playlistCoordinator.notify(message, actionLabel, isError, onAction)
+
+    // --- Daily mixes (032 servers) --------------------------------------------------------
+
+    fun loadDailyMixes(force: Boolean = false) = dailyMixCoordinator.load(force)
+
+    fun openDailyMixDetail(mix: Music032DailyMix) = dailyMixCoordinator.open(mix)
+
+    fun playDailyMix(mix: Music032DailyMix, shuffle: Boolean = false) = dailyMixCoordinator.play(mix, shuffle)
+
+    fun rateOpenDailyMix(value: Int, reasons: List<String> = emptyList()) = dailyMixCoordinator.rate(value, reasons)
+
+    fun replaceOpenDailyMix() = dailyMixCoordinator.replace()
+
+    fun saveOpenDailyMix() = dailyMixCoordinator.save()
+
+    fun toggleRecommendationBlock(track: PlexTrackStream) = dailyMixCoordinator.toggleBlock(track)
 
     fun consumePlaylistNotice(id: Long) {
         if (playlistNotice?.id == id) playlistNotice = null

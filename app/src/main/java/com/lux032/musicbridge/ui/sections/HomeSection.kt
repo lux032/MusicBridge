@@ -42,6 +42,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.lux032.musicbridge.music.Music032DailyMix
 import com.lux032.musicbridge.plex.PlexAlbum
 import com.lux032.musicbridge.sonos.SonosRoom
 import kotlinx.coroutines.launch
@@ -72,6 +73,10 @@ internal fun HomeSection(
     onOpenAllAlbums: () -> Unit,
     onOpenFavorites: () -> Unit,
     onOpenRecentAdded: () -> Unit,
+    dailyMixes: DailyMixHomeState = DailyMixHomeState(),
+    playingMixKey: String? = null,
+    onOpenDailyMix: (Music032DailyMix) -> Unit = {},
+    onPlayDailyMix: (Music032DailyMix, Boolean) -> Unit = { _, _ -> },
 ) {
     val layoutInfo = LocalAppLayoutInfo.current
     val needsConnection = !connectionPreferences.hasCredentials() && allAlbums.isEmpty()
@@ -138,6 +143,16 @@ internal fun HomeSection(
                         body = Strings.noFavoritesBody,
                         actionLabel = Strings.retry,
                         onAction = onRefreshFavorites,
+                    )
+                }
+            }
+            if (dailyMixes.isVisible) {
+                item(key = "home-daily-mixes", contentType = "daily-mixes") {
+                    DailyMixBanner(
+                        state = dailyMixes,
+                        playingMixKey = playingMixKey,
+                        onOpen = onOpenDailyMix,
+                        onPlay = onPlayDailyMix,
                     )
                 }
             }

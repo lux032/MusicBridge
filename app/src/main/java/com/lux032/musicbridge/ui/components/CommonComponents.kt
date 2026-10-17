@@ -495,6 +495,8 @@ internal fun QueueActionMenu(
     onSonicRadio: (() -> Unit)? = null,
     onAddToPlaylist: (() -> Unit)? = null,
     onRemoveFromPlaylist: (() -> Unit)? = null,
+    recommendationBlocked: Boolean = false,
+    onToggleRecommendationBlock: (() -> Unit)? = null,
 ) {
     DropdownMenu(expanded = expanded, onDismissRequest = onDismiss, shape = RoundedCornerShape(16.dp)) {
         if (onPlay != null) {
@@ -568,6 +570,26 @@ internal fun QueueActionMenu(
                     },
                 )
             }
+            HorizontalDivider(
+                color = KeyColors.Line,
+                modifier = Modifier.padding(vertical = 4.dp),
+            )
+        }
+        if (onToggleRecommendationBlock != null) {
+            DropdownMenuItem(
+                text = { Text(if (recommendationBlocked) Strings.unblockRecommendation else Strings.blockRecommendation) },
+                leadingIcon = {
+                    Icon(
+                        if (recommendationBlocked) Icons.Filled.Restore else Icons.Filled.Block,
+                        contentDescription = null,
+                        tint = AppColors.TextSecondary,
+                    )
+                },
+                onClick = {
+                    onDismiss()
+                    onToggleRecommendationBlock()
+                },
+            )
             HorizontalDivider(
                 color = KeyColors.Line,
                 modifier = Modifier.padding(vertical = 4.dp),
