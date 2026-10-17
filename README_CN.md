@@ -4,7 +4,7 @@
   <img src="image/icon.png" alt="MusicBridge Icon" width="120"/>
 </p>
 
-中文 | [English](./README.md)
+中文 | [English](./README_EN.md)
 
 一个将 Plex 或 032 Music Server 音乐库桥接到 Sonos 音箱的 Android 应用。
 
@@ -77,11 +77,8 @@ git clone https://github.com/lux032/MusicBridge.git
 ## 应用截图
 
 <p align="center">
-  <img src="image/01.jpg" width="200"/>
-  <img src="image/02.jpg" width="200"/>
-  <img src="image/03.jpg" width="200"/>
-  <img src="image/04.jpg" width="200"/>
-  <img src="image/05.jpg" width="200"/>
+  <img src="image/home.jpg" alt="首页与今日推荐" width="300"/>
+  <img src="image/player.jpg" alt="正在播放" width="300"/>
 </p>
 
 ## 许可证
