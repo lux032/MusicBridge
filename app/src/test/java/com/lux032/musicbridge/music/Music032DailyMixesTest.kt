@@ -59,6 +59,7 @@ class Music032DailyMixesTest {
         assertEquals(listOf("101", "102"), detail.tracks.map { it.ratingKey })
         assertEquals(setOf("102"), detail.exploreTrackIds)
         assertEquals(setOf("102"), detail.blockedTrackIds)
+        assertEquals(Music032PlaybackContext(12, 1), detail.tracks[1].playbackContext)
 
         val result = dailyMixPlaylistResult("032", detail)
         assertEquals(dailyMixPlaylistKey(12), result.playlist.ratingKey)

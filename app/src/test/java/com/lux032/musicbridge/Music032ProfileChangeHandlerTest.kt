@@ -23,13 +23,13 @@ class Music032ProfileChangeHandlerTest {
         val calls = mutableListOf<String>()
         override fun openSessionId(): String? = null
         override fun openSessionTrackId(): Long? = null
-        override fun requestStart(trackId: Long, positionMillis: Long, durationMillis: Long, initialState: ReporterPlayState) {
+        override fun requestStart(trackId: Long, positionMillis: Long, durationMillis: Long, initialState: ReporterPlayState, context: com.lux032.musicbridge.music.Music032PlaybackContext?) {
             calls += "start:$trackId"
         }
-        override fun requestTakeover(trackId: Long, positionMillis: Long, durationMillis: Long, initialState: ReporterPlayState) {
+        override fun requestTakeover(trackId: Long, positionMillis: Long, durationMillis: Long, initialState: ReporterPlayState, context: com.lux032.musicbridge.music.Music032PlaybackContext?) {
             calls += "takeover:$trackId@$positionMillis:${initialState.wire}:$durationMillis"
         }
-        override fun requestFallbackStart(trackId: Long, positionMillis: Long, durationMillis: Long, initialState: ReporterPlayState) {
+        override fun requestFallbackStart(trackId: Long, positionMillis: Long, durationMillis: Long, initialState: ReporterPlayState, context: com.lux032.musicbridge.music.Music032PlaybackContext?) {
             calls += "fallback:$trackId"
         }
         override fun observe(state: ReporterPlayState, positionMillis: Long, durationMillis: Long) {}

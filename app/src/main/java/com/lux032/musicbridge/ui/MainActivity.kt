@@ -501,7 +501,8 @@ fun PlexAlbumScreen(
                             onDeleteDownloadedTrack = state::deleteDownloadedTrack,
                             onBack = state::navigateBack,
                             onToggleTrackFavorite = state::toggleTrackFavorite,
-                            onQueueTrack = state::enqueueTrack,
+                            // Only plays from the mix's own queue count for it (server design §7.1).
+                            onQueueTrack = { track, placement -> state.enqueueTrack(track.copy(playbackContext = null), placement) },
                             onPlayPlaylist = { playlistResult ->
                                 state.startPlaylistPlayback(playlistResult, shuffle = false)
                             },

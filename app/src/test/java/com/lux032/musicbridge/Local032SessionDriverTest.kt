@@ -27,15 +27,15 @@ class Local032SessionDriverTest {
 
         override fun openSessionId(): String? = openSession?.first
         override fun openSessionTrackId(): Long? = openSession?.second
-        override fun requestStart(trackId: Long, positionMillis: Long, durationMillis: Long, initialState: ReporterPlayState) {
+        override fun requestStart(trackId: Long, positionMillis: Long, durationMillis: Long, initialState: ReporterPlayState, context: com.lux032.musicbridge.music.Music032PlaybackContext?) {
             calls += "start:$trackId@$positionMillis"
             openSession = "session-$trackId" to trackId
         }
-        override fun requestTakeover(trackId: Long, positionMillis: Long, durationMillis: Long, initialState: ReporterPlayState) {
+        override fun requestTakeover(trackId: Long, positionMillis: Long, durationMillis: Long, initialState: ReporterPlayState, context: com.lux032.musicbridge.music.Music032PlaybackContext?) {
             calls += "takeover:$trackId@$positionMillis"
             openSession = "session-$trackId-t" to trackId
         }
-        override fun requestFallbackStart(trackId: Long, positionMillis: Long, durationMillis: Long, initialState: ReporterPlayState) {
+        override fun requestFallbackStart(trackId: Long, positionMillis: Long, durationMillis: Long, initialState: ReporterPlayState, context: com.lux032.musicbridge.music.Music032PlaybackContext?) {
             calls += "fallback:$trackId@$positionMillis"
             openSession = "session-$trackId" to trackId
         }

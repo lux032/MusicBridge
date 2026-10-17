@@ -65,9 +65,9 @@ internal class Local032SessionDriver(
         // The engine queue is still being rebuilt at this point: the track has not
         // sounded yet, so the honest initial state is buffering.
         if (continueChain) {
-            reporter.requestTakeover(trackId, positionMillis.coerceAtLeast(0L), durationMillis, ReporterPlayState.Buffering)
+            reporter.requestTakeover(trackId, positionMillis.coerceAtLeast(0L), durationMillis, ReporterPlayState.Buffering, track.playbackContext)
         } else {
-            reporter.requestStart(trackId, positionMillis.coerceAtLeast(0L), durationMillis, ReporterPlayState.Buffering)
+            reporter.requestStart(trackId, positionMillis.coerceAtLeast(0L), durationMillis, ReporterPlayState.Buffering, track.playbackContext)
         }
         lastReportedTrack = track
     }
@@ -80,7 +80,7 @@ internal class Local032SessionDriver(
         playbackFinished = false
         val (reporter, trackId) = reporterForTrack(track) ?: return
         reporter.requestEnd(ReporterEndReason.Stopped, expectedSessionId = reporter.ownedSessionId())
-        reporter.requestStart(trackId, 0L, durationMillis, ReporterPlayState.Buffering)
+        reporter.requestStart(trackId, 0L, durationMillis, ReporterPlayState.Buffering, track.playbackContext)
         lastReportedTrack = track
     }
 
@@ -107,6 +107,7 @@ internal class Local032SessionDriver(
             if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_REPEAT) 0L else positionMillis.coerceAtLeast(0L),
             durationMillis,
             initialState,
+            newTrack.playbackContext,
         )
         lastReportedTrack = newTrack
     }
@@ -159,7 +160,7 @@ internal class Local032SessionDriver(
         if (reporterState == ReporterPlayState.Playing) playbackFinished = false
         val (reporter, trackId) = reporterForTrack(track) ?: return
         if (!playbackFinished && reporter.openSessionTrackId() != trackId) {
-            reporter.requestFallbackStart(trackId, positionMillis.coerceAtLeast(0L), durationMillis, reporterState)
+            reporter.requestFallbackStart(trackId, positionMillis.coerceAtLeast(0L), durationMillis, reporterState, track.playbackContext)
         }
         reporter.observe(reporterState, positionMillis.coerceAtLeast(0L), durationMillis)
         if (reporter.openSessionId() != null) lastReportedTrack = track

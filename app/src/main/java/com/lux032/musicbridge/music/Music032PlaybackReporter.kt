@@ -132,13 +132,31 @@ internal interface Music032ReporterApi {
     fun openSessionTrackId(): Long?
 
     /** Explicit new play: fresh chain, never a persisted resume. Lifts any resume block. */
-    fun requestStart(trackId: Long, positionMillis: Long, durationMillis: Long, initialState: ReporterPlayState)
+    fun requestStart(
+        trackId: Long,
+        positionMillis: Long,
+        durationMillis: Long,
+        initialState: ReporterPlayState,
+        context: Music032PlaybackContext? = null,
+    )
 
     /** Genuine renderer switch (local <-> Sonos): chains onto the open/persisted session. */
-    fun requestTakeover(trackId: Long, positionMillis: Long, durationMillis: Long, initialState: ReporterPlayState)
+    fun requestTakeover(
+        trackId: Long,
+        positionMillis: Long,
+        durationMillis: Long,
+        initialState: ReporterPlayState,
+        context: Music032PlaybackContext? = null,
+    )
 
     /** Poll-driven session repair: no-op when the same track is already open or blocked. */
-    fun requestFallbackStart(trackId: Long, positionMillis: Long, durationMillis: Long, initialState: ReporterPlayState)
+    fun requestFallbackStart(
+        trackId: Long,
+        positionMillis: Long,
+        durationMillis: Long,
+        initialState: ReporterPlayState,
+        context: Music032PlaybackContext? = null,
+    )
 
     /** Conflated playback observation (1s ticks and engine callbacks). Never suspends. */
     fun observe(state: ReporterPlayState, positionMillis: Long, durationMillis: Long)
@@ -169,6 +187,8 @@ internal class Music032PlaybackReporter(
     private val activeHeartbeatMillis: Long = MUSIC032_ACTIVE_HEARTBEAT_MILLIS,
     private val pausedHeartbeatMillis: Long = MUSIC032_PAUSED_HEARTBEAT_MILLIS,
     private val backoffBaseMillis: Long = 2_000L,
+    /** Server advertises `features.playbackContext`; unknown fields would be rejected. */
+    private val contextSupported: () -> Boolean = { false },
     startActor: Boolean = true,
 ) : Music032ReporterApi {
 
@@ -192,6 +212,7 @@ internal class Music032PlaybackReporter(
         var playedHighWaterMillis: Long,
         var ended: Boolean = false,
         var rebuildAttempted: Boolean = false,
+        val context: Music032PlaybackContext? = null,
     )
 
     /** A start whose inline retries were exhausted; retried verbatim (same id+seq). */
@@ -207,12 +228,14 @@ internal class Music032PlaybackReporter(
         val sessionIdOverride: String?,
         val observationStampAtEnqueue: Long,
         val initialHighWaterMillis: Long = 0L,
+        /** Sent only on a fresh chain; a resume inherits it server-side. */
+        val context: Music032PlaybackContext? = null,
     )
 
     private sealed interface Command {
-        data class Start(val trackId: Long, val position: Long, val duration: Long, val state: ReporterPlayState, val obsStamp: Long) : Command
-        data class Takeover(val trackId: Long, val position: Long, val duration: Long, val state: ReporterPlayState, val obsStamp: Long) : Command
-        data class FallbackStart(val trackId: Long, val position: Long, val duration: Long, val state: ReporterPlayState, val obsStamp: Long) : Command
+        data class Start(val trackId: Long, val position: Long, val duration: Long, val state: ReporterPlayState, val obsStamp: Long, val context: Music032PlaybackContext? = null) : Command
+        data class Takeover(val trackId: Long, val position: Long, val duration: Long, val state: ReporterPlayState, val obsStamp: Long, val context: Music032PlaybackContext? = null) : Command
+        data class FallbackStart(val trackId: Long, val position: Long, val duration: Long, val state: ReporterPlayState, val obsStamp: Long, val context: Music032PlaybackContext? = null) : Command
         data class Seek(val position: Long, val duration: Long) : Command
         data class End(val reason: ReporterEndReason, val finalPosition: Long?, val expectedSessionId: String?) : Command
         data class Shutdown(val reason: ReporterEndReason, val forget: Boolean) : Command
@@ -267,19 +290,37 @@ internal class Music032PlaybackReporter(
 
     override fun pendingSessionId(): String? = pendingSnapshotId
 
-    override fun requestStart(trackId: Long, positionMillis: Long, durationMillis: Long, initialState: ReporterPlayState) {
+    override fun requestStart(
+        trackId: Long,
+        positionMillis: Long,
+        durationMillis: Long,
+        initialState: ReporterPlayState,
+        context: Music032PlaybackContext?,
+    ) {
         if (closed) return
-        commands.trySend(Command.Start(trackId, positionMillis, durationMillis, initialState, observationStamp))
+        commands.trySend(Command.Start(trackId, positionMillis, durationMillis, initialState, observationStamp, context))
     }
 
-    override fun requestTakeover(trackId: Long, positionMillis: Long, durationMillis: Long, initialState: ReporterPlayState) {
+    override fun requestTakeover(
+        trackId: Long,
+        positionMillis: Long,
+        durationMillis: Long,
+        initialState: ReporterPlayState,
+        context: Music032PlaybackContext?,
+    ) {
         if (closed) return
-        commands.trySend(Command.Takeover(trackId, positionMillis, durationMillis, initialState, observationStamp))
+        commands.trySend(Command.Takeover(trackId, positionMillis, durationMillis, initialState, observationStamp, context))
     }
 
-    override fun requestFallbackStart(trackId: Long, positionMillis: Long, durationMillis: Long, initialState: ReporterPlayState) {
+    override fun requestFallbackStart(
+        trackId: Long,
+        positionMillis: Long,
+        durationMillis: Long,
+        initialState: ReporterPlayState,
+        context: Music032PlaybackContext?,
+    ) {
         if (closed) return
-        commands.trySend(Command.FallbackStart(trackId, positionMillis, durationMillis, initialState, observationStamp))
+        commands.trySend(Command.FallbackStart(trackId, positionMillis, durationMillis, initialState, observationStamp, context))
     }
 
     override fun observe(state: ReporterPlayState, positionMillis: Long, durationMillis: Long) {
@@ -485,6 +526,7 @@ internal class Music032PlaybackReporter(
                     takeover = false,
                     inlineAttempts = 1 + START_RETRY_DELAYS_MILLIS.size,
                     obsStamp = command.obsStamp,
+                    context = command.context,
                 )
             }
             is Command.Takeover -> {
@@ -509,6 +551,7 @@ internal class Music032PlaybackReporter(
                         inlineAttempts = 1 + START_RETRY_DELAYS_MILLIS.size,
                         obsStamp = command.obsStamp,
                         initialHighWaterMillis = current.playedHighWaterMillis,
+                        context = command.context ?: current.context,
                     )
                     publishOpenSnapshot()
                     return
@@ -538,6 +581,7 @@ internal class Music032PlaybackReporter(
                     inlineAttempts = 1 + START_RETRY_DELAYS_MILLIS.size,
                     obsStamp = command.obsStamp,
                     initialHighWaterMillis = if (resume) snapshot?.playedHighWaterMillis ?: 0L else 0L,
+                    context = command.context,
                 )
             }
             is Command.FallbackStart -> {
@@ -581,6 +625,7 @@ internal class Music032PlaybackReporter(
                             inlineAttempts = 1 + START_RETRY_DELAYS_MILLIS.size,
                             obsStamp = command.obsStamp,
                             initialHighWaterMillis = stale.playedHighWaterMillis,
+                            context = command.context ?: stale.context,
                         )
                         publishOpenSnapshot()
                         return
@@ -596,6 +641,7 @@ internal class Music032PlaybackReporter(
                     takeover = false,
                     inlineAttempts = 1,
                     obsStamp = command.obsStamp,
+                    context = command.context,
                 )
             }
             is Command.Seek -> {
@@ -660,6 +706,7 @@ internal class Music032PlaybackReporter(
         sessionIdOverride: String? = null,
         obsStamp: Long,
         initialHighWaterMillis: Long = 0L,
+        context: Music032PlaybackContext? = null,
     ) {
         val pending = PendingStart(
             trackId = trackId,
@@ -673,6 +720,7 @@ internal class Music032PlaybackReporter(
             sessionIdOverride = sessionIdOverride,
             observationStampAtEnqueue = obsStamp,
             initialHighWaterMillis = initialHighWaterMillis,
+            context = context,
         )
         pendingStart = pending
         var attempts = 0
@@ -713,7 +761,11 @@ internal class Music032PlaybackReporter(
             .put("state", pending.initialState.wire)
             .put("positionMillis", pending.positionMillis)
             .put("durationMillis", pending.durationMillis)
-        if (pending.resumedFromSessionId != null) payload.put("resumedFromSessionId", pending.resumedFromSessionId)
+        if (pending.resumedFromSessionId != null) {
+            payload.put("resumedFromSessionId", pending.resumedFromSessionId)
+        } else if (pending.context != null && contextSupported()) {
+            payload.put("context", pending.context.toJson())
+        }
         val result = post(payload, deadlineMillis)
         when {
             result.status in 200..299 -> {
@@ -767,6 +819,7 @@ internal class Music032PlaybackReporter(
                 if (pending.initialState == ReporterPlayState.Playing) pending.positionMillis else 0L,
             ),
             rebuildAttempted = pending.sessionIdOverride != null,
+            context = pending.context,
         )
         session = opened
         // Observations made before this session's start was enqueued belong to the
@@ -942,6 +995,7 @@ internal class Music032PlaybackReporter(
             sessionIdOverride = null,
             observationStampAtEnqueue = observationStamp,
             initialHighWaterMillis = s.playedHighWaterMillis,
+            context = s.context,
         )
         pendingStart = pending
         if (!attemptStart(pending, deadlineMillis)) return
@@ -990,6 +1044,7 @@ internal class Music032PlaybackReporter(
                 sessionIdOverride = null,
                 observationStampAtEnqueue = observationStamp,
                 initialHighWaterMillis = s.playedHighWaterMillis,
+                context = s.context,
             )
             pendingStart = pending
             if (!attemptStart(pending, deadlineMillis)) return
@@ -1016,6 +1071,7 @@ internal class Music032PlaybackReporter(
             sessionIdOverride = s.sessionId,
             observationStampAtEnqueue = observationStamp,
             initialHighWaterMillis = s.playedHighWaterMillis,
+            context = s.context,
         )
         s.ended = true
         pendingStart = pending

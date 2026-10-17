@@ -53,6 +53,7 @@ internal class Music032ProfileChangeHandler(
                 positionMillis = position,
                 durationMillis = playerState.durationMillis ?: currentTrack.durationMillis ?: 0L,
                 initialState = if (playerState.isPaused) ReporterPlayState.Paused else ReporterPlayState.Playing,
+                context = currentTrack.playbackContext,
             )
         } else {
             retireReporter(previous.id, true)

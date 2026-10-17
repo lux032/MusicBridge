@@ -101,6 +101,8 @@ data class PlexTrackStream(
     val trackNumber: Int? = null,
     /** Performing track artists; empty means the album artists apply. */
     val artists: List<ArtistRef> = emptyList(),
+    /** 032 only: the daily mix this queue entry came from (reported on session start). */
+    val playbackContext: com.lux032.musicbridge.music.Music032PlaybackContext? = null,
 )
 
 internal data class PlexTrackBehavior(

@@ -4,6 +4,14 @@ import com.lux032.musicbridge.plex.PlexTrackStream
 import org.json.JSONArray
 import org.json.JSONObject
 
+/**
+ * Where a play came from (`features.playbackContext`): sent on a fresh session start so the
+ * server can learn from plays of its daily mixes. [position] is the 0-based index in the mix.
+ */
+data class Music032PlaybackContext(val id: Long, val position: Int, val type: String = "dailyMix") {
+    fun toJson(): JSONObject = JSONObject().put("type", type).put("id", id).put("position", position.coerceIn(0, 999))
+}
+
 /** One mood / style label of a daily mix theme. */
 data class Music032DailyMixTag(val kind: String, val tag: String, val label: String)
 
@@ -99,7 +107,9 @@ internal object Music032DailyMixJson {
         root.optJSONArray("tracks").objects().forEach { item ->
             val trackJson = item.optJSONObject("track") ?: return@forEach
             if (trackJson.optBoolean("missing") || trackJson.optLong("id") <= 0) return@forEach
-            val track = parseTrack(trackJson)
+            val track = parseTrack(trackJson).copy(
+                playbackContext = mix.id.takeIf { it > 0 }?.let { Music032PlaybackContext(it, item.optInt("position")) },
+            )
             tracks += track
             if (item.optString("bucket") == "explore") explore += track.ratingKey
             if (item.optBoolean("blocked")) blocked += track.ratingKey

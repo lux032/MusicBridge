@@ -174,6 +174,7 @@ class AppState(
                 },
                 scope = playbackReporterScope,
                 logger = { message -> Log.w("Music032Reporter", message) },
+                contextSupported = { client.capabilities()?.hasFeature("playbackContext") == true },
                 notifier = { notice ->
                     scope.launch {
                         when (notice) {

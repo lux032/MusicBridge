@@ -1882,6 +1882,7 @@ internal class AppStatePlaybackCoordinator(
                             positionMillis = currentTrackTimeMillis,
                             durationMillis = currentTrackDurationMillis ?: 0L,
                             initialState = ReporterPlayState.Buffering,
+                            context = currentTrack.playbackContext,
                         )
                     } else {
                         reporter.requestStart(
@@ -1889,6 +1890,7 @@ internal class AppStatePlaybackCoordinator(
                             positionMillis = currentTrackTimeMillis,
                             durationMillis = currentTrackDurationMillis ?: 0L,
                             initialState = ReporterPlayState.Buffering,
+                            context = currentTrack.playbackContext,
                         )
                     }
                     owned032SourceId = currentTrack.sourceId
@@ -2007,6 +2009,7 @@ internal class AppStatePlaybackCoordinator(
                                 positionMillis = 0L,
                                 durationMillis = currentTrackDurationMillis ?: 0L,
                                 initialState = sonosReporterPlayState(playbackState),
+                                context = currentTrack.playbackContext,
                             )
                             owned032SourceId = currentTrack.sourceId
                         }
@@ -2038,6 +2041,7 @@ internal class AppStatePlaybackCoordinator(
                             positionMillis = positionMillis,
                             durationMillis = currentTrackDurationMillis ?: 0L,
                             initialState = sonosReporterPlayState(playbackState),
+                            context = currentTrack.playbackContext,
                         )
                         owned032SourceId = currentTrack.sourceId
                     }
@@ -2086,6 +2090,7 @@ internal class AppStatePlaybackCoordinator(
                                 positionMillis = currentTrackTimeMillis,
                                 durationMillis = currentTrackDurationMillis ?: 0L,
                                 initialState = sonosReporterPlayState(playbackState),
+                                context = currentTrack.playbackContext,
                             )
                         }
                         // Non-blocking: the reporter actor merges the observation.

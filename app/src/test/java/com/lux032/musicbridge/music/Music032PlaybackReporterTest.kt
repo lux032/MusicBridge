@@ -56,6 +56,7 @@ class Music032PlaybackReporterTest {
     private class Harness(
         eventDeadlineMillis: Long = 6_000L,
         val notices: MutableList<ReporterNotice> = mutableListOf(),
+        contextSupported: Boolean = false,
     ) {
         val transport = FakeTransport()
         val preferences = FakePreferences()
@@ -68,6 +69,7 @@ class Music032PlaybackReporterTest {
             sleeper = { millis -> now += millis },
             notifier = { notice -> notices += notice },
             eventDeadlineMillis = eventDeadlineMillis,
+            contextSupported = { contextSupported },
             startActor = false,
         )
 
@@ -99,6 +101,30 @@ class Music032PlaybackReporterTest {
         assertFalse(request.has("resumedFromSessionId"))
         assertTrue(h.preferences.clientId!!.matches(Regex("^[A-Za-z0-9-]+$")))
         assertNotNull(h.reporter.openSessionId())
+    }
+
+    @Test
+    fun `daily mix context is sent on a fresh start only when the server supports it`() = runBlocking {
+        val context = Music032PlaybackContext(id = 12, position = 3)
+        val unsupported = Harness()
+        unsupported.reporter.requestStart(42, 0, 240_000, ReporterPlayState.Buffering, context)
+        unsupported.drain()
+        assertFalse(unsupported.transport.requests.single().has("context"))
+
+        val h = Harness(contextSupported = true)
+        h.reporter.requestStart(42, 0, 240_000, ReporterPlayState.Buffering, context)
+        h.drain()
+        val sent = h.transport.requests.single().getJSONObject("context")
+        assertEquals("dailyMix", sent.getString("type"))
+        assertEquals(12L, sent.getLong("id"))
+        assertEquals(3, sent.getInt("position"))
+
+        // A renderer switch resumes the chain: the server inherits the context.
+        h.reporter.requestTakeover(42, 30_000, 240_000, ReporterPlayState.Playing, context)
+        h.drain()
+        val takeover = h.transport.requests.last { it.getString("type") == "start" }
+        assertTrue(takeover.has("resumedFromSessionId"))
+        assertFalse(takeover.has("context"))
     }
 
     @Test
