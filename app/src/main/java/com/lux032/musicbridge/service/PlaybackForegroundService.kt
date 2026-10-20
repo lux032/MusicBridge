@@ -15,14 +15,20 @@ import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.os.SystemClock
+import android.util.Log
 import com.lux032.musicbridge.MainActivity
 import com.lux032.musicbridge.R
 import com.lux032.musicbridge.thumbnailUrl
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.IOException
+import java.net.HttpURLConnection
 import java.net.URL
 
 /**
@@ -40,6 +46,11 @@ class PlaybackForegroundService : Service() {
     private var currentIsPaused: Boolean = false
     private var currentArtwork: Bitmap? = null
     private var currentArtworkUrl: String? = null
+    private var artworkJob: Job? = null
+    private var lastArtworkFailureAtMillis: Long = 0L
+    private val fallbackLargeIcon: Bitmap? by lazy {
+        BitmapFactory.decodeResource(resources, R.mipmap.ic_launcher)
+    }
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private val mediaActionReceiver = object : BroadcastReceiver() {
@@ -83,16 +94,12 @@ class PlaybackForegroundService : Service() {
         if (intent?.hasExtra(EXTRA_IS_PAUSED) == true) {
             currentIsPaused = intent.getBooleanExtra(EXTRA_IS_PAUSED, currentIsPaused)
         }
-        val artworkUrl = if (intent?.hasExtra(EXTRA_ARTWORK_URL) == true) {
-            intent.getStringExtra(EXTRA_ARTWORK_URL)
-        } else {
-            null
+        // start() 总是带着标题描述一首曲目，此时没有封面 extra 就表示这首歌没有封面。
+        // 系统重启服务时 intent 为 null，保持原状。
+        if (intent?.hasExtra(EXTRA_TITLE) == true) {
+            syncArtwork(intent.getStringExtra(EXTRA_ARTWORK_URL))
         }
         startForeground(NOTIFICATION_ID, buildNotification())
-        if (artworkUrl != null && artworkUrl != currentArtworkUrl) {
-            currentArtworkUrl = artworkUrl
-            loadArtworkAsync(artworkUrl)
-        }
         return START_STICKY
     }
 
@@ -111,34 +118,77 @@ class PlaybackForegroundService : Service() {
         val metadataChanged = title != currentTitle ||
             subtitle != currentSubtitle ||
             isPaused != currentIsPaused
-        val artworkChanged = artworkUrl != null && artworkUrl != currentArtworkUrl
+        val artworkChanged = artworkUrl != currentArtworkUrl
+        if (artworkChanged) {
+            // 换歌：立刻丢掉上一首的封面，避免新封面加载完成前（或新歌没有封面时）串图。
+            syncArtwork(artworkUrl)
+        } else {
+            // 同一首歌：上次加载失败且已过退避间隔就重试（该方法约每秒被轮询调用一次）。
+            retryArtworkIfDue()
+        }
         if (!metadataChanged && !artworkChanged) return
 
         currentTitle = title
         currentSubtitle = subtitle
         currentIsPaused = isPaused
         val manager = getSystemService(NotificationManager::class.java)
-        if (artworkChanged) {
-            currentArtworkUrl = artworkUrl
-            loadArtworkAsync(requireNotNull(artworkUrl))
-        }
         manager.notify(NOTIFICATION_ID, buildNotification())
     }
 
+    /** 把通知封面切到 [url] 对应的曲目；地址未变时不做任何事。 */
+    private fun syncArtwork(url: String?) {
+        if (url == currentArtworkUrl) return
+        artworkJob?.cancel()
+        artworkJob = null
+        currentArtworkUrl = url
+        currentArtwork = null
+        lastArtworkFailureAtMillis = 0L
+        if (url != null) loadArtworkAsync(url)
+    }
+
+    private fun retryArtworkIfDue() {
+        val url = currentArtworkUrl ?: return
+        if (currentArtwork != null || artworkJob?.isActive == true) return
+        if (SystemClock.elapsedRealtime() - lastArtworkFailureAtMillis < ARTWORK_RETRY_INTERVAL_MS) return
+        loadArtworkAsync(url)
+    }
+
     private fun loadArtworkAsync(url: String) {
-        serviceScope.launch {
-            val bitmap = runCatching {
-                // Media notifications render a relatively small large icon. Requesting a
-                // bounded source avoids decoding multi-megapixel artwork outside Coil's cache.
-                URL(thumbnailUrl(url, NOTIFICATION_ARTWORK_SIZE_PX)).openStream().use {
-                    BitmapFactory.decodeStream(it)
+        artworkJob = serviceScope.launch {
+            val result = runCatching { downloadArtwork(url) }
+            withContext(Dispatchers.Main) {
+                // 下载期间已经换歌：结果作废。
+                if (url != currentArtworkUrl) return@withContext
+                val bitmap = result.getOrNull()
+                if (bitmap == null) {
+                    lastArtworkFailureAtMillis = SystemClock.elapsedRealtime()
+                    Log.w(
+                        TAG,
+                        "Notification artwork load failed, will retry in ${ARTWORK_RETRY_INTERVAL_MS / 1000}s",
+                        result.exceptionOrNull(),
+                    )
+                    return@withContext
                 }
-            }.getOrNull()
-            if (url == currentArtworkUrl && bitmap != null) {
                 currentArtwork = bitmap
                 val manager = getSystemService(NotificationManager::class.java)
                 manager.notify(NOTIFICATION_ID, buildNotification())
             }
+        }
+    }
+
+    private fun downloadArtwork(url: String): Bitmap? {
+        // Media notifications render a relatively small large icon. Requesting a
+        // bounded source avoids decoding multi-megapixel artwork outside Coil's cache.
+        val connection = URL(thumbnailUrl(url, NOTIFICATION_ARTWORK_SIZE_PX)).openConnection() as HttpURLConnection
+        return try {
+            connection.connectTimeout = ARTWORK_TIMEOUT_MS
+            connection.readTimeout = ARTWORK_TIMEOUT_MS
+            val code = connection.responseCode
+            if (code !in 200..299) throw IOException("HTTP $code")
+            connection.inputStream.use { BitmapFactory.decodeStream(it) }
+                ?: throw IOException("Artwork could not be decoded")
+        } finally {
+            connection.disconnect()
         }
     }
 
@@ -174,7 +224,7 @@ class PlaybackForegroundService : Service() {
         val builder = Notification.Builder(this, CHANNEL_ID)
             .setContentTitle(currentTitle)
             .setContentText(currentSubtitle)
-            .setSmallIcon(R.mipmap.ic_launcher)
+            .setSmallIcon(R.drawable.ic_notification)
             .setContentIntent(contentPendingIntent)
             .setOngoing(true)
             .setVisibility(Notification.VISIBILITY_PUBLIC)
@@ -189,7 +239,9 @@ class PlaybackForegroundService : Service() {
             ).build())
             .setStyle(Notification.MediaStyle().setShowActionsInCompactView(0, 1, 2))
 
-        currentArtwork?.let { builder.setLargeIcon(it) }
+        // 封面未加载或歌曲无封面时显式用应用图标兜底。否则 HyperOS 等系统会在媒体卡片上
+        // 显示自身缓存的应用图标，换图标后仍可能是旧图。
+        (currentArtwork ?: fallbackLargeIcon)?.let { builder.setLargeIcon(it) }
 
         return builder.build()
     }
@@ -241,6 +293,9 @@ class PlaybackForegroundService : Service() {
         private const val CHANNEL_ID = "musicbridge_playback"
         private const val NOTIFICATION_ID = 1
         private const val NOTIFICATION_ARTWORK_SIZE_PX = 512
+        private const val TAG = "PlaybackFgService"
+        private const val ARTWORK_TIMEOUT_MS = 10_000
+        private const val ARTWORK_RETRY_INTERVAL_MS = 15_000L
         const val ACTION_OPEN_PLAYBACK_DETAIL =
             "com.lux032.musicbridge.action.OPEN_PLAYBACK_DETAIL"
         const val ACTION_STOP = "com.lux032.musicbridge.STOP_PLAYBACK"

@@ -3,9 +3,11 @@ package com.lux032.musicbridge.local
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import androidx.media3.session.DefaultMediaNotificationProvider
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import com.lux032.musicbridge.MainActivity
+import com.lux032.musicbridge.R
 import com.lux032.musicbridge.service.PlaybackForegroundService.Companion.ACTION_OPEN_PLAYBACK_DETAIL
 
 /**
@@ -31,6 +33,11 @@ class LocalPlaybackService : MediaSessionService() {
             stopSelf()
             return
         }
+        setMediaNotificationProvider(
+            DefaultMediaNotificationProvider.Builder(this).build().apply {
+                setSmallIcon(R.drawable.ic_notification)
+            }
+        )
         val launchIntent = Intent(this, MainActivity::class.java).apply {
             action = ACTION_OPEN_PLAYBACK_DETAIL
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or
