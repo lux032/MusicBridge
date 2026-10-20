@@ -20,6 +20,7 @@ import com.lux032.musicbridge.plex.playbackUrlIdentity
 import com.lux032.musicbridge.plex.withPlexTranscodeOffsetSeconds
 import com.lux032.musicbridge.plex.withOpusTranscodeMode
 import com.lux032.musicbridge.plex.withSonosHiResTranscodeMode
+import com.lux032.musicbridge.plex.isFavorite
 import com.lux032.musicbridge.service.PlaybackForegroundService
 import com.lux032.musicbridge.sonos.SonosDiscovery
 import com.lux032.musicbridge.sonos.SonosPlaybackStatus
@@ -294,7 +295,7 @@ internal class AppStatePlaybackCoordinator(
             title = targetTrack.title,
             subtitle = "正在推送到 ${room.roomName}",
             isPaused = false,
-            artworkUrl = targetTrack.thumbUrl,
+            artworkUrl = targetTrack.thumbUrl ?: displayAlbum.thumbUrl,
         )
         state.isPlaybackCommandLoading = true
         state.errorMessage = null
@@ -436,7 +437,7 @@ internal class AppStatePlaybackCoordinator(
                 title = initialTrack.title,
                 subtitle = "正在推送到 ${room.roomName}",
                 isPaused = false,
-                artworkUrl = initialTrack.thumbUrl,
+                artworkUrl = initialTrack.thumbUrl ?: displayAlbum.thumbUrl,
             )
         }
         state.isPlaybackCommandLoading = true
@@ -619,7 +620,7 @@ internal class AppStatePlaybackCoordinator(
             title = startTrack.title,
             subtitle = "正在推送到 ${room.roomName}",
             isPaused = false,
-            artworkUrl = startTrack.thumbUrl,
+            artworkUrl = startTrack.thumbUrl ?: displayAlbum.thumbUrl,
         )
         state.isPlaybackCommandLoading = true
         state.errorMessage = null
@@ -979,8 +980,9 @@ internal class AppStatePlaybackCoordinator(
         state.isVolumeLoading = false
     }
 
-    fun applyVolumeChange(room: SonosRoom, newValue: Float) {
+    fun applyVolumeChange(room: SonosRoom, newValue: Float, announce: Boolean = true) {
         state.sonosVolume = newValue
+        PlaybackForegroundService.updateVolumeIfRunning(newValue.toInt().coerceIn(0, 100))
         state.hasLoadedSonosVolume = true
         state.errorMessage = null
         state.volumeChangeJob?.cancel()
@@ -991,7 +993,7 @@ internal class AppStatePlaybackCoordinator(
             runCatching {
                 state.sonosController.setVolume(room, targetVolume)
             }.onSuccess {
-                state.actionMessage = "已将 ${room.roomName} 音量设置为 $targetVolume"
+                if (announce) state.actionMessage = "已将 ${room.roomName} 音量设置为 $targetVolume"
             }.onFailure {
                 state.errorMessage = it.message ?: "未知错误"
                 state.volumeSyncKey += 1
@@ -1127,7 +1129,7 @@ internal class AppStatePlaybackCoordinator(
                 title = initialTrack.title,
                 subtitle = "正在推送到 ${room.roomName}",
                 isPaused = false,
-                artworkUrl = initialTrack.thumbUrl,
+                artworkUrl = initialTrack.thumbUrl ?: initialAlbum.thumbUrl,
             )
         }
         state.isPlaybackCommandLoading = true
@@ -1846,6 +1848,12 @@ internal class AppStatePlaybackCoordinator(
                         PlaybackForegroundService.PlaybackAction.Next -> {
                             if (playerState.currentIndex < playerState.tracks.lastIndex) playQueueIndex(playerState.currentIndex + 1, 0L, playerState.target)
                         }
+                        is PlaybackForegroundService.PlaybackAction.Seek ->
+                            seekPlayback(playerState, action.positionMillis)
+                        is PlaybackForegroundService.PlaybackAction.SetVolume ->
+                            playerState.sonosRoom?.let { applyVolumeChange(it, action.volume.toFloat(), announce = false) }
+                        PlaybackForegroundService.PlaybackAction.ToggleFavorite ->
+                            playerState.tracks.getOrNull(playerState.currentIndex)?.let(state::toggleTrackFavorite)
                     }
                 }
             }
@@ -1853,7 +1861,7 @@ internal class AppStatePlaybackCoordinator(
                 context = state.context,
                 title = initialTrack.title,
                 subtitle = "正在推送到 ${room.roomName}",
-                artworkUrl = initialTrack.thumbUrl,
+                artworkUrl = initialTrack.thumbUrl ?: state.miniPlayerState?.album?.thumbUrl,
             )
             // 032 session owned by this reporting loop; the finally block may only end
             // exactly this session (a takeover chain installs a new id first).
@@ -1907,11 +1915,21 @@ internal class AppStatePlaybackCoordinator(
                 lastTimelineReportAt = System.currentTimeMillis()
             }
 
+            // 系统媒体卡把音量键交给 Sonos：先读一次房间音量，之后每 10 秒同步一次，
+            // 这样在 Sonos App 或音箱上改过的音量也能反映到系统音量条上。
+            var volumePollCountdown = 0
             while (true) {
                 delay(1_000)
 
                 val latestMiniPlayerState = state.miniPlayerState ?: break
                 if (latestMiniPlayerState.sonosRoom?.coordinatorUuid != room.coordinatorUuid) break
+                if (volumePollCountdown-- <= 0) {
+                    volumePollCountdown = SESSION_VOLUME_POLL_TICKS
+                    if (state.volumeChangeJob?.isActive != true) {
+                        runCatching { state.sonosController.getVolume(room) }
+                            .onSuccess(PlaybackForegroundService::updateVolumeIfRunning)
+                    }
+                }
 
                 val currentQueue = latestMiniPlayerState.tracks
                 val status = runCatching { state.sonosController.getPlaybackStatus(room) }.getOrNull() ?: continue
@@ -2071,11 +2089,20 @@ internal class AppStatePlaybackCoordinator(
                     durationMillis = currentTrackDurationMillis,
                 )
 
+                // 收藏状态以队列里的曲目为准：toggleTrackFavorite 只更新 miniPlayerState。
+                val queueTrack = state.miniPlayerState?.let { it.tracks.getOrNull(it.currentIndex) }
+                    ?.takeIf { it.ratingKey == currentTrack.ratingKey && it.sourceId == currentTrack.sourceId }
                 PlaybackForegroundService.updateIfRunning(
-                    title = currentTrack.title,
-                    subtitle = currentTrack.artistName ?: room.roomName,
-                    isPaused = effectivePaused,
-                    artworkUrl = currentTrack.thumbUrl,
+                    PlaybackForegroundService.PlaybackUpdate(
+                        title = currentTrack.title,
+                        // 系统媒体卡不显示远程设备名，把房间写进副标题（声音去哪儿要一眼可见）。
+                        subtitle = listOfNotNull(currentTrack.artistName, room.roomName).joinToString(" · "),
+                        isPaused = effectivePaused,
+                        artworkUrl = currentTrack.thumbUrl ?: displayAlbum.thumbUrl,
+                        positionMillis = currentTrackTimeMillis,
+                        durationMillis = currentTrackDurationMillis,
+                        isFavorite = (queueTrack ?: currentTrack).isFavorite,
+                    )
                 )
 
                 if (is032Source(currentTrack)) {
@@ -2369,6 +2396,7 @@ internal class AppStatePlaybackCoordinator(
     private companion object {
         const val LOG_TAG = "MBPlayback"
         const val TRANSCODE_RESTART_STATE_GRACE_MILLIS = 4_000L
+        const val SESSION_VOLUME_POLL_TICKS = 10
         const val ADOPT_FETCH_CONCURRENCY = 8
         val ADOPTABLE_TRANSPORT_STATES = setOf("PLAYING", "PAUSED_PLAYBACK", "TRANSITIONING")
     }
