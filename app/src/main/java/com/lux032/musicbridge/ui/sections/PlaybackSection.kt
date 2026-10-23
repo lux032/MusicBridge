@@ -1871,7 +1871,7 @@ private fun DeleteAlbumDownloadDialog(onConfirm: () -> Unit, onDismiss: () -> Un
                 Text(Strings.cancel, color = AppColors.TextSecondary)
             }
         },
-        containerColor = AppColors.CardSurface,
+        containerColor = LocalArtworkPalette.current.backgroundBottom,
         titleContentColor = AppColors.TextPrimary,
         textContentColor = AppColors.TextSecondary,
     )

@@ -410,7 +410,7 @@ private fun DownloadedAlbumCard(
                     Text(Strings.cancel, color = AppColors.TextSecondary)
                 }
             },
-            containerColor = AppColors.CardSurface,
+            containerColor = LocalArtworkPalette.current.backgroundBottom,
             titleContentColor = AppColors.TextPrimary,
             textContentColor = AppColors.TextSecondary,
         )
@@ -520,7 +520,7 @@ private fun DownloadedTrackItem(
                     Text(Strings.cancel, color = AppColors.TextSecondary)
                 }
             },
-            containerColor = AppColors.CardSurface,
+            containerColor = LocalArtworkPalette.current.backgroundBottom,
             titleContentColor = AppColors.TextPrimary,
             textContentColor = AppColors.TextSecondary,
         )

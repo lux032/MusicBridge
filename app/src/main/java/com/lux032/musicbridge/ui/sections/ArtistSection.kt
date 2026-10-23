@@ -1009,7 +1009,7 @@ internal fun ArtistChoiceDialog(
                 }
             }
         },
-        containerColor = AppColors.CardSurface,
+        containerColor = LocalArtworkPalette.current.backgroundBottom,
     )
 }
 
