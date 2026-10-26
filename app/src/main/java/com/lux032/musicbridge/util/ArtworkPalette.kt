@@ -132,35 +132,54 @@ private suspend fun extractArtworkPalette(context: android.content.Context, imag
 /**
  * Plexamp-style theming: the background keeps the cover's dominant colourful hue visible while
  * the accent remains close enough to that hue to form a coherent page. Near-monochrome artwork
- * blends gradually into the neutral palette rather than crossing a hard saturation threshold.
+ * blends gradually into the neutral palette rather than crossing a hard colourfulness threshold.
+ *
+ * Colourfulness is measured as RGB chroma ((max - min) / 255), NOT HSL saturation: HSL
+ * saturation is normalised by lightness, so near-white (cream/paper) and near-black swatches
+ * report inflated values (e.g. #F3E6E0 has HSL S = 0.44 but chroma 0.07) and would hijack the
+ * theme from the visibly coloured parts of the artwork.
  */
-private const val NeutralBlendStartSaturation = 0.08f
-private const val NeutralBlendEndSaturation = 0.20f
+private const val NeutralBlendStartChroma = 0.05f
+private const val NeutralBlendEndChroma = 0.16f
 private const val AccentHueRangeDegrees = 30f
+
+/** Minimal swatch representation so palette derivation can be tested without a Bitmap. */
+internal data class ArtworkSwatch(val rgb: Int, val population: Int)
 
 private fun paletteFromBitmap(bitmap: android.graphics.Bitmap): ArtworkPalette {
     val palette = Palette.from(bitmap)
         .resizeBitmapArea(PaletteRequestPx * PaletteRequestPx)
         .generate()
-    val swatches = palette.swatches
+    return artworkPaletteFromSwatches(palette.swatches.map { ArtworkSwatch(it.rgb, it.population) })
+}
+
+/** RGB chroma in [0, 1]: how far the colour is from grey, independent of lightness. */
+internal fun chromaOf(rgb: Int): Float {
+    val r = (rgb shr 16) and 0xFF
+    val g = (rgb shr 8) and 0xFF
+    val b = rgb and 0xFF
+    return (maxOf(r, g, b) - minOf(r, g, b)) / 255f
+}
+
+internal fun artworkPaletteFromSwatches(swatches: List<ArtworkSwatch>): ArtworkPalette {
     if (swatches.isEmpty()) return DefaultArtworkPalette
 
     // Background seed: favour colour that also occupies meaningful artwork area.
-    val hsl = FloatArray(3)
-    var seedRgb = 0
+    var seed = swatches.first()
     var seedScore = -1f
-    var maxSaturation = 0f
+    var maxChroma = 0f
     for (swatch in swatches) {
-        ColorUtils.colorToHSL(swatch.rgb, hsl)
-        if (hsl[1] > maxSaturation) maxSaturation = hsl[1]
-        val score = hsl[1] * sqrt(swatch.population.toFloat())
+        val chroma = chromaOf(swatch.rgb)
+        if (chroma > maxChroma) maxChroma = chroma
+        val score = chroma * sqrt(swatch.population.toFloat())
         if (score > seedScore) {
             seedScore = score
-            seedRgb = swatch.rgb
+            seed = swatch
         }
     }
 
-    ColorUtils.colorToHSL(seedRgb, hsl)
+    val hsl = FloatArray(3)
+    ColorUtils.colorToHSL(seed.rgb, hsl)
     val seedHue = hsl[0]
     // Design D "适中" field: the cover hue stays clearly visible at the top of the page (a
     // little brighter and more saturated than the old near-black tint), settling into a deep
@@ -179,11 +198,11 @@ private fun paletteFromBitmap(bitmap: android.graphics.Bitmap): ArtworkPalette {
         )
     )
 
-    val saturationFactor = smoothSaturationFactor(maxSaturation)
-    val backgroundTop = blendColor(DefaultArtworkPalette.backgroundTop, extractedBackgroundTop, saturationFactor)
-    val backgroundBottom = blendColor(DefaultArtworkPalette.backgroundBottom, extractedBackgroundBottom, saturationFactor)
-    val extractedAccent = pickAccent(palette, seedHue)
-    val accent = blendColor(DefaultArtworkPalette.accent, extractedAccent, saturationFactor)
+    val colorFactor = smoothChromaFactor(maxChroma)
+    val backgroundTop = blendColor(DefaultArtworkPalette.backgroundTop, extractedBackgroundTop, colorFactor)
+    val backgroundBottom = blendColor(DefaultArtworkPalette.backgroundBottom, extractedBackgroundBottom, colorFactor)
+    val extractedAccent = pickAccent(swatches, seed, seedHue)
+    val accent = blendColor(DefaultArtworkPalette.accent, extractedAccent, colorFactor)
 
     return ArtworkPalette(
         backgroundTop = backgroundTop,
@@ -194,25 +213,21 @@ private fun paletteFromBitmap(bitmap: android.graphics.Bitmap): ArtworkPalette {
 }
 
 /**
- * Prefers a vibrant artwork swatch but constrains it to within 30 degrees of the background hue.
- * This retains nearby cover variation without allowing unrelated small details to recolour the UI.
+ * Picks the most colourful swatch (by chroma) whose hue lies within 30 degrees of the background
+ * hue, falling back to the seed itself. Palette's vibrant targets are deliberately not used: they
+ * filter on HSL saturation, which lets pale cream/paper swatches qualify as "light vibrant".
  */
-private fun pickAccent(palette: Palette, seedHue: Float): Color {
+private fun pickAccent(swatches: List<ArtworkSwatch>, seed: ArtworkSwatch, seedHue: Float): Color {
     val hsl = FloatArray(3)
-    val candidate = palette.vibrantSwatch?.rgb
-        ?: palette.lightVibrantSwatch?.rgb
-        ?: palette.swatches.maxByOrNull { swatch ->
+    val candidate = swatches
+        .filter { swatch ->
             ColorUtils.colorToHSL(swatch.rgb, hsl)
-            hsl[1]
-        }?.rgb
+            kotlin.math.abs(shortestHueDelta(seedHue, hsl[0])) <= AccentHueRangeDegrees
+        }
+        .maxByOrNull { chromaOf(it.rgb) }
+        ?: seed
 
-    if (candidate != null) {
-        ColorUtils.colorToHSL(candidate, hsl)
-    } else {
-        hsl[0] = seedHue
-        hsl[1] = 0.60f
-        hsl[2] = 0.62f
-    }
+    ColorUtils.colorToHSL(candidate.rgb, hsl)
 
     val hueDelta = shortestHueDelta(seedHue, hsl[0]).coerceIn(-AccentHueRangeDegrees, AccentHueRangeDegrees)
     val accentHue = (seedHue + hueDelta + 360f) % 360f
@@ -226,9 +241,9 @@ private fun pickAccent(palette: Palette, seedHue: Float): Color {
 private fun shortestHueDelta(fromHue: Float, toHue: Float): Float =
     ((toHue - fromHue + 540f) % 360f) - 180f
 
-private fun smoothSaturationFactor(saturation: Float): Float {
-    val linear = ((saturation - NeutralBlendStartSaturation) /
-        (NeutralBlendEndSaturation - NeutralBlendStartSaturation)).coerceIn(0f, 1f)
+private fun smoothChromaFactor(chroma: Float): Float {
+    val linear = ((chroma - NeutralBlendStartChroma) /
+        (NeutralBlendEndChroma - NeutralBlendStartChroma)).coerceIn(0f, 1f)
     return linear * linear * (3f - 2f * linear)
 }
 
