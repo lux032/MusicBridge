@@ -250,44 +250,56 @@ internal fun PlaybackDetailSection(
                         color = AppColors.TextPrimary,
                         maxLines = 1,
                     )
-                    // "Artist · Album (year)": artist in the accent opens the artist page, the
-                    // album part opens the album page when it is a real album.
+                    // "Artist · Album · Year": artist in the accent opens the artist page, the
+                    // album and year open the album page when it is a real album. The year is
+                    // never truncated; artist/album share the rest (see ArtistAlbumYearLine).
                     val hasRealAlbum = !currentTrack.albumTitle.isNullOrBlank() ||
                         (displayAlbum.title.isNotBlank() && !displayAlbum.title.equals(currentTrack.title, ignoreCase = true))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = displayAlbum.artistName ?: Strings.unknownArtist,
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = palette.accent,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier
-                                .weight(1f, fill = false)
-                                .clip(RoundedCornerShape(6.dp))
-                                .clickable { onArtistClick(currentTrack.artistName ?: displayAlbum.artistName, currentTrack.artists) },
-                        )
-                        if (hasRealAlbum) {
-                            val albumLabel = buildString {
-                                append(" · ")
-                                append(displayAlbum.title)
-                                displayAlbumYear?.let { append(" (").append(it).append(")") }
-                            }
+                    val albumClickModifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .then(if (canOpenAlbum) Modifier.clickable { onAlbumClick(displayAlbum) } else Modifier)
+                    ArtistAlbumYearLine(
+                        modifier = Modifier.fillMaxWidth(),
+                        artist = {
                             Text(
-                                text = albumLabel,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = AppColors.TextSecondary,
+                                text = displayAlbum.artistName ?: Strings.unknownArtist,
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = palette.accent,
+                                fontWeight = FontWeight.SemiBold,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier
-                                    .weight(1f, fill = false)
                                     .clip(RoundedCornerShape(6.dp))
-                                    .then(
-                                        if (canOpenAlbum) Modifier.clickable { onAlbumClick(displayAlbum) } else Modifier,
-                                    ),
+                                    .clickable { onArtistClick(currentTrack.artistName ?: displayAlbum.artistName, currentTrack.artists) },
                             )
-                        }
-                    }
+                        },
+                        album = if (hasRealAlbum) {
+                            {
+                                Text(
+                                    text = " · ${displayAlbum.title}",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = AppColors.TextSecondary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = albumClickModifier,
+                                )
+                            }
+                        } else {
+                            null
+                        },
+                        year = displayAlbumYear?.takeIf { hasRealAlbum }?.let { year ->
+                            {
+                                Text(
+                                    text = " · $year",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = AppColors.TextSecondary,
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    modifier = albumClickModifier,
+                                )
+                            }
+                        },
+                    )
                 }
                 Key(
                     onClick = {
