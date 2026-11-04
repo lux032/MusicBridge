@@ -15,6 +15,7 @@ import kotlin.math.ln
 import kotlin.math.log10
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.pow
 import kotlin.math.sin
 import kotlin.math.sqrt
 
@@ -60,6 +61,7 @@ object AudioSpectrumTap : TeeAudioProcessor.AudioBufferSink {
             if (users++ == 0) {
                 // Drop whatever was buffered last time so stale audio never flashes up.
                 clearLocked()
+                resetGain = true
                 isEnabled = true
             }
         }
@@ -74,6 +76,8 @@ object AudioSpectrumTap : TeeAudioProcessor.AudioBufferSink {
 
     private val analyzer = SpectrumAnalyzer()
     private var scratch = FloatArray(0)
+    @Volatile
+    private var resetGain = false
 
     override fun flush(sampleRateHz: Int, channelCount: Int, encoding: Int) {
         synchronized(lock) {
@@ -110,7 +114,7 @@ object AudioSpectrumTap : TeeAudioProcessor.AudioBufferSink {
      * Fills [out] with band levels in 0..1 for the audio that is audible right now.
      * Returns false (and leaves zeros) when there is not yet enough audio to analyse.
      */
-    fun readBands(out: FloatArray): Boolean {
+    fun readBands(out: FloatArray, dtSeconds: Float): Boolean {
         out.fill(0f)
         val rate: Int
         val windowSize: Int
@@ -126,7 +130,11 @@ object AudioSpectrumTap : TeeAudioProcessor.AudioBufferSink {
                 scratch[i] = ring[((start + i) and RING_MASK.toLong()).toInt()]
             }
         }
-        analyzer.bands(scratch, rate, out)
+        if (resetGain) {
+            resetGain = false
+            analyzer.resetGain()
+        }
+        analyzer.bands(scratch, rate, out, dtSeconds)
         return true
     }
 
@@ -165,16 +173,29 @@ object AudioSpectrumTap : TeeAudioProcessor.AudioBufferSink {
 
 /**
  * Pure FFT → log-spaced band levels. No Android dependencies so it is unit-testable.
- * Bands span [MIN_HZ]..[MAX_HZ]; levels map dBFS onto 0..1 with a gentle treble lift,
- * because music carries far less energy up top and flat bars would leave the right side dead.
+ *
+ * Levels are relative, not absolute: modern masters sit so hot that a fixed dBFS scale left
+ * every bar in the upper half. Instead each band's summed energy (which is roughly flat across
+ * log bands for music, so no big treble boost is needed) is measured against an auto-gain
+ * reference that jumps to the loudest band and sinks slowly. A narrow window plus a power
+ * curve keeps most bars low-to-mid so only hits and the dominant notes reach the top.
+ * Stateful because of that reference: use one instance per stream.
  */
 class SpectrumAnalyzer {
     private var size = 0
     private var window = FloatArray(0)
     private var re = FloatArray(0)
     private var im = FloatArray(0)
+    private var bandDb = DoubleArray(0)
+    private var referenceDb = INITIAL_REFERENCE_DB
 
-    fun bands(samples: FloatArray, sampleRate: Int, out: FloatArray) {
+    /** Forget the loudness history, e.g. when the visualizer reappears. */
+    fun resetGain() {
+        referenceDb = INITIAL_REFERENCE_DB
+    }
+
+    /** [dtSeconds] is the time since the previous call; it drives the reference decay. */
+    fun bands(samples: FloatArray, sampleRate: Int, out: FloatArray, dtSeconds: Float) {
         val n = samples.size
         require(n > 0 && n and (n - 1) == 0) { "window size must be a power of two" }
         prepare(n)
@@ -192,6 +213,8 @@ class SpectrumAnalyzer {
         val binHz = sampleRate.toDouble() / n
         // Hann coherent gain is 0.5; one-sided spectrum doubles it back → amplitude = 4|X|/N.
         val scale = 4.0 / n
+        if (bandDb.size != bandCount) bandDb = DoubleArray(bandCount)
+        var loudest = -200.0
         for (b in 0 until bandCount) {
             val f0 = exp(lo + (hi - lo) * b / bandCount)
             val f1 = exp(lo + (hi - lo) * (b + 1) / bandCount)
@@ -203,14 +226,32 @@ class SpectrumAnalyzer {
                 bin0 = (sqrt(f0 * f1) / binHz).roundToInt().coerceIn(1, n / 2 - 1)
                 bin1 = bin0 + 1
             }
-            var peak = 0.0
+            var power = 0.0
             for (k in bin0 until bin1) {
-                val mag = sqrt((re[k] * re[k] + im[k] * im[k]).toDouble())
-                if (mag > peak) peak = mag
+                power += (re[k] * re[k] + im[k] * im[k]).toDouble() * scale * scale
             }
-            val db = 20.0 * log10(max(peak * scale, 1e-9))
             val tilt = TREBLE_LIFT_DB * b / max(1, bandCount - 1)
-            out[b] = ((db + tilt - FLOOR_DB) / RANGE_DB).toFloat().coerceIn(0f, 1f)
+            val db = 10.0 * log10(max(power, 1e-12)) + tilt
+            bandDb[b] = db
+            if (db > loudest) loudest = db
+        }
+
+        referenceDb = if (loudest > referenceDb) {
+            loudest
+        } else {
+            // Sinks slowly and never below the floor, so a quiet verse after a loud chorus
+            // stays visibly lower and near-silence is not pumped up to full height.
+            max(MIN_REFERENCE_DB, referenceDb - REFERENCE_DECAY_DB_PER_S * dtSeconds)
+        }
+        val bottom = referenceDb - RANGE_DB
+        for (b in 0 until bandCount) {
+            val db = bandDb[b]
+            out[b] = if (db < SILENCE_DB) {
+                0f
+            } else {
+                val x = ((db - bottom) / (RANGE_DB + HEADROOM_DB)).coerceIn(0.0, 1.0)
+                x.pow(CURVE).toFloat()
+            }
         }
     }
 
@@ -225,11 +266,19 @@ class SpectrumAnalyzer {
     companion object {
         const val MIN_HZ = 40.0
         const val MAX_HZ = 16_000.0
-        /** dBFS shown as an empty bar. */
-        const val FLOOR_DB = -66.0
-        /** dB span from empty to full bar. */
-        const val RANGE_DB = 60.0
-        const val TREBLE_LIFT_DB = 12.0
+        /** dB below the reference that maps to an empty bar. */
+        const val RANGE_DB = 26.0
+        /** The reference band itself stops a little short of full height. */
+        const val HEADROOM_DB = 2.0
+        /** >1 pushes mid values down so the bars have real height differences. */
+        const val CURVE = 1.7
+        /** Music rolls off faster than pink noise up top; a small lift keeps the right side alive. */
+        const val TREBLE_LIFT_DB = 8.0
+        const val INITIAL_REFERENCE_DB = -30.0
+        const val MIN_REFERENCE_DB = -42.0
+        const val REFERENCE_DECAY_DB_PER_S = 1.0
+        /** Bands quieter than this (absolute dBFS) are treated as silence. */
+        const val SILENCE_DB = -80.0
 
         /** ~85 ms of audio, enough resolution for the 40–60 Hz band at any common rate. */
         fun windowSizeFor(sampleRate: Int): Int = when {

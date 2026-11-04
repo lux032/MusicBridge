@@ -221,6 +221,7 @@ internal fun PlaybackDetailSection(
         animationSpec = tween(durationMillis = 260, easing = CubicBezierEasing(0.2f, 0f, 0f, 1f)),
         label = "visualizer_crossfade",
     )
+    val spectrumState = remember { SpectrumState() }
     var localOnlyHintNonce by remember { mutableIntStateOf(0) }
     var isLocalOnlyHintVisible by remember { mutableStateOf(false) }
     LaunchedEffect(localOnlyHintNonce) {
@@ -232,12 +233,19 @@ internal fun PlaybackDetailSection(
     val artworkContent: @Composable (androidx.compose.ui.unit.Dp) -> Unit = { maximumSize ->
         Box(
             modifier = Modifier
+                // Before the shared element and the clip: the light spills past the cover.
+                .spectrumGlow(spectrumState, { visualizerProgress }, palette.accent)
                 .playerSharedElement(PlayerSharedKeys.artwork(currentTrack))
                 .widthIn(max = maximumSize)
                 .fillMaxWidth()
                 .aspectRatio(1f)
-                .shadow(16.dp, artworkShape, clip = false)
-                .clip(artworkShape)
+                .graphicsLayer {
+                    // The cover's shadow leaves with it, so the bars stand on the colour
+                    // field itself instead of inside a floating card.
+                    shadowElevation = 16.dp.toPx() * (1f - visualizerProgress)
+                    shape = artworkShape
+                    clip = true
+                }
                 .clickable(
                     // The crossfade itself is the feedback; a ripple over the cover is noise.
                     interactionSource = null,
@@ -270,6 +278,7 @@ internal fun PlaybackDetailSection(
             )
             if (visualizerProgress > 0f) {
                 SpectrumVisualizer(
+                    state = spectrumState,
                     isPlaying = !currentState.isPaused && !currentState.isBuffering,
                     accent = palette.accent,
                     modifier = Modifier
