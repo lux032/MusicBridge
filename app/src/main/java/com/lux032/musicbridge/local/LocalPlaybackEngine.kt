@@ -37,6 +37,11 @@ import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
 import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy
 import androidx.media3.exoplayer.DecoderReuseEvaluation
 import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.DefaultRenderersFactory
+import androidx.media3.exoplayer.audio.AudioSink
+import androidx.media3.exoplayer.audio.DefaultAudioSink
+import androidx.media3.exoplayer.audio.TeeAudioProcessor
+import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.LoadEventInfo
@@ -1101,7 +1106,22 @@ class LocalPlaybackEngine(
         // Foreground direct playback must never wait behind a background writer for a cache range.
         .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
 
-    private val player: ExoPlayer = ExoPlayer.Builder(context.applicationContext)
+    private val player: ExoPlayer = ExoPlayer.Builder(
+        context.applicationContext,
+        // Same sink DefaultRenderersFactory builds, plus a tee that feeds the player-page
+        // spectrum visualizer. The tee copies PCM aside and passes it through untouched.
+        object : DefaultRenderersFactory(context.applicationContext) {
+            override fun buildAudioSink(
+                context: Context,
+                enableFloatOutput: Boolean,
+                enableAudioTrackPlaybackParams: Boolean,
+            ): AudioSink = DefaultAudioSink.Builder(context)
+                .setEnableFloatOutput(enableFloatOutput)
+                .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
+                .setAudioProcessors(arrayOf<AudioProcessor>(TeeAudioProcessor(AudioSpectrumTap)))
+                .build()
+        },
+    )
         .setMediaSourceFactory(
             DefaultMediaSourceFactory(
                 DataSource.Factory {

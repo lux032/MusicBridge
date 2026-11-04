@@ -19,6 +19,10 @@ import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.animate
 import kotlinx.coroutines.Job
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.ui.semantics.Role
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.animateColorAsState
@@ -208,22 +212,90 @@ internal fun PlaybackDetailSection(
         }
     }
     val artworkShape = RoundedCornerShape(14.dp)
+    // Tap the cover to swap it for the spectrum and back. Only local playback has PCM to
+    // analyse; on Sonos the cover stays and a tap explains why instead of faking bars.
+    val isLocalTarget = currentState.target is PlaybackTarget.LocalDevice
+    val showVisualizer = PlayerArtworkMode.showVisualizer && isLocalTarget
+    val visualizerProgress by animateFloatAsState(
+        targetValue = if (showVisualizer) 1f else 0f,
+        animationSpec = tween(durationMillis = 260, easing = CubicBezierEasing(0.2f, 0f, 0f, 1f)),
+        label = "visualizer_crossfade",
+    )
+    var localOnlyHintNonce by remember { mutableIntStateOf(0) }
+    var isLocalOnlyHintVisible by remember { mutableStateOf(false) }
+    LaunchedEffect(localOnlyHintNonce) {
+        if (localOnlyHintNonce == 0) return@LaunchedEffect
+        isLocalOnlyHintVisible = true
+        delay(2_000)
+        isLocalOnlyHintVisible = false
+    }
     val artworkContent: @Composable (androidx.compose.ui.unit.Dp) -> Unit = { maximumSize ->
-        AsyncAlbumArtwork(
-            imageUrl = displayAlbum.thumbUrl,
-            title = displayAlbum.title,
+        Box(
             modifier = Modifier
                 .playerSharedElement(PlayerSharedKeys.artwork(currentTrack))
                 .widthIn(max = maximumSize)
                 .fillMaxWidth()
                 .aspectRatio(1f)
                 .shadow(16.dp, artworkShape, clip = false)
-                .clip(artworkShape),
-            contentScale = ContentScale.Crop,
-            thumbnailSize = maximumSize,
-            // The morph's first frame comes from the mini player's 52dp cache entry.
-            placeholderThumbnailSize = 52.dp,
-        )
+                .clip(artworkShape)
+                .clickable(
+                    // The crossfade itself is the feedback; a ripple over the cover is noise.
+                    interactionSource = null,
+                    indication = null,
+                    role = Role.Button,
+                    onClickLabel = if (showVisualizer) Strings.showArtwork else Strings.showVisualizer,
+                ) {
+                    if (isLocalTarget) {
+                        PlayerArtworkMode.showVisualizer = !PlayerArtworkMode.showVisualizer
+                    } else {
+                        localOnlyHintNonce++
+                    }
+                },
+        ) {
+            AsyncAlbumArtwork(
+                imageUrl = displayAlbum.thumbUrl,
+                title = displayAlbum.title,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        alpha = 1f - visualizerProgress
+                        val scale = 1f - 0.03f * visualizerProgress
+                        scaleX = scale
+                        scaleY = scale
+                    },
+                contentScale = ContentScale.Crop,
+                thumbnailSize = maximumSize,
+                // The morph's first frame comes from the mini player's 52dp cache entry.
+                placeholderThumbnailSize = 52.dp,
+            )
+            if (visualizerProgress > 0f) {
+                SpectrumVisualizer(
+                    isPlaying = !currentState.isPaused && !currentState.isBuffering,
+                    accent = palette.accent,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer { alpha = visualizerProgress },
+                )
+            }
+            androidx.compose.animation.AnimatedVisibility(
+                visible = isLocalOnlyHintVisible,
+                enter = fadeIn(tween(160)),
+                exit = fadeOut(tween(220)),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(12.dp),
+            ) {
+                Text(
+                    text = Strings.visualizerLocalOnly,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AppColors.TextPrimary,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier
+                        .background(Color.Black.copy(alpha = 0.62f), RoundedCornerShape(12.dp))
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                )
+            }
+        }
     }
 
     // ── Group 1: track meta (title + favourite key, artist · album, signal path) ──

@@ -68,6 +68,9 @@ object Strings {
     val noPlaybackDesc get() = if (isZhCN) "先从专辑详情里播放内容，底部栏出现后再进入播放详情。" else "Start playback from album details first. Then access playback details from the bottom bar."
     val nowPlaying get() = if (isZhCN) "正在播放" else "Now Playing"
     val nowPaused get() = if (isZhCN) "已暂停" else "Paused"
+    val showVisualizer get() = if (isZhCN) "显示音乐可视化" else "Show visualizer"
+    val showArtwork get() = if (isZhCN) "显示封面" else "Show artwork"
+    val visualizerLocalOnly get() = if (isZhCN) "音乐可视化仅支持本机播放" else "The visualizer only works when playing on this phone"
     // Design D: the primary play key names its destination ("在 卧室 播放").
     val playOn get() = { target: String ->
         if (target == localPlayback) {
