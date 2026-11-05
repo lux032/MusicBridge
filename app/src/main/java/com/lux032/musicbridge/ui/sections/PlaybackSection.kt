@@ -25,6 +25,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.ui.semantics.Role
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -221,6 +222,16 @@ internal fun PlaybackDetailSection(
         animationSpec = tween(durationMillis = 260, easing = CubicBezierEasing(0.2f, 0f, 0f, 1f)),
         label = "visualizer_crossfade",
     )
+    // Elevation shadows assume opaque content: under a fading cover Android shows the shadow's
+    // edge band with an undrawn centre, which read as an empty frame before the bars. So the
+    // shadow only exists while the cover is fully opaque — dropped on the first frame of the
+    // switch to the visualizer, faded back in only after the cover has fully returned.
+    val coverIsSettled = !showVisualizer && visualizerProgress == 0f
+    val artworkShadowFactor by animateFloatAsState(
+        targetValue = if (coverIsSettled) 1f else 0f,
+        animationSpec = if (coverIsSettled) tween(durationMillis = 180) else snap(),
+        label = "artwork_shadow",
+    )
     val spectrumState = remember { SpectrumState() }
     var localOnlyHintNonce by remember { mutableIntStateOf(0) }
     var isLocalOnlyHintVisible by remember { mutableStateOf(false) }
@@ -240,9 +251,8 @@ internal fun PlaybackDetailSection(
                 .fillMaxWidth()
                 .aspectRatio(1f)
                 .graphicsLayer {
-                    // The cover's shadow leaves with it, so the bars stand on the colour
-                    // field itself instead of inside a floating card.
-                    shadowElevation = 16.dp.toPx() * (1f - visualizerProgress)
+                    // The bars stand on the colour field itself, not inside a floating card.
+                    shadowElevation = 16.dp.toPx() * artworkShadowFactor
                     shape = artworkShape
                     clip = true
                 }
