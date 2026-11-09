@@ -100,7 +100,7 @@ jobs:
             app/build/reports/tests/testDebugUnitTest/
             app/build/test-results/testDebugUnitTest/
           if-no-files-found: warn
-          retention-days: 14
+          retention-days: 3
 
       - name: Prepare downloadable APKs
         run: |
@@ -115,7 +115,7 @@ jobs:
           name: MusicBridge-apks-${{ github.run_number }}
           path: artifacts/
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 3
 
       - name: Upload Release obfuscation mapping
         uses: actions/upload-artifact@v4
