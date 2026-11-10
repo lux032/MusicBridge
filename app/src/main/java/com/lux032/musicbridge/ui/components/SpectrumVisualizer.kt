@@ -50,6 +50,8 @@ private const val PEAK_HOLD_MS = 420L
 private const val PEAK_GRAVITY = 1.3f
 /** Bands averaged into the glow's bass level (≈ 40–150 Hz). */
 private const val BASS_BANDS = 4
+private const val GLOW_ATTACK = 0.6f
+private const val GLOW_RELEASE = 0.12f
 
 /**
  * Bar levels plus a smoothed bass level, hoisted to the player page so the background glow can
@@ -83,7 +85,9 @@ internal class SpectrumState {
         var bassNow = 0f
         for (i in 0 until BASS_BANDS) bassNow += level[i]
         bassNow /= BASS_BANDS
-        bass += (bassNow - bass) * (1f - 0.82f.pow(dt * 60f))
+        // Up with the kick, down slowly: a symmetric filter made the glow swell ~100 ms late.
+        val k = if (bassNow > bass) GLOW_ATTACK else GLOW_RELEASE
+        bass += (bassNow - bass) * (1f - (1f - k).pow(dt * 60f))
     }
 
     fun reset() {

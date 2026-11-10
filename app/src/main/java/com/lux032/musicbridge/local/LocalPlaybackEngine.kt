@@ -1473,6 +1473,24 @@ class LocalPlaybackEngine(
     }
 
     private val analyticsListener = object : AnalyticsListener {
+        override fun onAudioTrackInitialized(
+            eventTime: AnalyticsListener.EventTime,
+            audioTrackConfig: AudioSink.AudioTrackConfig,
+        ) {
+            // The visualizer delays its analysis by the AudioTrack buffer to stay on the beat.
+            val bytesPerFrame = Integer.bitCount(audioTrackConfig.channelConfig) * when (audioTrackConfig.encoding) {
+                C.ENCODING_PCM_8BIT -> 1
+                C.ENCODING_PCM_16BIT -> 2
+                C.ENCODING_PCM_24BIT -> 3
+                C.ENCODING_PCM_32BIT, C.ENCODING_PCM_FLOAT -> 4
+                else -> return
+            }
+            if (bytesPerFrame <= 0 || audioTrackConfig.sampleRate <= 0) return
+            AudioSpectrumTap.onAudioTrackBuffer(
+                audioTrackConfig.bufferSize.toDouble() / bytesPerFrame / audioTrackConfig.sampleRate,
+            )
+        }
+
         override fun onAudioUnderrun(
             eventTime: AnalyticsListener.EventTime,
             bufferSize: Int,
