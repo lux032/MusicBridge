@@ -324,8 +324,8 @@ fun PlexAlbumScreen(
         }
     }
 
-    // Only the player lays out edge-to-edge (it applies the system bar insets itself);
-    // every other section sits inside the scaffold's safe padding while the root gradient
+    // The player and work detail paint edge-to-edge and apply safe insets internally;
+    // other sections sit inside the scaffold's safe padding while the root gradient
     // below paints full-bleed behind the transparent system bars. The padding is applied
     // per-section inside the AnimatedContent below so the exiting page keeps its own
     // padding for the whole transition instead of jumping mid-fade.
@@ -379,7 +379,7 @@ fun PlexAlbumScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .then(
-                    if (currentSection == AppSection.PlaybackDetail) Modifier
+                    if (currentSection == AppSection.PlaybackDetail || currentSection == AppSection.WorkDetail) Modifier
                     else Modifier.padding(contentPadding)
                 ),
         ) {
@@ -553,6 +553,7 @@ fun PlexAlbumScreen(
                         WorkDetailSection(
                             sourceId = currentEntry.sourceId,
                             workId = workId,
+                            safePadding = contentPadding,
                             bottomPadding = contentBottomPadding,
                             outputName = state.selectedPlaybackTarget.displayName,
                             playbackBusy = state.isPlaybackCommandLoading,

@@ -413,7 +413,6 @@ internal fun PlaybackDetailSection(
                     )
                 }
             }
-            TrackWorkLink(currentTrack, loadTrackWorks, onOpenWork, loadWorkInfo)
             // Signal path: where the audio comes from and which room it goes to.
             val qualityBadges = remember(currentTrack, currentState.target, localPlaybackPolicy, cachedOriginalTrackKeys) {
                 currentTrack.outputQualityBadges(currentState.target, localPlaybackPolicy, cachedOriginalTrackKeys)
@@ -966,42 +965,19 @@ internal fun PlaybackDetailSection(
     }
 
     if (isMoreSheetVisible) {
-        ModalBottomSheet(
-            onDismissRequest = { isMoreSheetVisible = false },
-            containerColor = palette.backgroundBottom,
-        ) {
-            Column(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Text(Strings.more, style = MaterialTheme.typography.titleLarge, color = AppColors.TextPrimary, fontWeight = FontWeight.Bold)
-                MoreSheetAction(Icons.Filled.Bedtime, Strings.sleepTimer) {
-                    isMoreSheetVisible = false
-                    val totalMinutes = ((sleepTimerState.remainingMillis + 59_999L) / 60_000L).toInt()
-                    sleepTimerHours = if (sleepTimerState.isActive) totalMinutes / 60 else 0
-                    sleepTimerMinutes = if (sleepTimerState.isActive) totalMinutes % 60 else 30
-                    sleepTimerInputError = null
-                    isSleepTimerDialogVisible = true
-                }
-                addTrackToPlaylistAction(currentTrack)?.let { addToPlaylist ->
-                    MoreSheetAction(Icons.Filled.LibraryAdd, Strings.addToPlaylist) {
-                        isMoreSheetVisible = false
-                        addToPlaylist()
-                    }
-                }
-                MoreSheetAction(Icons.Filled.Album, Strings.viewAlbum) {
-                    isMoreSheetVisible = false
-                    onAlbumClick(displayAlbum)
-                }
-                MoreSheetAction(Icons.Filled.Person, Strings.viewArtist) {
-                    isMoreSheetVisible = false
-                    onArtistClick(currentTrack.artistName ?: displayAlbum.artistName, currentTrack.artists)
-                }
-                Text(Strings.trackDetails, color = AppColors.TextSecondary, fontWeight = FontWeight.SemiBold)
-                Text(currentTrack.trackDetailText(currentState.target, localPlaybackPolicy, cachedOriginalTrackKeys), color = AppColors.TextTertiary, style = MaterialTheme.typography.bodyMedium)
-                Spacer(Modifier.height(24.dp))
-            }
-        }
+        PlaybackMoreSheet(
+            track = currentTrack,
+            artworkUrl = displayAlbum.thumbUrl,
+            artistAlbum = listOfNotNull(currentTrack.artistName ?: displayAlbum.artistName, currentTrack.albumTitle ?: displayAlbum.title)
+                .joinToString(" · "),
+            technicalDetails = currentTrack.trackDetailText(currentState.target, localPlaybackPolicy, cachedOriginalTrackKeys),
+            palette = palette,
+            loadWorks = loadTrackWorks,
+            loadWorkInfo = loadWorkInfo,
+            onOpenWork = onOpenWork,
+            onAddToPlaylist = addTrackToPlaylistAction(currentTrack),
+            onDismiss = { isMoreSheetVisible = false },
+        )
     }
 
     if (isPlaylistSheetVisible) {

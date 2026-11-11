@@ -66,7 +66,7 @@ internal fun WorksHomeShelf(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun WorkPosterCard(
+internal fun WorkPosterCard(
     work: Music032Work,
     onClick: () -> Unit,
     onPlay: ((Boolean) -> Unit)? = null,
@@ -76,7 +76,9 @@ private fun WorkPosterCard(
     var menu by remember { mutableStateOf(false) }
     val width = if (small) 96.dp else 112.dp
     Column(
-        Modifier.width(width).clip(RoundedCornerShape(14.dp))
+        // Only the artwork is rounded. Clipping the whole column cuts the leading E/O
+        // off the last metadata line at its bottom corners (especially at large font sizes).
+        Modifier.width(width)
             .combinedClickable(onClick = onClick, onLongClick = onPlay?.let { { menu = true } }),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
@@ -102,71 +104,8 @@ private fun WorkPosterCard(
     }
 }
 
-private fun Music032Work.kindLabel(): String =
+internal fun Music032Work.kindLabel(): String =
     listOfNotNull(Strings.workType(type), year.takeIf { it > 0 }?.toString()).joinToString(" · ")
-
-/** Request lives with the current track, so cancelled/stale results never label another song. */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-internal fun TrackWorkLink(
-    track: PlexTrackStream,
-    load: suspend (PlexTrackStream) -> List<Music032TrackWork>,
-    onOpen: (String, Long) -> Unit,
-    loadInfo: suspend (String, Long) -> Music032Work?,
-) {
-    var links by remember(track.sourceId, track.ratingKey) { mutableStateOf(emptyList<Music032TrackWork>()) }
-    var showSheet by remember(track.sourceId, track.ratingKey) { mutableStateOf(false) }
-    LaunchedEffect(track.sourceId, track.ratingKey) {
-        links = try { load(track) } catch (cancel: CancellationException) { throw cancel } catch (_: Exception) { emptyList() }
-    }
-    val first = links.firstOrNull() ?: return
-    Key(onClick = {
-        if (links.size == 1) onOpen(track.sourceId, first.work.id) else showSheet = true
-    }, modifier = Modifier.heightIn(min = 48.dp).widthIn(max = 520.dp), shape = RoundedCornerShape(12.dp)) {
-        Row(Modifier.padding(horizontal = 8.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(Strings.workRole(first.role), style = MaterialTheme.typography.labelMedium,
-                modifier = Modifier.clip(RoundedCornerShape(8.dp)).background(KeyColors.Tonal).padding(horizontal = 8.dp, vertical = 5.dp))
-            Text(first.work.title, style = MaterialTheme.typography.labelLarge,
-                maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-            if (links.size > 1) Text("+${links.size - 1}", style = MaterialTheme.typography.labelMedium, color = AppColors.TextSecondary)
-            Icon(Icons.Filled.ChevronRight, null, Modifier.size(18.dp))
-        }
-    }
-    if (showSheet) ModalBottomSheet(onDismissRequest = { showSheet = false }, containerColor = dockColor()) {
-        Column(Modifier.fillMaxWidth().heightIn(max = 560.dp).padding(horizontal = 20.dp)) {
-            Text(Strings.workOrigin(links.size), style = MaterialTheme.typography.titleLarge, color = AppColors.TextPrimary)
-            Text(track.title, style = MaterialTheme.typography.bodyMedium, color = AppColors.TextSecondary,
-                modifier = Modifier.padding(top = 4.dp, bottom = 12.dp))
-            LazyColumn(Modifier.fillMaxWidth().weight(1f, fill = false)) {
-                items(links, key = { "${it.work.id}:${it.role}" }) { link ->
-                    // TrackWorks intentionally omits year/poster: enrich only visible sheet rows.
-                    var info by remember(link.work.id) { mutableStateOf(link.work) }
-                    LaunchedEffect(track.sourceId, link.work.id) {
-                        try { loadInfo(track.sourceId, link.work.id)?.let { info = it } }
-                        catch (cancel: CancellationException) { throw cancel }
-                        catch (_: Exception) { /* Keep the usable link if enrichment fails. */ }
-                    }
-                    Hairline()
-                    Row(Modifier.fillMaxWidth().clickable { showSheet = false; onOpen(track.sourceId, link.work.id) }
-                        .padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                        AsyncAlbumArtwork(info.artworkUrl, link.work.title,
-                            Modifier.size(44.dp, 62.dp).clip(RoundedCornerShape(8.dp)), ContentScale.Crop)
-                        Column(Modifier.weight(1f)) {
-                            Text(link.work.title, style = MaterialTheme.typography.titleMedium, color = AppColors.TextPrimary,
-                                maxLines = 2, overflow = TextOverflow.Ellipsis)
-                            Text("${info.kindLabel()} · ${Strings.workRole(link.role)}",
-                                style = MaterialTheme.typography.bodySmall, color = AppColors.TextSecondary)
-                        }
-                        Icon(Icons.Filled.ChevronRight, null, tint = AppColors.TextSecondary)
-                    }
-                }
-            }
-            Spacer(Modifier.height(24.dp))
-        }
-    }
-}
 
 @Composable
 internal fun WorkDetailSection(
@@ -183,6 +122,7 @@ internal fun WorkDetailSection(
     onPlay: (Music032Work, Boolean, Boolean) -> Unit,
     onQueue: (List<PlexTrackStream>, String) -> Unit,
     onTrack: (Music032Work, List<PlexTrackStream>, Int) -> Unit,
+    safePadding: PaddingValues = PaddingValues(),
 ) {
     var detail by remember(sourceId, workId) { mutableStateOf<Music032WorkDetail?>(null) }
     var error by remember(sourceId, workId) { mutableStateOf<String?>(null) }
@@ -212,7 +152,11 @@ internal fun WorkDetailSection(
     val padding = LocalAppLayoutInfo.current.horizontalPadding
     CompositionLocalProvider(LocalArtworkPalette provides palette) {
         LazyColumn(
-            Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(palette.backgroundTop, palette.backgroundBottom))),
+            // Paint behind the status bar as well as the content. Applying safe padding
+            // outside this page exposes the now-playing palette from the app shell.
+            Modifier.fillMaxSize()
+                .background(Brush.verticalGradient(listOf(palette.backgroundTop, palette.backgroundBottom)))
+                .padding(safePadding),
             contentPadding = PaddingValues(start = padding, end = padding, top = 8.dp, bottom = bottomPadding),
         ) {
             item("back") { BareIcon(Icons.AutoMirrored.Filled.ArrowBack, Strings.back, onBack) }
@@ -293,7 +237,7 @@ internal fun WorkDetailSection(
                     item("albums") {
                         LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                             items(data.albums, key = { it.album.ratingKey }) { entry ->
-                                Column(Modifier.width(124.dp).clip(RoundedCornerShape(14.dp)).clickable { onAlbum(entry.album) },
+                                Column(Modifier.width(124.dp).clickable { onAlbum(entry.album) },
                                     verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                     AsyncAlbumArtwork(entry.album.thumbUrl, entry.album.title,
                                         Modifier.size(124.dp).clip(RoundedCornerShape(14.dp)), ContentScale.Crop, thumbnailSize = 160.dp)

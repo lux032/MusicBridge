@@ -39,6 +39,8 @@ object Strings {
     val workSeriesUnavailable get() = if (isZhCN) "服务器暂不支持播放系列" else "This server doesn't support series playback"
     val workPlayHint get() = if (isZhCN) "播放整部作品，包含原声带；筛选仅影响下方列表。" else "Plays the entire work, including soundtracks. Filters only affect the list below."
     fun workStats(albums: Int, tracks: Int) = if (isZhCN) "$albums 张专辑 · $tracks 首" else "$albums albums · $tracks tracks"
+    fun workAssociations(count: Int) = if (isZhCN) "关联作品 · $count 部" else "Related works · $count"
+    val close get() = if (isZhCN) "关闭" else "Close"
     fun workOrigin(count: Int) = if (isZhCN) "出自 $count 部作品" else "From $count works"
     fun workPosition(position: Int) = if (isZhCN) "当前 · 第 $position 部" else "Current · Part $position"
     fun workType(type: String) = when (type) {

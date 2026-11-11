@@ -53,7 +53,7 @@ class NavigationPageStateTest {
         compose.onNodeWithTag("position").assertTextEquals("ArtistAlbums:0")
     }
 
-    @Test funVisitsToSameDestinationHaveIndependentState() {
+    @Test fun visitsToSameDestinationHaveIndependentState() {
         val entries = mutableStateListOf(NavigationEntry(1, AppSection.AlbumDetail))
         var updatePosition: (Int) -> Unit = {}
         compose.setContent {
