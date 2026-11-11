@@ -73,6 +73,13 @@ internal fun HomeSection(
     onOpenAllAlbums: () -> Unit,
     onOpenFavorites: () -> Unit,
     onOpenRecentAdded: () -> Unit,
+    homeWorks: com.lux032.musicbridge.music.Music032WorkRotation = com.lux032.musicbridge.music.Music032WorkRotation(),
+    isWorksLoading: Boolean = false,
+    worksError: String? = null,
+    onRotateWorks: () -> Unit = {},
+    onRetryWorks: () -> Unit = {},
+    onOpenWork: (com.lux032.musicbridge.music.Music032Work) -> Unit = {},
+    onPlayWork: (com.lux032.musicbridge.music.Music032Work, Boolean) -> Unit = { _, _ -> },
     dailyMixes: DailyMixHomeState = DailyMixHomeState(),
     playingMixKey: String? = null,
     onOpenDailyMix: (Music032DailyMix) -> Unit = {},
@@ -175,6 +182,11 @@ internal fun HomeSection(
                         onAlbumQueueAction = onAlbumQueueAction,
                         onPlayAlbum = onPlayAlbum,
                     )
+                }
+            }
+            if (homeWorks.items.isNotEmpty() || isWorksLoading || worksError != null) {
+                item(key = "home-works", contentType = "work-shelf") {
+                    WorksHomeShelf(homeWorks, isWorksLoading, worksError, onRotateWorks, onRetryWorks, onOpenWork, onPlayWork)
                 }
             }
             if (favoriteAlbums.isNotEmpty()) {

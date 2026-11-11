@@ -146,6 +146,11 @@ class AppState(
     private val playbackCoordinator = AppStatePlaybackCoordinator(this)
     private val playlistCoordinator = AppStatePlaylistCoordinator(this)
     private val dailyMixCoordinator = AppStateDailyMixCoordinator(this)
+    private val worksCoordinator = AppStateWorksCoordinator(this)
+    var homeWorks by mutableStateOf(com.lux032.musicbridge.music.Music032WorkRotation())
+    var homeWorksSourceId by mutableStateOf("")
+    var isWorksLoading by mutableStateOf(false)
+    var worksError by mutableStateOf<String?>(null)
     private val musicSourceClients = java.util.concurrent.ConcurrentHashMap<String, CachedMusicSourceClient>()
     private val music032Reporters = java.util.concurrent.ConcurrentHashMap<String, Music032PlaybackReporter>()
 
@@ -429,6 +434,23 @@ class AppState(
         navigationEntries.add(NavigationEntry(nextNavigationEntryId++, section))
         lastNavAction = NavAction.Push
     }
+
+    internal fun pushWorkEntry(sourceId: String, workId: Long) {
+        navigationEntries.add(NavigationEntry(nextNavigationEntryId++, AppSection.WorkDetail, sourceId, workId))
+        lastNavAction = NavAction.Push
+    }
+
+    fun loadHomeWorks(force: Boolean = false) = worksCoordinator.loadHome(force = force)
+    fun rotateHomeWorks() = worksCoordinator.loadHome(next = true)
+    fun openWork(sourceId: String, workId: Long) = worksCoordinator.open(sourceId, workId)
+    suspend fun fetchTrackWorks(track: PlexTrackStream) = worksCoordinator.trackWorks(track)
+    suspend fun fetchWorkInfo(sourceId: String, workId: Long) = worksCoordinator.info(sourceId, workId)
+    suspend fun fetchWork(sourceId: String, workId: Long) = worksCoordinator.detail(sourceId, workId)
+    suspend fun fetchWorkSeries(sourceId: String, seriesId: Long) = worksCoordinator.series(sourceId, seriesId)
+    fun playWork(sourceId: String, work: com.lux032.musicbridge.music.Music032Work, shuffle: Boolean = false, series: Boolean = false) =
+        worksCoordinator.play(sourceId, work, shuffle, series)
+    fun enqueueWorkTracks(tracks: List<PlexTrackStream>, title: String) =
+        playbackCoordinator.enqueueTracks(tracks, QueuePlacement.End, title)
 
     fun openPlaybackDetail() {
         val existing = navigationStack.indexOf(AppSection.PlaybackDetail)
@@ -769,6 +791,7 @@ class AppState(
         hasLoadedLocalAlbums = false
         errorMessage = null
         dailyMixCoordinator.reset()
+        worksCoordinator.reset()
     }
 
     fun openAlbumDetail(album: PlexAlbum) = libraryCoordinator.openAlbumDetail(album)

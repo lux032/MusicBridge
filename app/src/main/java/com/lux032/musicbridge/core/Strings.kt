@@ -22,6 +22,42 @@ object Strings {
     private val isZhCN: Boolean
         get() = currentLocale.language == "zh" && currentLocale.country == "CN"
 
+    val browseWorks get() = if (isZhCN) "按作品漫游" else "Explore by work"
+    val workRotationRenewed get() = if (isZhCN) "今日作品推荐已更新" else "Today's works have been refreshed"
+    fun workBatch(batch: Int, pages: Int) = if (isZhCN) "今日第 ${batch + 1} 批 · 共 $pages 批" else "Today's batch ${batch + 1} of $pages"
+    val workNextBatch get() = if (isZhCN) "换一批" else "Next batch"
+    val workLoading get() = if (isZhCN) "正在加载作品" else "Loading work"
+    fun workLoadFailed(reason: String?) = if (isZhCN) "作品加载失败，请重试${reason?.let { "：$it" }.orEmpty()}" else "Couldn't load works. Retry${reason?.let { ": $it" }.orEmpty()}"
+    val workNotFound get() = if (isZhCN) "作品已不存在或不可访问" else "This work no longer exists or is unavailable"
+    val workNoTracks get() = if (isZhCN) "还没有可播放的关联歌曲" else "No linked tracks to play yet"
+    val workNoSongs get() = if (isZhCN) "没有符合筛选的歌曲，原声带可从下方专辑进入。" else "No songs match this filter. Soundtracks are available in the albums below."
+    val workSongs get() = if (isZhCN) "歌曲" else "Songs"
+    val workThemes get() = if (isZhCN) "主题曲" else "Themes"
+    val workInserts get() = if (isZhCN) "插曲" else "Insert songs"
+    val workSeries get() = if (isZhCN) "同系列" else "In this series"
+    val workPlaySeries get() = if (isZhCN) "播放系列" else "Play series"
+    val workSeriesUnavailable get() = if (isZhCN) "服务器暂不支持播放系列" else "This server doesn't support series playback"
+    val workPlayHint get() = if (isZhCN) "播放整部作品，包含原声带；筛选仅影响下方列表。" else "Plays the entire work, including soundtracks. Filters only affect the list below."
+    fun workStats(albums: Int, tracks: Int) = if (isZhCN) "$albums 张专辑 · $tracks 首" else "$albums albums · $tracks tracks"
+    fun workOrigin(count: Int) = if (isZhCN) "出自 $count 部作品" else "From $count works"
+    fun workPosition(position: Int) = if (isZhCN) "当前 · 第 $position 部" else "Current · Part $position"
+    fun workType(type: String) = when (type) {
+        "anime" -> if (isZhCN) "动画" else "Anime"
+        "game" -> if (isZhCN) "游戏" else "Game"
+        "movie" -> if (isZhCN) "电影" else "Movie"
+        else -> if (isZhCN) "作品" else "Work"
+    }
+    fun workRole(role: String): String = when (role) {
+        "op" -> "OP"
+        "ed" -> "ED"
+        "theme" -> if (isZhCN) "主题歌" else "Theme"
+        "insert" -> if (isZhCN) "插曲" else "Insert"
+        "character" -> if (isZhCN) "角色歌" else "Character"
+        "image_song" -> if (isZhCN) "印象曲" else "Image song"
+        "ost" -> if (isZhCN) "原声带" else "Soundtrack"
+        else -> if (isZhCN) "其他" else "Other"
+    }
+
     val error get() = if (isZhCN) "错误" else "Error"
     val loading get() = if (isZhCN) "正在从服务器同步专辑" else "Syncing albums from server"
     val settingsPromptTitle get() = if (isZhCN) "先在设置里添加音乐服务器" else "Add a Music Server in Settings"

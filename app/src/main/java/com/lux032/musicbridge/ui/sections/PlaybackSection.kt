@@ -124,6 +124,9 @@ internal fun PlaybackDetailSection(
     lyricsRepository: TrackLyricsRepository,
     lyricsTranslationSettings: LyricsTranslationSettings,
     onLyricsTranslationSettingsChange: (LyricsTranslationSettings) -> Unit,
+    loadTrackWorks: suspend (PlexTrackStream) -> List<com.lux032.musicbridge.music.Music032TrackWork> = { emptyList() },
+    onOpenWork: (String, Long) -> Unit = { _, _ -> },
+    loadWorkInfo: suspend (String, Long) -> com.lux032.musicbridge.music.Music032Work? = { _, _ -> null },
     sonosVolume: Float = 0f,
     hasLoadedSonosVolume: Boolean = false,
     onVolumeChange: ((Float) -> Unit)? = null,
@@ -410,6 +413,7 @@ internal fun PlaybackDetailSection(
                     )
                 }
             }
+            TrackWorkLink(currentTrack, loadTrackWorks, onOpenWork, loadWorkInfo)
             // Signal path: where the audio comes from and which room it goes to.
             val qualityBadges = remember(currentTrack, currentState.target, localPlaybackPolicy, cachedOriginalTrackKeys) {
                 currentTrack.outputQualityBadges(currentState.target, localPlaybackPolicy, cachedOriginalTrackKeys)

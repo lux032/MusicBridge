@@ -9,6 +9,7 @@ enum class AppSection {
     Artists,
     Playlists,
     AlbumDetail,
+    WorkDetail,
     ArtistAlbums,
     PlaylistDetail,
     PlaybackDetail,

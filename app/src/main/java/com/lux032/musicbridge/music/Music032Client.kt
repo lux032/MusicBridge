@@ -123,6 +123,47 @@ class Music032Client(
         )
     }
 
+    suspend fun fetchHomeWorks(batch: Int? = null, generation: String = ""): Music032WorkRotation {
+        val path = if (batch == null) "/api/v1/home" else {
+            val encoded = URLEncoder.encode(generation, StandardCharsets.UTF_8.name())
+            "/api/v1/home/works?type=all&batch=${batch.coerceAtLeast(0)}&generation=$encoded"
+        }
+        val root = JSONObject(cancellableGet(path))
+        return Music032WorksJson.rotation(if (batch == null) root.optJSONObject("works") ?: JSONObject() else root, ::mediaUrl)
+    }
+
+    suspend fun fetchTrackWorks(id: String): List<Music032TrackWork> {
+        require(id.toLongOrNull() != null)
+        return Music032WorksJson.trackWorks(JSONObject(cancellableGet("/api/v1/tracks/$id/works")), ::mediaUrl)
+    }
+
+    suspend fun fetchWorkInfo(id: Long): Music032Work {
+        require(id > 0)
+        return Music032WorksJson.work(JSONObject(cancellableGet("/api/v1/works/$id")), ::mediaUrl, detail = true)
+    }
+
+    suspend fun fetchWork(id: Long): Music032WorkDetail {
+        val work = fetchWorkInfo(id)
+        val tracks = fetchWorkTracks(id)
+        val albums = Music032WorksJson.albums(JSONObject(cancellableGet("/api/v1/works/$id/albums")), ::parseAlbum)
+        return Music032WorkDetail(work.copy(artworkUrl = work.artworkUrl ?: albums.firstOrNull()?.album?.thumbUrl), tracks, albums)
+    }
+
+    suspend fun fetchWorkTracks(id: Long): List<Music032WorkTrack> {
+        require(id > 0)
+        return Music032WorksJson.tracks(JSONObject(cancellableGet("/api/v1/works/$id/tracks")), ::parseTrack)
+    }
+
+    suspend fun fetchWorkSeries(id: Long): Music032WorkSeries {
+        require(id > 0)
+        return Music032WorksJson.series(JSONObject(cancellableGet("/api/v1/series/$id")), ::mediaUrl)
+    }
+
+    suspend fun fetchSeriesTracks(id: Long): List<PlexTrackStream> {
+        require(id > 0)
+        return Music032WorksJson.tracks(JSONObject(cancellableGet("/api/v1/series/$id/tracks")), ::parseTrack).uniqueStreams()
+    }
+
     private suspend fun cancellableGet(path: String): String = suspendCancellableCoroutine { continuation ->
         val reference = AtomicReference<HttpURLConnection?>()
         continuation.invokeOnCancellation { reference.get()?.disconnect() }

@@ -298,6 +298,7 @@ fun PlexAlbumScreen(
     BackHandler(enabled = state.navigationStack.size > 1) {
         when (activeSection) {
             AppSection.AlbumDetail,
+            AppSection.WorkDetail,
             AppSection.ArtistAlbums,
             AppSection.PlaylistDetail,
             AppSection.PlaybackDetail,
@@ -547,6 +548,32 @@ fun PlexAlbumScreen(
                         )
                     }
 
+                } else if (currentSection == AppSection.WorkDetail) {
+                    currentEntry.workId?.let { workId ->
+                        WorkDetailSection(
+                            sourceId = currentEntry.sourceId,
+                            workId = workId,
+                            bottomPadding = contentBottomPadding,
+                            outputName = state.selectedPlaybackTarget.displayName,
+                            playbackBusy = state.isPlaybackCommandLoading,
+                            load = state::fetchWork,
+                            loadSeries = state::fetchWorkSeries,
+                            onBack = state::navigateBack,
+                            onOpen = state::openWork,
+                            onAlbum = state::openAlbumDetail,
+                            onPlay = { work, shuffle, series -> state.playWork(currentEntry.sourceId, work, shuffle, series) },
+                            onQueue = state::enqueueWorkTracks,
+                            onTrack = { work, tracks, index ->
+                                val album = PlexAlbum(
+                                    ratingKey = "work:${work.id}", title = work.title, artistName = null,
+                                    year = work.year.takeIf { it > 0 }, thumbUrl = work.artworkUrl, userRating = null,
+                                    addedAtEpochSeconds = null, lastViewedAtEpochSeconds = null,
+                                    section = PlexSection("", "", ""), sourceId = currentEntry.sourceId,
+                                )
+                                state.startSingleTrackPlayback(album, tracks, index)
+                            },
+                        )
+                    }
                 } else if (currentSection == AppSection.PlaybackDetail) {
                     val sleepTimerState by state.sleepTimerState.collectAsState()
                     // No outer padding: the player draws its own full-bleed artwork-tinted
@@ -573,6 +600,9 @@ fun PlexAlbumScreen(
                             onSeek = state::seekPlayback,
                             onAlbumClick = state::openAlbumDetail,
                             onArtistClick = state::openArtistLink,
+                            loadTrackWorks = state::fetchTrackWorks,
+                            loadWorkInfo = state::fetchWorkInfo,
+                            onOpenWork = state::openWork,
                             onToggleTrackFavorite = state::toggleTrackFavorite,
                             onSelectTrack = { index -> state.playQueueIndex(index) },
                             onSelectPlaybackMode = state::updatePlaybackMode,
@@ -849,12 +879,22 @@ fun PlexAlbumScreen(
                         },
                         onOpenFavorites = { state.navigateTo(AppSection.FavoriteCollection) },
                         onOpenRecentAdded = { state.navigateTo(AppSection.RecentAdded) },
+                        homeWorks = state.homeWorks,
+                        isWorksLoading = state.isWorksLoading,
+                        worksError = state.worksError,
+                        onRotateWorks = state::rotateHomeWorks,
+                        onRetryWorks = { state.loadHomeWorks(force = true) },
+                        onOpenWork = { state.openWork(state.homeWorksSourceId, it.id) },
+                        onPlayWork = { work, shuffle -> state.playWork(state.homeWorksSourceId, work, shuffle) },
                         dailyMixes = state.dailyMixes,
                         playingMixKey = state.miniPlayerState?.album?.ratingKey?.takeIf { it.startsWith("mix:") },
                         onOpenDailyMix = state::openDailyMixDetail,
                         onPlayDailyMix = { mix, shuffle -> state.playDailyMix(mix, shuffle) },
                     )
-                    LaunchedEffect(state.connectionPreferences.id) { state.loadDailyMixes() }
+                    LaunchedEffect(state.connectionPreferences) {
+                        state.loadDailyMixes()
+                        state.loadHomeWorks()
+                    }
                 } else if (currentSection == AppSection.Settings) {
                     val scrollState = rememberScrollState(
                         initial = state.getSavedScrollValue(AppSection.Settings),
