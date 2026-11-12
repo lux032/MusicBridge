@@ -4,7 +4,7 @@ import androidx.media3.common.Player
 import com.lux032.musicbridge.music.Music032ReporterApi
 import com.lux032.musicbridge.music.ReporterEndReason
 import com.lux032.musicbridge.music.ReporterPlayState
-import com.lux032.musicbridge.plex.PlexTrackStream
+import com.lux032.musicbridge.music.MusicTrack
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -55,11 +55,11 @@ class Local032SessionDriverTest {
         }
     }
 
-    private val plexReporter = FakeReporter("plex-src")
+    private val otherReporter = FakeReporter("other-src")
     private val reporter032 = FakeReporter("032-src")
-    private val reporters = mapOf("032-src" to reporter032, "plex-src" to plexReporter)
+    private val reporters = mapOf("032-src" to reporter032, "other-src" to otherReporter)
 
-    private fun track(key: String, sourceId: String) = PlexTrackStream(
+    private fun track(key: String, sourceId: String) = MusicTrack(
         ratingKey = key,
         title = "track-$key",
         streamUrl = "http://example/$key",
@@ -71,7 +71,7 @@ class Local032SessionDriverTest {
 
     private val track42 = track("42", "032-src")
     private val track43 = track("43", "032-src")
-    private val plexTrack = track("7", "plex-src")
+    private val otherTrack = track("7", "other-src")
 
     private fun newDriver() = Local032SessionDriver(
         reporterFor = { sourceId -> reporters[sourceId] },
@@ -215,17 +215,17 @@ class Local032SessionDriverTest {
         driver.onPoll(track42, "stopped", ReporterPlayState.Paused, 0L, 240_000L)
         assertTrue(reporter032.calls.isEmpty())
 
-        driver.onPoll(plexTrack, "playing", ReporterPlayState.Playing, 1_000L, 240_000L)
-        assertTrue(reporter032.calls.isEmpty() && plexReporter.calls.isEmpty())
+        driver.onPoll(otherTrack, "playing", ReporterPlayState.Playing, 1_000L, 240_000L)
+        assertTrue(reporter032.calls.isEmpty() && otherReporter.calls.isEmpty())
     }
 
     @Test
     fun `seek routes only for 032 tracks`() {
         val driver = newDriver()
         driver.onSeek(track42, 90_000L, 240_000L)
-        driver.onSeek(plexTrack, 5_000L, 240_000L)
+        driver.onSeek(otherTrack, 5_000L, 240_000L)
         assertEquals(listOf("seek:90000"), reporter032.calls)
-        assertTrue(plexReporter.calls.isEmpty())
+        assertTrue(otherReporter.calls.isEmpty())
     }
 
     @Test

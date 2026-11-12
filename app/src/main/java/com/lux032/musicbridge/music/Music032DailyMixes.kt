@@ -1,6 +1,6 @@
 package com.lux032.musicbridge.music
 
-import com.lux032.musicbridge.plex.PlexTrackStream
+import com.lux032.musicbridge.music.MusicTrack
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -50,7 +50,7 @@ data class Music032DailyMixes(
 /** A mix with its playable tracks (missing files dropped) and per-track markers. */
 data class Music032DailyMixDetail(
     val mix: Music032DailyMix,
-    val tracks: List<PlexTrackStream>,
+    val tracks: List<MusicTrack>,
     /** Track ids from the explore bucket (rarely or never played). */
     val exploreTrackIds: Set<String>,
     /** Track ids the user excluded from future recommendations. */
@@ -98,10 +98,10 @@ internal object Music032DailyMixJson {
     fun parseDetail(
         root: JSONObject,
         mediaUrl: (String) -> String?,
-        parseTrack: (JSONObject) -> PlexTrackStream,
+        parseTrack: (JSONObject) -> MusicTrack,
     ): Music032DailyMixDetail {
         val mix = parseMix(root.optJSONObject("mix") ?: JSONObject(), mediaUrl)
-        val tracks = mutableListOf<PlexTrackStream>()
+        val tracks = mutableListOf<MusicTrack>()
         val explore = mutableSetOf<String>()
         val blocked = mutableSetOf<String>()
         root.optJSONArray("tracks").objects().forEach { item ->

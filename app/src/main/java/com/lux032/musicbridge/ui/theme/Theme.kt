@@ -46,7 +46,7 @@ private val DarkColorScheme = darkColorScheme(
 )
 
 @Composable
-fun PlexToSonosPlayerTheme(
+fun MusicBridgeTheme(
     content: @Composable () -> Unit
 ) {
     MaterialTheme(

@@ -11,7 +11,7 @@
 - 歌曲列表仅显示非整专辑派生的 `op / ed / theme / insert / character / image_song`；原声带通过专辑卡片进入。播放整部作品和系列时按 sourceId + trackId 去重。
 - 每条作品导航记录保留 sourceId 和 workId，同系列逐层进入后返回不会覆盖上一部作品；列表位置和筛选沿用 Compose 页面状态保留机制。
 - 首页首次使用 `/api/v1/home` 的 `works`；换批使用 `/api/v1/home/works?type=all&batch=…&generation=…`，以服务端返回页号为准，支持轮换过期提示。只有多批时显示换批按钮；网络失败可重试，保留已有卡片。
-- 使用能力位 `home / trackWorks / series / seriesTracks` 隐藏或拒绝不支持的操作，Plex 不请求 032 接口。
+- 使用能力位 `home / trackWorks / series / seriesTracks` 隐藏或拒绝不支持的操作。
 - 全部新增文案同时提供中文 / 英文；按钮触控高度至少 48dp，列表和弹层可滚动；不使用演示数据或打包新图像。
 - 首页作品卡片及作品页专辑卡片只裁剪图片，不裁剪包含文字的整列，避免底部圆角截掉末行用途文字（ED / OP 的左侧尤其明显）。
 

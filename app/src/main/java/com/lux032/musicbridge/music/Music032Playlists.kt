@@ -1,6 +1,6 @@
 package com.lux032.musicbridge.music
 
-import com.lux032.musicbridge.plex.PlexPlaylist
+import com.lux032.musicbridge.music.MusicPlaylist
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -16,7 +16,7 @@ data class Music032PlaylistItemResult(
 
 /** A freshly created playlist plus, when tracks were sent along, what the server kept. */
 data class Music032PlaylistCreated(
-    val playlist: PlexPlaylist,
+    val playlist: MusicPlaylist,
     val stats: Music032PlaylistItemResult?,
 )
 
@@ -41,7 +41,7 @@ internal object Music032PlaylistRequests {
      * Strict create returns the playlist itself; the skip policy wraps it as
      * `{playlist, stats}`. Both shapes are accepted.
      */
-    fun parseCreated(root: JSONObject, parsePlaylist: (JSONObject) -> PlexPlaylist): Music032PlaylistCreated {
+    fun parseCreated(root: JSONObject, parsePlaylist: (JSONObject) -> MusicPlaylist): Music032PlaylistCreated {
         val wrapped = root.optJSONObject("playlist")
         return if (wrapped != null) {
             Music032PlaylistCreated(parsePlaylist(wrapped), root.optJSONObject("stats")?.let(::parseItemResult))

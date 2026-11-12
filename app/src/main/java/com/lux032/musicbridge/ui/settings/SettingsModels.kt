@@ -7,7 +7,6 @@ import com.lux032.musicbridge.LocalStreamingLimit
 import com.lux032.musicbridge.MusicServerProfile
 import com.lux032.musicbridge.OpusTranscodeMode
 import com.lux032.musicbridge.SonosHiResTranscodeMode
-import com.lux032.musicbridge.ai.AiSettings
 
 /**
  * Encapsulates the UI state required by SettingsScreen.
@@ -23,7 +22,6 @@ data class SettingsViewState(
     val wifiPrecacheCount: LocalPrecacheCount,
     val cellularPrecacheCount: LocalPrecacheCount,
     val localCacheSize: LocalCacheSize,
-    val aiSettings: AiSettings,
 )
 
 /**
@@ -44,8 +42,6 @@ data class SettingsActions(
     val onSwitchServer: (String) -> Unit,
     val onDeleteServer: (String) -> Unit,
     val onRefreshHome: () -> Unit,
-    val onSaveAiSettings: (AiSettings) -> Unit,
     val loadLocalCacheUsedBytes: suspend () -> Long,
     val loadOfflineDownloadedBytes: suspend () -> Long,
-    val runPlexOffsetProbe: suspend () -> Result<com.lux032.musicbridge.local.PlexOffsetProbeResult>,
 )

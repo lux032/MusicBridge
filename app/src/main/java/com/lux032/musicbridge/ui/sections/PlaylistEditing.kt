@@ -73,9 +73,9 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.lux032.musicbridge.plex.PlexAlbum
-import com.lux032.musicbridge.plex.PlexPlaylist
-import com.lux032.musicbridge.plex.PlexTrackStream
+import com.lux032.musicbridge.music.MusicAlbum
+import com.lux032.musicbridge.music.MusicPlaylist
+import com.lux032.musicbridge.music.MusicTrack
 import kotlinx.coroutines.launch
 
 // ── Entry points shared by every track / album menu ─────────────────────────────────────────
@@ -94,7 +94,7 @@ internal val LocalPlaylistEditor = staticCompositionLocalOf<PlaylistEditor?> { n
 
 /** "添加到歌单" action for one track, or null when it cannot go into a playlist here. */
 @Composable
-internal fun addTrackToPlaylistAction(track: PlexTrackStream): (() -> Unit)? {
+internal fun addTrackToPlaylistAction(track: MusicTrack): (() -> Unit)? {
     val editor = LocalPlaylistEditor.current ?: return null
     if (track.ratingKey.isBlank() || !editor.canAdd(track.sourceId)) return null
     return { editor.requestAdd(PlaylistAddition.Tracks(listOf(track))) }
@@ -102,7 +102,7 @@ internal fun addTrackToPlaylistAction(track: PlexTrackStream): (() -> Unit)? {
 
 /** "添加到歌单" action for a whole album, or null when unsupported. */
 @Composable
-internal fun addAlbumToPlaylistAction(album: PlexAlbum, trackCount: Int? = album.leafCount): (() -> Unit)? {
+internal fun addAlbumToPlaylistAction(album: MusicAlbum, trackCount: Int? = album.leafCount): (() -> Unit)? {
     val editor = LocalPlaylistEditor.current ?: return null
     if (album.ratingKey.toLongOrNull() == null || !editor.canAdd(album.sourceId)) return null
     return { editor.requestAdd(PlaylistAddition.Album(album, trackCount)) }
@@ -119,9 +119,9 @@ internal fun addAlbumToPlaylistAction(album: PlexAlbum, trackCount: Int? = album
 @Composable
 internal fun AddToPlaylistSheet(
     addition: PlaylistAddition,
-    playlists: List<PlexPlaylist>,
+    playlists: List<MusicPlaylist>,
     isMutating: Boolean,
-    onPick: (PlexPlaylist) -> Unit,
+    onPick: (MusicPlaylist) -> Unit,
     onCreate: suspend (name: String, description: String) -> Result<*>,
     onDismiss: () -> Unit,
 ) {
@@ -459,7 +459,7 @@ private const val MAX_PLAYLIST_DESCRIPTION_LENGTH = 500
 
 @Composable
 internal fun DeletePlaylistDialog(
-    playlist: PlexPlaylist,
+    playlist: MusicPlaylist,
     onConfirm: suspend () -> Result<*>,
     onDismiss: () -> Unit,
 ) {

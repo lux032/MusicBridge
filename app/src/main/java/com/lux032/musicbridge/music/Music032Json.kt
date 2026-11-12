@@ -1,11 +1,11 @@
 package com.lux032.musicbridge.music
 
-import com.lux032.musicbridge.plex.ArtistRef
-import com.lux032.musicbridge.plex.PlexAlbum
-import com.lux032.musicbridge.plex.PlexArtist
-import com.lux032.musicbridge.plex.PlexPlaylist
-import com.lux032.musicbridge.plex.PlexSection
-import com.lux032.musicbridge.plex.PlexTrackStream
+import com.lux032.musicbridge.music.ArtistRef
+import com.lux032.musicbridge.music.MusicAlbum
+import com.lux032.musicbridge.music.MusicArtist
+import com.lux032.musicbridge.music.MusicPlaylist
+import com.lux032.musicbridge.music.LibrarySection
+import com.lux032.musicbridge.music.MusicTrack
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URL
@@ -55,10 +55,10 @@ internal object Music032Json {
         (0 until array.length()).mapNotNull { index -> array.optInt(index).takeIf { it > 0 } }
     }.orEmpty()
 
-    fun parseAlbum(value: JSONObject, baseUrl: String, mediaToken: String, section: PlexSection, sourceId: String): PlexAlbum {
+    fun parseAlbum(value: JSONObject, baseUrl: String, mediaToken: String, section: LibrarySection, sourceId: String): MusicAlbum {
         val year = value.optInt("year").takeIf { it > 0 }
         val (format, subformat) = albumFormat(value)
-        return PlexAlbum(
+        return MusicAlbum(
             ratingKey = value.optLong("id").toString(),
             title = value.optString("title").trim().ifBlank { "未知专辑" },
             artistName = value.optString("artist").trim().ifBlank { null },
@@ -92,10 +92,10 @@ internal object Music032Json {
     }
 
     /** One row of `/api/v1/sync/artists` (or the `artist` object of the detail endpoint). */
-    fun parseArtist(value: JSONObject, baseUrl: String, mediaToken: String, sourceId: String): PlexArtist? {
+    fun parseArtist(value: JSONObject, baseUrl: String, mediaToken: String, sourceId: String): MusicArtist? {
         val id = value.optLong("id").takeIf { it > 0L } ?: return null
         val name = value.optString("name").trim().ifBlank { return null }
-        return PlexArtist(
+        return MusicArtist(
             ratingKey = id.toString(),
             title = name,
             thumbUrl = mediaUrl(value.optString("imageUrl"), baseUrl, mediaToken),
@@ -136,10 +136,10 @@ internal object Music032Json {
         return format to subformat
     }
 
-    fun parseTrack(value: JSONObject, baseUrl: String, mediaToken: String, sourceId: String): PlexTrackStream {
+    fun parseTrack(value: JSONObject, baseUrl: String, mediaToken: String, sourceId: String): MusicTrack {
         val id = value.optLong("id").toString()
         val relativeStream = value.optString("streamUrl").ifBlank { "/api/v1/tracks/$id/stream" }
-        return PlexTrackStream(
+        return MusicTrack(
             ratingKey = id,
             title = value.optString("title").trim().ifBlank { "未知曲目" },
             streamUrl = mediaUrl(relativeStream, baseUrl, mediaToken).orEmpty(),
@@ -168,7 +168,7 @@ internal object Music032Json {
         )
     }
 
-    fun parsePlaylist(value: JSONObject, baseUrl: String, mediaToken: String, sourceId: String): PlexPlaylist = PlexPlaylist(
+    fun parsePlaylist(value: JSONObject, baseUrl: String, mediaToken: String, sourceId: String): MusicPlaylist = MusicPlaylist(
         ratingKey = value.optLong("id").toString(),
         title = value.optString("name").trim().ifBlank { "未命名歌单" },
         thumbUrl = mediaUrl(value.optString("artworkUrl"), baseUrl, mediaToken),

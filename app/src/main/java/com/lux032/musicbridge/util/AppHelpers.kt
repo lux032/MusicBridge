@@ -6,14 +6,14 @@ import coil3.disk.DiskCache
 import coil3.memory.MemoryCache
 import okio.Path.Companion.toOkioPath
 import androidx.compose.ui.graphics.Color
-import com.lux032.musicbridge.plex.PlexAlbum
+import com.lux032.musicbridge.music.MusicAlbum
 import java.text.Normalizer
 
 data class ArtistSummary(
     val name: String,
     val coverUrl: String?,
     val albumCount: Int,
-    val albums: List<PlexAlbum> = emptyList(),
+    val albums: List<MusicAlbum> = emptyList(),
     val ratingKey: String? = null,
     val sourceId: String = "",
     val userRating: Float? = null,
@@ -22,7 +22,6 @@ data class ArtistSummary(
     /** 032: albums where the artist only sings some tracks (web "参与作品"). */
     val appearanceAlbumKeys: Set<String> = emptySet(),
 ) {
-    // Plex has no artist "follow"; a 10-star rating is what Plexamp shows as a liked artist.
     val isFavorite: Boolean
         get() = (userRating ?: 0f) > 0f
 }
@@ -95,44 +94,11 @@ object AlbumArtworkImageLoader {
     }
 }
 
-// Buckets keep the set of distinct transcode sizes small so Coil's memory/disk cache
-// can be shared across screens that show the same artwork at similar sizes.
-private val ThumbnailSizeBuckets = intArrayOf(256, 512, 768, 1024, 1536)
-
-/**
- * Rewrites a full-resolution Plex artwork URL ("{server}{thumbPath}?X-Plex-Token=…") into a
- * server-side transcode request sized for the actual on-screen target. Original artwork is
- * frequently 1000–3000 px / multi-MB, which is what makes cover-heavy lists stutter; the
- * transcoded variant is a few tens of KB. Falls back to the original URL if it cannot be parsed.
- */
-fun plexThumbnailUrl(originalUrl: String, targetPx: Int): String {
-    if (targetPx <= 0) return originalUrl
-    val uri = android.net.Uri.parse(originalUrl)
-    val scheme = uri.scheme ?: return originalUrl
-    val authority = uri.authority ?: return originalUrl
-    val mediaPath = uri.path?.takeIf { it.isNotBlank() } ?: return originalUrl
-    if (mediaPath.contains("/photo/:/transcode")) return originalUrl
-    val token = uri.getQueryParameter("X-Plex-Token")?.takeIf { it.isNotBlank() } ?: return originalUrl
-    val bucket = ThumbnailSizeBuckets.firstOrNull { it >= targetPx } ?: ThumbnailSizeBuckets.last()
-    return android.net.Uri.Builder()
-        .scheme(scheme)
-        .encodedAuthority(authority)
-        .encodedPath("/photo/:/transcode")
-        .appendQueryParameter("width", bucket.toString())
-        .appendQueryParameter("height", bucket.toString())
-        .appendQueryParameter("minSize", "1")
-        .appendQueryParameter("upscale", "1")
-        .appendQueryParameter("url", mediaPath)
-        .appendQueryParameter("X-Plex-Token", token)
-        .build()
-        .toString()
-}
-
 internal val Music032ArtworkSizes = listOf(256, 512, 768, 1024, 1536)
 private val music032ArtworkPath = Regex("(?:^|/)api/v1/(?:artwork/[^/]+|artists/[^/]+/image)$")
 
 fun thumbnailUrl(originalUrl: String, targetPx: Int): String =
-    music032ThumbnailUrl(originalUrl, targetPx) ?: plexThumbnailUrl(originalUrl, targetPx)
+    music032ThumbnailUrl(originalUrl, targetPx) ?: originalUrl
 
 internal fun music032ThumbnailUrl(url: String, px: Int): String? {
     val schemeEnd = url.indexOf("://")

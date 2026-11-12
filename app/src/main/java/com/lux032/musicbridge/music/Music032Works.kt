@@ -1,7 +1,7 @@
 package com.lux032.musicbridge.music
 
-import com.lux032.musicbridge.plex.PlexAlbum
-import com.lux032.musicbridge.plex.PlexTrackStream
+import com.lux032.musicbridge.music.MusicAlbum
+import com.lux032.musicbridge.music.MusicTrack
 import org.json.JSONObject
 import org.json.JSONArray
 
@@ -20,13 +20,13 @@ data class Music032Work(
 )
 
 data class Music032TrackWork(val work: Music032Work, val role: String)
-data class Music032WorkTrack(val track: PlexTrackStream, val role: String, val sequence: Int, val source: String) {
+data class Music032WorkTrack(val track: MusicTrack, val role: String, val sequence: Int, val source: String) {
     // Album-derived soundtrack tracks remain available through album cards and Play all.
     val isSong: Boolean get() = source != "album" && role in WorkSongRoles
 }
 internal val WorkSongRoles = setOf("op", "ed", "theme", "insert", "character", "image_song")
 
-data class Music032WorkAlbum(val album: PlexAlbum, val albumRole: String, val trackRoles: List<String>)
+data class Music032WorkAlbum(val album: MusicAlbum, val albumRole: String, val trackRoles: List<String>)
 data class Music032WorkRotation(
     val items: List<Music032Work> = emptyList(),
     val batch: Int = 0,
@@ -72,12 +72,12 @@ internal object Music032WorksJson {
             .sortedBy { rolePriority(it.role) }
             .distinctBy { it.work.id }
 
-    fun tracks(root: JSONObject, parseTrack: (JSONObject) -> PlexTrackStream): List<Music032WorkTrack> =
+    fun tracks(root: JSONObject, parseTrack: (JSONObject) -> MusicTrack): List<Music032WorkTrack> =
         root.optJSONArray("items").toObjects().map {
             Music032WorkTrack(parseTrack(it), it.optString("role"), it.optInt("sequence"), it.optString("source"))
         }
 
-    fun albums(root: JSONObject, parseAlbum: (JSONObject) -> PlexAlbum): List<Music032WorkAlbum> =
+    fun albums(root: JSONObject, parseAlbum: (JSONObject) -> MusicAlbum): List<Music032WorkAlbum> =
         root.optJSONArray("items").toObjects().map { value ->
             // AlbumWork has albumId, whereas the library's Album adapter expects id.
             val album = JSONObject(value.toString()).put("id", value.getLong("albumId"))
@@ -100,5 +100,5 @@ internal object Music032WorksJson {
             .takeIf { it >= 0 } ?: Int.MAX_VALUE
 }
 
-internal fun List<Music032WorkTrack>.uniqueStreams(): List<PlexTrackStream> =
+internal fun List<Music032WorkTrack>.uniqueStreams(): List<MusicTrack> =
     map { it.track }.distinctBy { it.sourceId to it.ratingKey }

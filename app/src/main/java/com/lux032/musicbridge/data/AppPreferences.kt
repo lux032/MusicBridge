@@ -4,7 +4,6 @@ import android.content.Context
 import androidx.core.content.edit
 import org.json.JSONArray
 import org.json.JSONObject
-import com.lux032.musicbridge.ai.AiSettings
 import com.lux032.musicbridge.music.LyricsTranslationMode
 import com.lux032.musicbridge.music.LyricsTranslationSettings
 import com.lux032.musicbridge.music.Music032PersistedSession
@@ -32,13 +31,12 @@ internal class AppPreferencesMusic032ReporterPreferences(
     }
 }
 
+/** Supported server kinds. Only the 032 Music Server is supported. */
 enum class MusicServerType {
-    Plex,
     Music032;
 
     val label: String
         get() = when (this) {
-            Plex -> "Plex"
             Music032 -> "032 Music Server"
         }
 }
@@ -46,12 +44,9 @@ enum class MusicServerType {
 data class MusicServerProfile(
     val id: String = "",
     val name: String = "",
-    val type: MusicServerType = MusicServerType.Plex,
-    val username: String = "",
-    val password: String = "",
+    val type: MusicServerType = MusicServerType.Music032,
     val token: String = "",
     val mediaToken: String = "",
-    val server: String = "",
     val baseUrl: String = "",
 ) {
     val displayName: String
@@ -59,51 +54,29 @@ data class MusicServerProfile(
             baseUrl.trim().ifBlank { type.label }
         }
 
-    fun normalizedForStorage(): MusicServerProfile {
-        val common = copy(
-            name = name.trim().ifBlank { type.label },
-            token = token.trim(),
-            baseUrl = baseUrl.trim().trimEnd('/'),
-        )
-        return when (type) {
-            MusicServerType.Plex -> common.copy(
-                username = username.trim(),
-                server = server.trim(),
-                mediaToken = "",
-            )
-            MusicServerType.Music032 -> common.copy(
-                username = "",
-                password = "",
-                server = "",
-                mediaToken = mediaToken.trim(),
-            )
-        }
-    }
-
-    fun freshDraftForType(newType: MusicServerType): MusicServerProfile = MusicServerProfile(type = newType)
+    fun normalizedForStorage(): MusicServerProfile = copy(
+        name = name.trim().ifBlank { type.label },
+        token = token.trim(),
+        mediaToken = mediaToken.trim(),
+        baseUrl = baseUrl.trim().trimEnd('/'),
+    )
 }
 
 class AppPreferences(context: Context) {
+    // Historical file name, kept so existing installs keep their settings.
     private val sharedPreferences =
         context.applicationContext.getSharedPreferences("plex_to_sonos_prefs", Context.MODE_PRIVATE)
 
-    fun loadAiSettings(): AiSettings = AiSettings(
-        enabled = sharedPreferences.getBoolean(KEY_AI_ENABLED, false),
-        baseUrl = sharedPreferences.getString(KEY_AI_BASE_URL, "https://api.deepseek.com/v1").orEmpty(),
-        apiKey = sharedPreferences.getString(KEY_AI_API_KEY, "").orEmpty(),
-        model = sharedPreferences.getString(KEY_AI_MODEL, "deepseek-chat").orEmpty(),
-    )
-
-    fun saveAiSettings(settings: AiSettings) {
-        sharedPreferences.edit {
-            putBoolean(KEY_AI_ENABLED, settings.enabled)
-            putString(KEY_AI_BASE_URL, settings.baseUrl.trim().trimEnd('/'))
-            putString(KEY_AI_API_KEY, settings.apiKey.trim())
-            putString(KEY_AI_MODEL, settings.model.trim())
-        }
-    }
+    /**
+     * Ids of stored profiles of server types that are no longer supported (Plex), dropped by
+     * [loadServerProfiles]. Their per-source preferences are already cleared; the caller
+     * removes their cached library data.
+     */
+    var retiredServerIds: List<String> = emptyList()
+        private set
 
     fun loadServerProfiles(): List<MusicServerProfile> {
+        val retired = mutableListOf<String>()
         val stored = runCatching {
             val array = JSONArray(sharedPreferences.getString(KEY_SERVER_PROFILES, "[]").orEmpty())
             buildList {
@@ -111,42 +84,41 @@ class AppPreferences(context: Context) {
                     val value = array.optJSONObject(index) ?: continue
                     val id = value.optString("id").trim()
                     if (id.isEmpty()) continue
+                    val type = MusicServerType.entries.firstOrNull { it.name == value.optString("type") }
+                    if (type == null) {
+                        retired += id
+                        continue
+                    }
                     add(
                         MusicServerProfile(
                             id = id,
                             name = value.optString("name"),
-                            type = runCatching { MusicServerType.valueOf(value.optString("type")) }
-                                .getOrDefault(MusicServerType.Plex),
-                            username = value.optString("username"),
-                            password = value.optString("password"),
+                            type = type,
                             token = value.optString("token"),
                             mediaToken = value.optString("mediaToken"),
-                            server = value.optString("server"),
                             baseUrl = value.optString("baseUrl"),
                         )
                     )
                 }
             }
         }.getOrDefault(emptyList())
-        if (stored.isNotEmpty()) return stored
+        retireUnsupportedServers(retired, stored)
+        return stored
+    }
 
-        val legacy = MusicServerProfile(
-            id = UUID.randomUUID().toString(),
-            name = sharedPreferences.getString(KEY_SERVER, "").orEmpty().ifBlank { "Plex" },
-            type = MusicServerType.Plex,
-            username = sharedPreferences.getString(KEY_USERNAME, "").orEmpty(),
-            password = sharedPreferences.getString(KEY_PASSWORD, "").orEmpty(),
-            token = sharedPreferences.getString(KEY_TOKEN, "").orEmpty(),
-            server = sharedPreferences.getString(KEY_SERVER, "").orEmpty(),
-            baseUrl = sharedPreferences.getString(KEY_BASE_URL, "").orEmpty(),
-        )
-        if (legacy.token.isBlank() && legacy.username.isBlank() && legacy.password.isBlank() && legacy.baseUrl.isBlank()) {
-            return emptyList()
+    /** Drops state of removed features: unsupported (Plex) profiles and [RETIRED_KEYS]. */
+    private fun retireUnsupportedServers(retired: List<String>, kept: List<MusicServerProfile>) {
+        val hasLegacyKeys = RETIRED_KEYS.any(sharedPreferences::contains)
+        if (retired.isEmpty() && !hasLegacyKeys) return
+        retired.forEach(::clearSourceData)
+        sharedPreferences.edit { RETIRED_KEYS.forEach(::remove) }
+        if (retired.isNotEmpty()) {
+            val active = sharedPreferences.getString(KEY_ACTIVE_SERVER_ID, null)
+                ?.takeIf { id -> kept.any { it.id == id } }
+                ?: kept.firstOrNull()?.id
+            saveServerProfiles(kept, active)
         }
-        migrateLegacySourceState(legacy.id)
-        saveServerProfiles(listOf(legacy), legacy.id)
-        clearLegacyServerKeys()
-        return listOf(legacy)
+        retiredServerIds = retired
     }
 
     fun loadActiveServerId(profiles: List<MusicServerProfile>): String? {
@@ -163,11 +135,8 @@ class AppPreferences(context: Context) {
                     .put("id", profile.id)
                     .put("name", profile.name)
                     .put("type", profile.type.name)
-                    .put("username", profile.username)
-                    .put("password", profile.password)
                     .put("token", profile.token)
                     .put("mediaToken", profile.mediaToken)
-                    .put("server", profile.server)
                     .put("baseUrl", profile.baseUrl)
             )
         }
@@ -176,23 +145,6 @@ class AppPreferences(context: Context) {
             if (activeServerId == null) remove(KEY_ACTIVE_SERVER_ID)
             else putString(KEY_ACTIVE_SERVER_ID, activeServerId)
         }
-    }
-
-    /**
-     * Plex uses this value as the identity of the playback client. It must remain stable across
-     * timeline reports; otherwise every progress update appears as a separate dashboard session.
-     */
-    fun loadOrCreatePlexClientIdentifier(): String {
-        sharedPreferences.getString(KEY_PLEX_CLIENT_IDENTIFIER, null)
-            ?.trim()
-            ?.takeIf(String::isNotEmpty)
-            ?.let { return it }
-
-        val identifier = UUID.randomUUID().toString()
-        sharedPreferences.edit(commit = true) {
-            putString(KEY_PLEX_CLIENT_IDENTIFIER, identifier)
-        }
-        return identifier
     }
 
     /**
@@ -458,45 +410,25 @@ class AppPreferences(context: Context) {
         sharedPreferences.edit { putBoolean(KEY_ARTIST_FAVORITES_ONLY, enabled) }
     }
 
-    private fun clearLegacyServerKeys() {
-        sharedPreferences.edit {
-            remove(KEY_USERNAME)
-            remove(KEY_PASSWORD)
-            remove(KEY_TOKEN)
-            remove(KEY_SERVER)
-            remove(KEY_BASE_URL)
-        }
-    }
-
     private fun recentKey(sourceId: String) = "${KEY_RECENT_PLAYED_ALBUM_KEYS}_$sourceId"
     private fun syncKey(sourceId: String) = "${KEY_LAST_ALBUM_SYNC_EPOCH_MILLIS}_$sourceId"
     private fun lastSessionKey(sourceId: String) = "${KEY_MUSIC032_LAST_SESSION}_$sourceId"
     private fun resumeBlockKey(sourceId: String) = "${KEY_MUSIC032_RESUME_BLOCK}_$sourceId"
 
-    private fun migrateLegacySourceState(sourceId: String) {
-        val recent = sharedPreferences.getString(KEY_RECENT_PLAYED_ALBUM_KEYS, "").orEmpty()
-        val lastSync = sharedPreferences.getLong(KEY_LAST_ALBUM_SYNC_EPOCH_MILLIS, -1L)
-        sharedPreferences.edit {
-            if (recent.isNotBlank()) putString(recentKey(sourceId), recent)
-            if (lastSync > 0L) putLong(syncKey(sourceId), lastSync)
-        }
-    }
-
     companion object {
-        private const val KEY_AI_ENABLED = "ai_enabled"
-        private const val KEY_AI_BASE_URL = "ai_base_url"
-        private const val KEY_AI_API_KEY = "ai_api_key"
-        private const val KEY_AI_MODEL = "ai_model"
         const val KEY_OPUS_TRANSCODE_MODE = "opus_transcode_mode_v1"
         const val KEY_SONOS_HIRES_TRANSCODE_MODE = "sonos_hires_transcode_mode_v1"
-        private const val KEY_USERNAME = "username"
-        private const val KEY_PASSWORD = "password"
-        private const val KEY_TOKEN = "token"
-        private const val KEY_SERVER = "server"
-        private const val KEY_BASE_URL = "base_url"
+        /**
+         * Keys of removed features, wiped on startup: the pre-profile single-server keys and
+         * client identifier (Plex only), and the on-device AI playlist model settings (API
+         * key included) — AI playlists are generated by the 032 server now.
+         */
+        private val RETIRED_KEYS = listOf(
+            "username", "password", "token", "server", "base_url", "plex_client_identifier_v1",
+            "ai_enabled", "ai_base_url", "ai_api_key", "ai_model",
+        )
         private const val KEY_SERVER_PROFILES = "music_server_profiles_v1"
         private const val KEY_ACTIVE_SERVER_ID = "active_music_server_id"
-        private const val KEY_PLEX_CLIENT_IDENTIFIER = "plex_client_identifier_v1"
         private const val KEY_MUSIC032_CLIENT_ID = "music032_client_id_v1"
         private const val KEY_MUSIC032_LAST_SESSION = "music032_last_session_v1"
         private const val KEY_MUSIC032_RESUME_BLOCK = "music032_resume_block_v1"

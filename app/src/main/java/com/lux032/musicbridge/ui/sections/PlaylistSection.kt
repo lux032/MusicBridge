@@ -26,16 +26,16 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.lux032.musicbridge.plex.PlexPlaylist
-import com.lux032.musicbridge.plex.PlexPlaylistTracksResult
-import com.lux032.musicbridge.plex.PlexTrackStream
-import com.lux032.musicbridge.plex.isFavorite
+import com.lux032.musicbridge.music.MusicPlaylist
+import com.lux032.musicbridge.music.PlaylistTracksResult
+import com.lux032.musicbridge.music.MusicTrack
+import com.lux032.musicbridge.music.isFavorite
 
 @Composable
 internal fun PlaylistsSection(
-    playlists: List<PlexPlaylist>,
+    playlists: List<MusicPlaylist>,
     onGoHome: () -> Unit,
-    onPlaylistClick: (PlexPlaylist) -> Unit,
+    onPlaylistClick: (MusicPlaylist) -> Unit,
     onOpenFavorites: () -> Unit,
     onOpenDownloadedTracks: () -> Unit,
     isAiGenerating: Boolean,
@@ -45,14 +45,14 @@ internal fun PlaylistsSection(
     syncProgress: Pair<Int, Int> = 0 to 0,
     onSyncAllPlaylists: () -> Unit = {},
     canCreatePlaylist: Boolean = false,
-    onCreatePlaylist: suspend (name: String, description: String) -> Result<PlexPlaylist>? = { _, _ -> null },
-    onOpenCreatedPlaylist: (PlexPlaylist) -> Unit = {},
+    onCreatePlaylist: suspend (name: String, description: String) -> Result<MusicPlaylist>? = { _, _ -> null },
+    onOpenCreatedPlaylist: (MusicPlaylist) -> Unit = {},
 ) {
     var showAiDialog by remember { mutableStateOf(false) }
     var showCreateSheet by rememberSaveable { mutableStateOf(false) }
     if (showAiDialog) AiPlaylistDialog(isAiGenerating, onCancelAiGeneration, { prompt -> onGenerateAiPlaylist(prompt) }) { showAiDialog = false }
     if (showCreateSheet) {
-        var created by remember { mutableStateOf<PlexPlaylist?>(null) }
+        var created by remember { mutableStateOf<MusicPlaylist?>(null) }
         PlaylistEditSheet(
             title = Strings.newPlaylist,
             confirmLabel = Strings.createPlaylist,
@@ -218,7 +218,7 @@ private fun PlaylistQuickKey(
 
 @Composable
 private fun PlaylistCard(
-    playlist: PlexPlaylist,
+    playlist: MusicPlaylist,
     onClick: () -> Unit,
 ) {
     Column {
@@ -269,33 +269,32 @@ private fun PlaylistCard(
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun PlaylistDetailSection(
-    playlistResult: PlexPlaylistTracksResult?,
+    playlistResult: PlaylistTracksResult?,
     outputTargetName: String,
     isPlaybackLoading: Boolean,
     isFavoriteLoading: Boolean,
     bottomContentPadding: androidx.compose.ui.unit.Dp,
     onBack: () -> Unit,
-    onToggleTrackFavorite: (PlexTrackStream) -> Unit,
-    onQueueTrack: (PlexTrackStream, QueuePlacement) -> Unit,
+    onToggleTrackFavorite: (MusicTrack) -> Unit,
+    onQueueTrack: (MusicTrack, QueuePlacement) -> Unit,
     downloadedTrackKeys: Set<String> = emptySet(),
     downloadProgress: Map<String, Float> = emptyMap(),
-    onDownloadTrack: (PlexTrackStream) -> Unit = {},
-    onDeleteDownloadedTrack: (PlexTrackStream) -> Unit = {},
-    onPlayPlaylist: (PlexPlaylistTracksResult) -> Unit,
-    onShufflePlaylist: (PlexPlaylistTracksResult) -> Unit,
-    onPlayTrack: (PlexPlaylist, PlexTrackStream, Int) -> Unit,
+    onDownloadTrack: (MusicTrack) -> Unit = {},
+    onDeleteDownloadedTrack: (MusicTrack) -> Unit = {},
+    onPlayPlaylist: (PlaylistTracksResult) -> Unit,
+    onShufflePlaylist: (PlaylistTracksResult) -> Unit,
+    onPlayTrack: (MusicPlaylist, MusicTrack, Int) -> Unit,
     aiDescription: String? = null,
-    onSaveToPlex: () -> Unit = {},
-    onSonicRadio: (PlexTrackStream) -> Unit = {},
+    onSaveAiPlaylist: () -> Unit = {},
     canEditPlaylist: Boolean = false,
-    onRemoveTrack: (PlexTrackStream) -> Unit = {},
-    onUpdatePlaylist: suspend (PlexPlaylist, String, String) -> Result<*> = { _, _, _ -> Result.success(Unit) },
-    onDeletePlaylist: suspend (PlexPlaylist) -> Result<*> = { Result.success(Unit) },
+    onRemoveTrack: (MusicTrack) -> Unit = {},
+    onUpdatePlaylist: suspend (MusicPlaylist, String, String) -> Result<*> = { _, _, _ -> Result.success(Unit) },
+    onDeletePlaylist: suspend (MusicPlaylist) -> Result<*> = { Result.success(Unit) },
     dailyMix: DailyMixDetailState? = null,
     onRateDailyMix: (Int, List<String>) -> Unit = { _, _ -> },
     onReplaceDailyMix: () -> Unit = {},
     onSaveDailyMix: () -> Unit = {},
-    onToggleRecommendationBlock: (PlexTrackStream) -> Unit = {},
+    onToggleRecommendationBlock: (MusicTrack) -> Unit = {},
     nowPlaying: NowPlayingMarker? = LocalNowPlaying.current,
 ) {
     val currentResult = playlistResult
@@ -314,7 +313,7 @@ internal fun PlaylistDetailSection(
     var showEditSheet by rememberSaveable { mutableStateOf(false) }
     var showDeleteDialog by rememberSaveable { mutableStateOf(false) }
     val editable = canEditPlaylist
-    val removeTrack: ((PlexTrackStream) -> Unit)? = if (editable) onRemoveTrack else null
+    val removeTrack: ((MusicTrack) -> Unit)? = if (editable) onRemoveTrack else null
 
     if (editable && showEditSheet) {
         PlaylistEditSheet(
@@ -412,7 +411,7 @@ internal fun PlaylistDetailSection(
                         outputTargetName = outputTargetName,
                         isPlaybackLoading = isPlaybackLoading,
                         aiDescription = aiDescription,
-                        onSaveToPlex = onSaveToPlex,
+                        onSaveAiPlaylist = onSaveAiPlaylist,
                         onPlayPlaylist = onPlayPlaylist,
                         onShufflePlaylist = onShufflePlaylist,
                     )
@@ -444,7 +443,6 @@ internal fun PlaylistDetailSection(
                                 onToggleTrackFavorite = onToggleTrackFavorite,
                                 onQueueTrack = onQueueTrack,
                                 onPlayTrack = onPlayTrack,
-                                onSonicRadio = onSonicRadio,
                                 onRemoveFromPlaylist = removeTrack,
                                 nowPlaying = nowPlaying?.takeIf { it.matches(track) },
                                 isExplore = dailyMix != null && track.ratingKey in dailyMix.exploreTrackIds,
@@ -479,7 +477,7 @@ internal fun PlaylistDetailSection(
                         outputTargetName = outputTargetName,
                         isPlaybackLoading = isPlaybackLoading,
                         aiDescription = aiDescription,
-                        onSaveToPlex = onSaveToPlex,
+                        onSaveAiPlaylist = onSaveAiPlaylist,
                         onPlayPlaylist = onPlayPlaylist,
                         onShufflePlaylist = onShufflePlaylist,
                     )
@@ -506,7 +504,6 @@ internal fun PlaylistDetailSection(
                             onToggleTrackFavorite = onToggleTrackFavorite,
                             onQueueTrack = onQueueTrack,
                             onPlayTrack = onPlayTrack,
-                            onSonicRadio = onSonicRadio,
                             onRemoveFromPlaylist = removeTrack,
                             nowPlaying = nowPlaying?.takeIf { it.matches(track) },
                             isExplore = dailyMix != null && track.ratingKey in dailyMix.exploreTrackIds,
@@ -530,13 +527,13 @@ private fun PlaylistDetailHeroWide(
     onRateDailyMix: (Int, List<String>) -> Unit,
     onReplaceDailyMix: () -> Unit,
     onSaveDailyMix: () -> Unit,
-    playlistResult: PlexPlaylistTracksResult,
+    playlistResult: PlaylistTracksResult,
     outputTargetName: String,
     isPlaybackLoading: Boolean,
     aiDescription: String?,
-    onSaveToPlex: () -> Unit,
-    onPlayPlaylist: (PlexPlaylistTracksResult) -> Unit,
-    onShufflePlaylist: (PlexPlaylistTracksResult) -> Unit,
+    onSaveAiPlaylist: () -> Unit,
+    onPlayPlaylist: (PlaylistTracksResult) -> Unit,
+    onShufflePlaylist: (PlaylistTracksResult) -> Unit,
 ) {
     val playlist = playlistResult.playlist
     Box(
@@ -559,7 +556,7 @@ private fun PlaylistDetailHeroWide(
             )
         }
     }
-    PlaylistHeroText(playlistResult, aiDescription, onSaveToPlex, centered = false, themeLine = dailyMix?.mix?.themeLine())
+    PlaylistHeroText(playlistResult, aiDescription, onSaveAiPlaylist, centered = false, themeLine = dailyMix?.mix?.themeLine())
     PlaylistActionRow(playlistResult, outputTargetName, isPlaybackLoading, onPlayPlaylist, onShufflePlaylist)
     if (dailyMix != null) {
         DailyMixFeedbackPanel(dailyMix, onRateDailyMix, onReplaceDailyMix, onSaveDailyMix)
@@ -572,13 +569,13 @@ private fun PlaylistDetailHeroCompact(
     onRateDailyMix: (Int, List<String>) -> Unit,
     onReplaceDailyMix: () -> Unit,
     onSaveDailyMix: () -> Unit,
-    playlistResult: PlexPlaylistTracksResult,
+    playlistResult: PlaylistTracksResult,
     outputTargetName: String,
     isPlaybackLoading: Boolean,
     aiDescription: String?,
-    onSaveToPlex: () -> Unit,
-    onPlayPlaylist: (PlexPlaylistTracksResult) -> Unit,
-    onShufflePlaylist: (PlexPlaylistTracksResult) -> Unit,
+    onSaveAiPlaylist: () -> Unit,
+    onPlayPlaylist: (PlaylistTracksResult) -> Unit,
+    onShufflePlaylist: (PlaylistTracksResult) -> Unit,
 ) {
     val playlist = playlistResult.playlist
     Column(
@@ -602,7 +599,7 @@ private fun PlaylistDetailHeroCompact(
             )
         }
         Spacer(Modifier.height(18.dp))
-        PlaylistHeroText(playlistResult, aiDescription, onSaveToPlex, centered = true, themeLine = dailyMix?.mix?.themeLine())
+        PlaylistHeroText(playlistResult, aiDescription, onSaveAiPlaylist, centered = true, themeLine = dailyMix?.mix?.themeLine())
         Spacer(Modifier.height(18.dp))
         PlaylistActionRow(playlistResult, outputTargetName, isPlaybackLoading, onPlayPlaylist, onShufflePlaylist)
         if (dailyMix != null) {
@@ -615,9 +612,9 @@ private fun PlaylistDetailHeroCompact(
 
 @Composable
 private fun PlaylistHeroText(
-    playlistResult: PlexPlaylistTracksResult,
+    playlistResult: PlaylistTracksResult,
     aiDescription: String?,
-    onSaveToPlex: () -> Unit,
+    onSaveAiPlaylist: () -> Unit,
     centered: Boolean,
     themeLine: String? = null,
 ) {
@@ -667,23 +664,25 @@ private fun PlaylistHeroText(
             aiDescription?.takeIf { it.isNotBlank() }?.let {
                 Text(it, color = AppColors.TextSecondary, style = MaterialTheme.typography.bodyMedium, textAlign = align)
             }
-            LabelKey(
-                text = Strings.saveToPlex,
-                icon = Icons.Filled.CloudUpload,
-                onClick = onSaveToPlex,
-                height = 40.dp,
-            )
+            if (playlistResult.tracks.isNotEmpty()) {
+                LabelKey(
+                    text = Strings.dailyMixSave,
+                    icon = Icons.Filled.LibraryAdd,
+                    onClick = onSaveAiPlaylist,
+                    height = 40.dp,
+                )
+            }
         }
     }
 }
 
 @Composable
 private fun PlaylistActionRow(
-    playlistResult: PlexPlaylistTracksResult,
+    playlistResult: PlaylistTracksResult,
     outputTargetName: String,
     isPlaybackLoading: Boolean,
-    onPlayPlaylist: (PlexPlaylistTracksResult) -> Unit,
-    onShufflePlaylist: (PlexPlaylistTracksResult) -> Unit,
+    onPlayPlaylist: (PlaylistTracksResult) -> Unit,
+    onShufflePlaylist: (PlaylistTracksResult) -> Unit,
 ) {
     SplitPlayKey(
         label = Strings.playOn(outputTargetName),
@@ -699,19 +698,18 @@ private fun PlaylistActionRow(
 @Composable
 private fun PlaylistDetailTrackRow(
     index: Int,
-    playlist: PlexPlaylist,
-    track: PlexTrackStream,
+    playlist: MusicPlaylist,
+    track: MusicTrack,
     isPlaybackLoading: Boolean,
     isFavoriteLoading: Boolean,
     downloadedTrackKeys: Set<String>,
     downloadProgress: Map<String, Float>,
-    onDownloadTrack: (PlexTrackStream) -> Unit,
-    onDeleteDownloadedTrack: (PlexTrackStream) -> Unit,
-    onToggleTrackFavorite: (PlexTrackStream) -> Unit,
-    onQueueTrack: (PlexTrackStream, QueuePlacement) -> Unit,
-    onPlayTrack: (PlexPlaylist, PlexTrackStream, Int) -> Unit,
-    onSonicRadio: (PlexTrackStream) -> Unit,
-    onRemoveFromPlaylist: ((PlexTrackStream) -> Unit)? = null,
+    onDownloadTrack: (MusicTrack) -> Unit,
+    onDeleteDownloadedTrack: (MusicTrack) -> Unit,
+    onToggleTrackFavorite: (MusicTrack) -> Unit,
+    onQueueTrack: (MusicTrack, QueuePlacement) -> Unit,
+    onPlayTrack: (MusicPlaylist, MusicTrack, Int) -> Unit,
+    onRemoveFromPlaylist: ((MusicTrack) -> Unit)? = null,
     nowPlaying: NowPlayingMarker? = null,
     isExplore: Boolean = false,
     isRecommendationBlocked: Boolean = false,
@@ -845,11 +843,6 @@ private fun PlaylistDetailTrackRow(
             isDownloaded = isDownloaded,
             onDownloadAction = {
                 if (isDownloaded) onDeleteDownloadedTrack(track) else onDownloadTrack(track)
-            },
-            onSonicRadio = if (track.sourceId.isNotBlank()) {
-                { onSonicRadio(track) }
-            } else {
-                null
             },
             onAddToPlaylist = addTrackToPlaylistAction(track),
             onRemoveFromPlaylist = onRemoveFromPlaylist?.let { remove -> { remove(track) } },

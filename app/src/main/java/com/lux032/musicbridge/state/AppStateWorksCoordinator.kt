@@ -1,7 +1,6 @@
 package com.lux032.musicbridge
 
 import com.lux032.musicbridge.music.*
-import com.lux032.musicbridge.plex.*
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -24,7 +23,7 @@ internal class AppStateWorksCoordinator(private val state: AppState) {
 
     private fun client(sourceId: String) = state.clientFor(sourceId) as? Music032Client
 
-    suspend fun trackWorks(track: PlexTrackStream): List<Music032TrackWork> {
+    suspend fun trackWorks(track: MusicTrack): List<Music032TrackWork> {
         val client = client(track.sourceId) ?: return emptyList()
         val caps = client.ensureCapabilities() ?: return emptyList()
         if (!caps.hasFeature("trackWorks")) return emptyList()
@@ -95,7 +94,7 @@ internal class AppStateWorksCoordinator(private val state: AppState) {
                     return@launch
                 }
                 val title = if (series) work.seriesTitle else work.title
-                state.startPlaylistPlayback(PlexPlaylistTracksResult("", PlexPlaylist(
+                state.startPlaylistPlayback(PlaylistTracksResult("", MusicPlaylist(
                     ratingKey = "${if (series) "series" else "work"}:${if (series) work.seriesId else work.id}",
                     title = title, thumbUrl = work.artworkUrl, leafCount = tracks.size, sourceId = sourceId,
                 ), tracks), shuffle)

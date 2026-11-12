@@ -60,9 +60,9 @@ import com.lux032.musicbridge.music.LyricsTranslationSettings
 import com.lux032.musicbridge.music.Music032LyricsCandidate
 import com.lux032.musicbridge.music.Music032LyricsJson
 import com.lux032.musicbridge.music.Music032TrackLyrics
-import com.lux032.musicbridge.plex.PlexLyricLine
-import com.lux032.musicbridge.plex.PlexLyrics
-import com.lux032.musicbridge.plex.PlexTrackStream
+import com.lux032.musicbridge.lyrics.LyricLine
+import com.lux032.musicbridge.lyrics.ParsedLyrics
+import com.lux032.musicbridge.music.MusicTrack
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.filter
@@ -86,7 +86,7 @@ internal class TrackLyricsUiState {
 
 @Composable
 internal fun rememberTrackLyricsState(
-    track: PlexTrackStream,
+    track: MusicTrack,
     repository: TrackLyricsRepository,
     settings: LyricsTranslationSettings,
 ): TrackLyricsUiState {
@@ -119,7 +119,7 @@ internal fun rememberTrackLyricsState(
 }
 
 /** Lines to show: the server lyrics with their translation when translation is on and ready. */
-internal fun TrackLyricsUiState.shownLyrics(settings: LyricsTranslationSettings): PlexLyrics {
+internal fun TrackLyricsUiState.shownLyrics(settings: LyricsTranslationSettings): ParsedLyrics {
     val server = data.server
     val translated = translation?.takeIf { it.first == settings.targetLanguage }?.second
     if (!settings.enabled || server == null || translated == null) return data.lyrics
@@ -130,7 +130,7 @@ internal fun TrackLyricsUiState.shownLyrics(settings: LyricsTranslationSettings)
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun LyricsPanel(
-    track: PlexTrackStream,
+    track: MusicTrack,
     state: TrackLyricsUiState,
     settings: LyricsTranslationSettings,
     onSettingsChange: (LyricsTranslationSettings) -> Unit,
@@ -138,7 +138,7 @@ internal fun LyricsPanel(
     positionMillis: Long,
     listState: LazyListState,
     palette: ArtworkPalette,
-    onSeekLine: (PlexLyricLine) -> Unit,
+    onSeekLine: (LyricLine) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -309,7 +309,7 @@ private fun LyricsTranslationOptions(
 
 @Composable
 private fun LyricsSearchDialog(
-    track: PlexTrackStream,
+    track: MusicTrack,
     repository: TrackLyricsRepository,
     palette: ArtworkPalette,
     onDismiss: () -> Unit,
@@ -428,14 +428,14 @@ private fun LyricsCandidateRow(candidate: Music032LyricsCandidate, onClick: () -
 
 @Composable
 internal fun LyricsView(
-    lines: List<PlexLyricLine>,
+    lines: List<LyricLine>,
     isSynced: Boolean,
     translationOnly: Boolean,
     positionMillis: Long,
     listState: LazyListState,
     isLoading: Boolean,
     palette: ArtworkPalette,
-    onSeekLine: (PlexLyricLine) -> Unit,
+    onSeekLine: (LyricLine) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val isUserDragging by listState.interactionSource.collectIsDraggedAsState()

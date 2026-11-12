@@ -1,7 +1,7 @@
 package com.lux032.musicbridge.music
 
-import com.lux032.musicbridge.plex.PlexLyricLine
-import com.lux032.musicbridge.plex.PlexLyrics
+import com.lux032.musicbridge.lyrics.LyricLine
+import com.lux032.musicbridge.lyrics.ParsedLyrics
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -15,7 +15,7 @@ private const val PLAIN_LINE_DURATION_MILLIS = 5_000L
 
 internal data class Music032TrackLyrics(
     /** Lines shown in the app (blank server lines dropped). */
-    val lyrics: PlexLyrics,
+    val lyrics: ParsedLyrics,
     /** Server line index of every entry in [lyrics]; translations are aligned to server lines. */
     val serverIndices: List<Int>,
     /** `file` / `embedded` / `netease` / `lrclib`. */
@@ -28,7 +28,7 @@ internal data class Music032TrackLyrics(
     val isOnline: Boolean get() = source == SOURCE_NETEASE || source == SOURCE_LRCLIB
 
     /** Puts server translation lines (same length as the server lines) under the shown lines. */
-    fun withTranslation(translated: List<String>): PlexLyrics = lyrics.copy(
+    fun withTranslation(translated: List<String>): ParsedLyrics = lyrics.copy(
         lines = lyrics.lines.mapIndexed { index, line ->
             val text = translated.getOrNull(serverIndices[index])?.trim().orEmpty()
             line.copy(translation = text.ifEmpty { null })
@@ -58,18 +58,18 @@ internal object Music032LyricsJson {
         val root = JSONObject(body)
         val synced = root.optBoolean("synced")
         val raw = root.optJSONArray("lines") ?: JSONArray()
-        val lines = mutableListOf<PlexLyricLine>()
+        val lines = mutableListOf<LyricLine>()
         val indices = mutableListOf<Int>()
         for (index in 0 until raw.length()) {
             val line = raw.optJSONObject(index) ?: continue
             val text = line.optString("text").trim()
             if (text.isEmpty()) continue
             val time = if (synced) line.optLong("timeMs") else lines.size * PLAIN_LINE_DURATION_MILLIS
-            lines += PlexLyricLine(time, text)
+            lines += LyricLine(time, text)
             indices += index
         }
         return Music032TrackLyrics(
-            lyrics = PlexLyrics(lines, isSynced = synced),
+            lyrics = ParsedLyrics(lines, isSynced = synced),
             serverIndices = indices,
             source = root.optString("source"),
             sourceName = root.optString("sourceName"),

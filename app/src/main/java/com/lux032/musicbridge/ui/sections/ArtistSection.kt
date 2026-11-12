@@ -45,9 +45,9 @@ import com.lux032.musicbridge.model.ArtistAlbumCategory
 import com.lux032.musicbridge.model.ArtistAlbumClassification
 import com.lux032.musicbridge.model.ReleaseKind
 import com.lux032.musicbridge.model.classifyArtistAlbum
-import com.lux032.musicbridge.plex.ArtistRef
-import com.lux032.musicbridge.plex.PlexAlbum
-import com.lux032.musicbridge.plex.PlexTrackStream
+import com.lux032.musicbridge.music.ArtistRef
+import com.lux032.musicbridge.music.MusicAlbum
+import com.lux032.musicbridge.music.MusicTrack
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
 
@@ -564,13 +564,13 @@ internal fun BoxScope.VerticalIndexBar(
 @Composable
 internal fun ArtistAlbumsSection(
     artist: ArtistSummary?,
-    selectedAlbum: PlexAlbum?,
+    selectedAlbum: MusicAlbum?,
     outputTargetName: String,
     isPlaybackLoading: Boolean,
     isFavoriteLoading: Boolean,
-    artistTracks: List<PlexTrackStream>,
+    artistTracks: List<MusicTrack>,
     isArtistTracksLoading: Boolean,
-    topTracks: List<PlexTrackStream>,
+    topTracks: List<MusicTrack>,
     topTracksArePopular: Boolean,
     tracksTotal: Int,
     tracksError: String?,
@@ -581,21 +581,21 @@ internal fun ArtistAlbumsSection(
     onTrackSortChange: (com.lux032.musicbridge.music.ArtistTrackSort, String) -> Unit,
     onLoadMoreTracks: () -> Unit,
     onRetryTracks: () -> Unit,
-    onPlayTopTrack: (ArtistSummary, PlexTrackStream, Int) -> Unit,
+    onPlayTopTrack: (ArtistSummary, MusicTrack, Int) -> Unit,
     bottomContentPadding: androidx.compose.ui.unit.Dp,
     listState: LazyListState = rememberLazyListState(),
     onBack: () -> Unit,
-    onAlbumClick: (PlexAlbum) -> Unit,
-    onAlbumQueueAction: (PlexAlbum, QueuePlacement) -> Unit,
-    onPlayAlbum: (PlexAlbum) -> Unit = {},
+    onAlbumClick: (MusicAlbum) -> Unit,
+    onAlbumQueueAction: (MusicAlbum, QueuePlacement) -> Unit,
+    onPlayAlbum: (MusicAlbum) -> Unit = {},
     onShuffleArtist: (ArtistSummary) -> Unit,
     onToggleArtistFavorite: (ArtistSummary) -> Unit,
     downloadedTrackKeys: Set<String> = emptySet(),
     downloadProgress: Map<String, Float> = emptyMap(),
-    onDownloadTrack: (PlexTrackStream) -> Unit = {},
-    onDeleteDownloadedTrack: (PlexTrackStream) -> Unit = {},
-    onPlayTrack: (ArtistSummary, PlexTrackStream, Int) -> Unit,
-    onQueueTrack: (PlexTrackStream, QueuePlacement) -> Unit,
+    onDownloadTrack: (MusicTrack) -> Unit = {},
+    onDeleteDownloadedTrack: (MusicTrack) -> Unit = {},
+    onPlayTrack: (ArtistSummary, MusicTrack, Int) -> Unit,
+    onQueueTrack: (MusicTrack, QueuePlacement) -> Unit,
     isResolving: Boolean = false,
     nowPlaying: NowPlayingMarker? = LocalNowPlaying.current,
 ) {
@@ -1014,7 +1014,7 @@ internal fun ArtistChoiceDialog(
 }
 
 private data class ClassifiedArtistAlbum(
-    val album: PlexAlbum,
+    val album: MusicAlbum,
     val classification: ArtistAlbumClassification,
 )
 
@@ -1033,15 +1033,15 @@ private fun artistAlbumSubtitle(classified: ClassifiedArtistAlbum): String =
 @Composable
 private fun ArtistTrackRow(
     artist: ArtistSummary,
-    track: PlexTrackStream,
+    track: MusicTrack,
     index: Int,
     isPlaybackLoading: Boolean,
     downloadedTrackKeys: Set<String> = emptySet(),
     downloadProgress: Map<String, Float> = emptyMap(),
-    onDownloadTrack: (PlexTrackStream) -> Unit = {},
-    onDeleteDownloadedTrack: (PlexTrackStream) -> Unit = {},
-    onPlayTrack: (ArtistSummary, PlexTrackStream, Int) -> Unit,
-    onQueueTrack: (PlexTrackStream, QueuePlacement) -> Unit,
+    onDownloadTrack: (MusicTrack) -> Unit = {},
+    onDeleteDownloadedTrack: (MusicTrack) -> Unit = {},
+    onPlayTrack: (ArtistSummary, MusicTrack, Int) -> Unit,
+    onQueueTrack: (MusicTrack, QueuePlacement) -> Unit,
     showPlayCount: Boolean = false,
     nowPlaying: NowPlayingMarker? = null,
 ) {

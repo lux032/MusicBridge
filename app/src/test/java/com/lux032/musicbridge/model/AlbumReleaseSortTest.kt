@@ -4,8 +4,8 @@ import com.lux032.musicbridge.AlbumSortOption
 import com.lux032.musicbridge.ArtistSummary
 import com.lux032.musicbridge.filterArtists
 import com.lux032.musicbridge.music.Music032Json
-import com.lux032.musicbridge.plex.PlexAlbum
-import com.lux032.musicbridge.plex.PlexSection
+import com.lux032.musicbridge.music.MusicAlbum
+import com.lux032.musicbridge.music.LibrarySection
 import com.lux032.musicbridge.releaseSortKey
 import com.lux032.musicbridge.sortedByRelease
 import org.json.JSONObject
@@ -21,7 +21,7 @@ class AlbumReleaseSortTest {
         assertEquals(20040801, album("a", 2004, "20040801").releaseSortKey())
         assertEquals(20040800, album("a", 2004, "2004-08").releaseSortKey())
         assertEquals(20040000, album("a", 2004, "2004").releaseSortKey())
-        // Plex originallyAvailableAt can carry a time component.
+        // A release date can carry a time component.
         assertEquals(20040512, album("a", 2004, "2004-05-12T00:00:00Z").releaseSortKey())
     }
 
@@ -53,7 +53,7 @@ class AlbumReleaseSortTest {
     }
 
     @Test fun music032ParsesReleaseDate() {
-        val section = PlexSection("032", "032", "artist")
+        val section = LibrarySection("032", "032", "artist")
         val synced = Music032Json.parseAlbum(
             JSONObject("""{"id":1,"title":"A","year":2004,"releaseDate":"2004-12-01"}"""),
             "https://example.org", "token", section, "032",
@@ -86,7 +86,7 @@ class AlbumReleaseSortTest {
         assertEquals(emptyList<String>(), filterArtists(artists, "yoa", favoritesOnly = true).map { it.name })
     }
 
-    private fun album(title: String, year: Int?, releaseDate: String?) = PlexAlbum(
+    private fun album(title: String, year: Int?, releaseDate: String?) = MusicAlbum(
         ratingKey = title,
         title = title,
         artistName = "Artist",
@@ -95,7 +95,7 @@ class AlbumReleaseSortTest {
         userRating = null,
         addedAtEpochSeconds = null,
         lastViewedAtEpochSeconds = null,
-        section = PlexSection("1", "Music", "artist"),
+        section = LibrarySection("1", "Music", "artist"),
         releaseDate = releaseDate,
     )
 }

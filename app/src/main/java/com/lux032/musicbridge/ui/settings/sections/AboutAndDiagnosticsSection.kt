@@ -57,7 +57,6 @@ import kotlinx.coroutines.withContext
 
 @Composable
 fun AboutAndDiagnosticsSection(
-    onRunPlexOffsetProbe: suspend () -> Result<com.lux032.musicbridge.local.PlexOffsetProbeResult>,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -66,7 +65,6 @@ fun AboutAndDiagnosticsSection(
 
     var isDiagnosticsExpanded by remember { mutableStateOf(false) }
     var snapshotStatus by remember { mutableStateOf("正在读取快照…") }
-    var isOffsetProbeRunning by remember { mutableStateOf(false) }
 
     LaunchedEffect(context, isDiagnosticsExpanded) {
         if (isDiagnosticsExpanded) {
@@ -169,31 +167,6 @@ fun AboutAndDiagnosticsSection(
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text("抓取卡顿诊断快照")
-                }
-
-                KeyButton(
-                    onClick = {
-                        if (isOffsetProbeRunning) return@KeyButton
-                        isOffsetProbeRunning = true
-                        scope.launch {
-                            val result = onRunPlexOffsetProbe()
-                            result.onSuccess { probe ->
-                                snapshotStatus = "自检完成：${probe.summary}"
-                                Toast.makeText(context, snapshotStatus, Toast.LENGTH_LONG).show()
-                            }.onFailure { error ->
-                                snapshotStatus = "自检失败：${error.message}"
-                                Toast.makeText(context, snapshotStatus, Toast.LENGTH_LONG).show()
-                            }
-                            isOffsetProbeRunning = false
-                        }
-                    },
-                    enabled = !isOffsetProbeRunning,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text(
-                        if (isOffsetProbeRunning) "正在执行 Plex offset 自检…" else "🔍 Plex offset 兼容性自检",
-                        color = AppColors.TextPrimary,
-                    )
                 }
 
                 KeyButton(

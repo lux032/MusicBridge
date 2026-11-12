@@ -10,17 +10,13 @@ import com.lux032.musicbridge.music.ReporterPlayState
 import com.lux032.musicbridge.music.WarmupResult
 import com.lux032.musicbridge.local.LocalAudioCache
 import com.lux032.musicbridge.local.originalCacheKey
-import com.lux032.musicbridge.plex.PlexAlbum
-import com.lux032.musicbridge.plex.PlexAlbumTracksResult
-import com.lux032.musicbridge.plex.PlexPlaylistTracksResult
-import com.lux032.musicbridge.plex.PlexSection
-import com.lux032.musicbridge.plex.PlexTrackStream
-import com.lux032.musicbridge.plex.PlexClient
-import com.lux032.musicbridge.plex.playbackUrlIdentity
-import com.lux032.musicbridge.plex.withPlexTranscodeOffsetSeconds
-import com.lux032.musicbridge.plex.withOpusTranscodeMode
-import com.lux032.musicbridge.plex.withSonosHiResTranscodeMode
-import com.lux032.musicbridge.plex.isFavorite
+import com.lux032.musicbridge.music.MusicAlbum
+import com.lux032.musicbridge.music.AlbumTracksResult
+import com.lux032.musicbridge.music.PlaylistTracksResult
+import com.lux032.musicbridge.music.LibrarySection
+import com.lux032.musicbridge.music.MusicTrack
+import com.lux032.musicbridge.music.playbackUrlIdentity
+import com.lux032.musicbridge.music.isFavorite
 import com.lux032.musicbridge.service.PlaybackForegroundService
 import com.lux032.musicbridge.sonos.SonosDiscovery
 import com.lux032.musicbridge.sonos.SonosPlaybackStatus
@@ -42,9 +38,6 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.random.Random
-
-internal fun shouldApplyPlexSonosTranscode(isPlexClient: Boolean?, streamUrl: String): Boolean =
-    isPlexClient ?: streamUrl.contains("X-Plex-Token", ignoreCase = true)
 
 /**
  * Honest 032 session state for Sonos-pushed playback. Sonos has no "suppressed" notion;
@@ -76,28 +69,6 @@ internal fun isSameTrackRepeatWrap(
     return previousPositionMillis >= duration - 10_000L && newPositionMillis <= 10_000L
 }
 
-internal fun preparePlexSonosTranscode(
-    track: PlexTrackStream,
-    isPlexSource: Boolean,
-    opusMode: OpusTranscodeMode,
-    hiResMode: SonosHiResTranscodeMode,
-    clientId: String,
-): PlexTrackStream = if (isPlexSource) {
-    track.withOpusTranscodeMode(opusMode, clientId).withSonosHiResTranscodeMode(hiResMode.forPlex(), clientId)
-} else track
-
-internal fun configuredPlexDirectMp3(
-    track: PlexTrackStream,
-    isPlexSource: Boolean,
-    opusMode: OpusTranscodeMode,
-    hiResMode: SonosHiResTranscodeMode,
-): Boolean = isPlexSource && (
-    (track.sourceAudioCodec.equals("opus", ignoreCase = true) && opusMode == OpusTranscodeMode.DIRECT_MP3) ||
-        (track.sourceAudioCodec?.lowercase() in LOSSLESS_AUDIO_CODECS &&
-            (track.sourceAudioSampleRate ?: 0) > SONOS_MAX_SAMPLE_RATE_HZ &&
-            hiResMode.forPlex() == SonosHiResTranscodeMode.TRANSCODE_MP3)
-    )
-
 internal class AppStatePlaybackCoordinator(
     private val state: AppState,
 ) {
@@ -107,26 +78,26 @@ internal class AppStatePlaybackCoordinator(
     private val playbackToggleMutex = Mutex()
     private val hydrationCache = Music032HydrationCache(state.scope)
 
-    private var pending032Plan: Pair<PlexTrackStream, SonosPlan>? = null
+    private var pending032Plan: Pair<MusicTrack, SonosPlan>? = null
     private var pending032Offset = 0L
     @Volatile private var activeSonosPlan: ActiveSonosPlan? = null
     private data class ActiveSonosPlan(val sourceId: String, val ratingKey: String, val kind: SonosPlanKind,
                                        val url: String, val mime: String?)
-    private data class PreparedSonosTrack(val track: PlexTrackStream, val plan: SonosPlan?)
+    private data class PreparedSonosTrack(val track: MusicTrack, val plan: SonosPlan?)
     private var pending032Fallback = false
     private var current032Fallback = false
 
     /** The speaker-side queue loaded by [startQueuePlaybackOnSonos]; null in push mode. */
     @Volatile private var sonosQueue: SonosQueueSession? = null
 
-    private fun sonosQueueFor(room: SonosRoom?, tracks: List<PlexTrackStream>): SonosQueueSession? =
+    private fun sonosQueueFor(room: SonosRoom?, tracks: List<MusicTrack>): SonosQueueSession? =
         sonosQueue?.takeIf { room != null && it.roomUuid == room.coordinatorUuid && it.mirrors(tracks) }
 
-    private fun is032Source(track: PlexTrackStream): Boolean =
+    private fun is032Source(track: MusicTrack): Boolean =
         runCatching { state.clientFor(track.sourceId) is Music032Client }.getOrNull()
             ?: Music032TranscodeUrls.isOriginalStream(track.streamUrl)
 
-    private fun activePlanFor(track: PlexTrackStream): ActiveSonosPlan? = activeSonosPlan?.takeIf {
+    private fun activePlanFor(track: MusicTrack): ActiveSonosPlan? = activeSonosPlan?.takeIf {
         it.sourceId == track.sourceId && it.ratingKey == track.ratingKey &&
             state.miniPlayerState?.let { player ->
                 player.tracks.getOrNull(player.currentIndex)?.let { current ->
@@ -135,13 +106,13 @@ internal class AppStatePlaybackCoordinator(
             } == true
     }
 
-    private fun set032RestartSeek(track: PlexTrackStream, offset: Long) {
+    private fun set032RestartSeek(track: MusicTrack, offset: Long) {
         val clamped = Music032TranscodeUrls.clampedOffsetMs(offset, track.durationMillis)
         transcodeRestartSeek = if (clamped > 0) TranscodeRestartSeek(track.sourceId, track.ratingKey,
             clamped, seekRequestGeneration.incrementAndGet(), true, System.currentTimeMillis()) else null
     }
 
-    private fun record032Plan(track: PlexTrackStream, plan: SonosPlan, url: String) {
+    private fun record032Plan(track: MusicTrack, plan: SonosPlan, url: String) {
         activeSonosPlan = ActiveSonosPlan(track.sourceId, track.ratingKey, plan.kind, url, plan.mime)
     }
 
@@ -154,14 +125,14 @@ internal class AppStatePlaybackCoordinator(
     // it, transport commands must start playback instead of talking to that empty renderer.
     // Identity-checked against the live queue, so ANY fresh playback start (which always
     // builds a new tracks list) retires the restored state without extra bookkeeping.
-    private var restoredQueue: List<PlexTrackStream>? = null
+    private var restoredQueue: List<MusicTrack>? = null
 
     /** Mirrors ExoPlayer's default maxSeekToPreviousPosition used by the local engine. */
 
     val isRestoredSessionPending: Boolean
         get() = restoredQueue != null && state.miniPlayerState?.tracks === restoredQueue
 
-    fun markRestoredSession(tracks: List<PlexTrackStream>) {
+    fun markRestoredSession(tracks: List<MusicTrack>) {
         restoredQueue = tracks
     }
 
@@ -221,8 +192,8 @@ internal class AppStatePlaybackCoordinator(
     }
 
     fun startSingleTrackPlayback(
-        album: PlexAlbum,
-        tracks: List<PlexTrackStream>,
+        album: MusicAlbum,
+        tracks: List<MusicTrack>,
         trackIndex: Int,
         initialPositionMillis: Long,
     ) {
@@ -247,8 +218,8 @@ internal class AppStatePlaybackCoordinator(
     }
 
     private fun startSingleTrackPlaybackOnSonos(
-        album: PlexAlbum,
-        tracks: List<PlexTrackStream>,
+        album: MusicAlbum,
+        tracks: List<MusicTrack>,
         trackIndex: Int,
         room: SonosRoom,
         initialPositionMillis: Long,
@@ -259,19 +230,7 @@ internal class AppStatePlaybackCoordinator(
             startQueuePlaybackOnSonos(album, tracks, trackIndex, room, initialPositionMillis, continueChain)
             return
         }
-        val resumesLiveTranscodeDirectMp3 = initialPositionMillis > 0L && !is032Source(targetTrack) && targetTrack.isConfiguredDirectMp3()
-        transcodeRestartSeek = if (resumesLiveTranscodeDirectMp3) {
-            TranscodeRestartSeek(
-                sourceId = targetTrack.sourceId,
-                ratingKey = targetTrack.ratingKey,
-                offsetMillis = initialPositionMillis.coerceAtLeast(0L),
-                generation = seekRequestGeneration.incrementAndGet(),
-                pending = true,
-                startedAtMillis = System.currentTimeMillis(),
-            )
-        } else {
-            null
-        }
+        transcodeRestartSeek = null
         val requestGeneration = nextPlaybackRequestGeneration()
         val displayAlbum = resolveAlbumForTrack(targetTrack, album)
         stopLocalPlaybackForSonosHandover()
@@ -305,23 +264,12 @@ internal class AppStatePlaybackCoordinator(
                 val prepared = prepareSonosTrack(targetTrack) { isCurrentPlaybackRequest(requestGeneration) }
                 if (prepared.plan != null) ensureCurrentPlaybackRequest(requestGeneration)
                 val effectiveTrack = prepared.track
-                val isOpus = effectiveTrack.sourceAudioCodec.equals("opus", ignoreCase = true)
-                val isLiveTranscodeDirectMp3 = effectiveTrack.streamUrl.contains("/:/transcode/universal/start.mp3", ignoreCase = true)
-                if (isOpus && isPlexSource(effectiveTrack) && state.opusTranscodeMode == OpusTranscodeMode.PROXY_FLAC) {
-                    state.actionMessage = "正在准备 FLAC 缓存：${effectiveTrack.title}"
-                }
                 val playbackUrl = if (prepared.plan != null) {
-                    state.plexTranscodeProxy.cancelPendingDownload()
                     if (prepared.plan.kind == SonosPlanKind.LIVE_MP3)
                         Music032TranscodeUrls.withOffsetMs(prepared.plan.url, initialPositionMillis, effectiveTrack.durationMillis)
                     else prepared.plan.url
-                } else if (isLiveTranscodeDirectMp3) {
-                    state.plexTranscodeProxy.cancelPendingDownload()
-                    effectiveTrack.streamUrl.withPlexTranscodeOffsetSeconds(
-                        (initialPositionMillis.coerceAtLeast(0L) / 1_000L).toInt(),
-                    )
                 } else {
-                    state.plexTranscodeProxy.preparePlaybackUrl(effectiveTrack)
+                    effectiveTrack.streamUrl
                 }
                 ensureCurrentPlaybackRequest(requestGeneration)
                 if (prepared.plan != null) set032RestartSeek(effectiveTrack,
@@ -338,7 +286,7 @@ internal class AppStatePlaybackCoordinator(
                     current032Fallback = prepared.plan.fellBackFromFlac
                 }
                 if (if (prepared.plan != null) shouldSonosSeekAfterPush(prepared.plan.kind, initialPositionMillis)
-                    else initialPositionMillis > 0L && !isLiveTranscodeDirectMp3) {
+                    else initialPositionMillis > 0L) {
                     state.sonosController.seek(room, (initialPositionMillis / 1_000L).toInt())
                 }
             }.onSuccess {
@@ -364,7 +312,7 @@ internal class AppStatePlaybackCoordinator(
     }
 
     fun startAlbumPlayback(
-        albumTrackResult: PlexAlbumTracksResult,
+        albumTrackResult: AlbumTracksResult,
         startIndex: Int,
         initialPositionMillis: Long,
     ) {
@@ -387,7 +335,7 @@ internal class AppStatePlaybackCoordinator(
     }
 
     private fun startAlbumPlaybackOnSonos(
-        albumTrackResult: PlexAlbumTracksResult,
+        albumTrackResult: AlbumTracksResult,
         room: SonosRoom,
         startIndex: Int,
         initialPositionMillis: Long,
@@ -399,19 +347,7 @@ internal class AppStatePlaybackCoordinator(
             return
         }
         val initialTrack = albumTrackResult.tracks.getOrNull(startIndex)
-        val resumesLiveTranscodeDirectMp3 = initialPositionMillis > 0L && initialTrack != null && !is032Source(initialTrack) && initialTrack.isConfiguredDirectMp3()
-        transcodeRestartSeek = if (resumesLiveTranscodeDirectMp3) {
-            TranscodeRestartSeek(
-                sourceId = initialTrack.sourceId,
-                ratingKey = initialTrack.ratingKey,
-                offsetMillis = initialPositionMillis.coerceAtLeast(0L),
-                generation = seekRequestGeneration.incrementAndGet(),
-                pending = true,
-                startedAtMillis = System.currentTimeMillis(),
-            )
-        } else {
-            null
-        }
+        transcodeRestartSeek = null
         val requestGeneration = nextPlaybackRequestGeneration()
         stopLocalPlaybackForSonosHandover()
         state.albumPlaybackJob?.cancel()
@@ -457,33 +393,19 @@ internal class AppStatePlaybackCoordinator(
                         val prepared = prepareSonosTrack(track) { isCurrentPlaybackRequest(requestGeneration) }
                         if (prepared.plan != null) ensureCurrentPlaybackRequest(requestGeneration)
                         val effectiveTrack = prepared.track
-                        val isOpus = effectiveTrack.sourceAudioCodec.equals("opus", ignoreCase = true)
                         val playbackOffsetMillis = if (isPreparingFirstTrack) {
                             initialPositionMillis.coerceAtLeast(0L)
                         } else {
                             0L
                         }
                         isPreparingFirstTrack = false
-                        if (isOpus && isPlexSource(effectiveTrack) && state.opusTranscodeMode == OpusTranscodeMode.PROXY_FLAC) {
-                            state.actionMessage = "正在准备 FLAC 缓存：${effectiveTrack.title}"
-                        }
-                        val isLiveTranscodeDirectMp3 = effectiveTrack.streamUrl.contains("/:/transcode/universal/start.mp3", ignoreCase = true)
+                        ensureCurrentPlaybackRequest(requestGeneration)
                         val playbackUrl = if (prepared.plan != null) {
-                            ensureCurrentPlaybackRequest(requestGeneration)
-                            state.plexTranscodeProxy.cancelPendingDownload()
                             if (prepared.plan.kind == SonosPlanKind.LIVE_MP3)
                                 Music032TranscodeUrls.withOffsetMs(prepared.plan.url, playbackOffsetMillis, effectiveTrack.durationMillis)
                             else prepared.plan.url
-                        } else if (isLiveTranscodeDirectMp3) {
-                            ensureCurrentPlaybackRequest(requestGeneration)
-                            state.plexTranscodeProxy.cancelPendingDownload()
-                            effectiveTrack.streamUrl.withPlexTranscodeOffsetSeconds(
-                                (playbackOffsetMillis / 1_000L).toInt(),
-                            )
                         } else {
-                            state.plexTranscodeProxy.preparePlaybackUrl(effectiveTrack).also {
-                                ensureCurrentPlaybackRequest(requestGeneration)
-                            }
+                            effectiveTrack.streamUrl
                         }
                         if (prepared.plan != null) {
                             ensureCurrentPlaybackRequest(requestGeneration)
@@ -492,8 +414,7 @@ internal class AppStatePlaybackCoordinator(
                             pending032Fallback = prepared.plan.fellBackFromFlac
                         }
                         SonosPlayback(playbackUrl, if (prepared.plan != null) prepared.plan.mime else effectiveTrack.playbackMimeType,
-                            prepared.plan?.let { it.kind == SonosPlanKind.LIVE_MP3 && playbackOffsetMillis > 0L }
-                                ?: playbackUrl.contains("/:/transcode/universal/start", ignoreCase = true))
+                            prepared.plan?.let { it.kind == SonosPlanKind.LIVE_MP3 && playbackOffsetMillis > 0L } ?: false)
                     },
                     onTrackPushed = { track, playback ->
                         if (isCurrentPlaybackRequest(requestGeneration)) {
@@ -587,8 +508,8 @@ internal class AppStatePlaybackCoordinator(
      * prepared (hydrated / FLAC warmed) before the push, the rest warm in the background.
      */
     private fun startQueuePlaybackOnSonos(
-        album: PlexAlbum,
-        tracks: List<PlexTrackStream>,
+        album: MusicAlbum,
+        tracks: List<MusicTrack>,
         startIndex: Int,
         room: SonosRoom,
         initialPositionMillis: Long,
@@ -643,8 +564,7 @@ internal class AppStatePlaybackCoordinator(
                 val items = entries.mapIndexed { index, entry ->
                     sonosQueueItem(tracks[index], if (index == startIndex) entry.copy(url = startUrl) else entry, displayAlbum)
                 }
-                state.plexTranscodeProxy.cancelPendingDownload()
-                state.sonosController.replaceQueue(
+                                state.sonosController.replaceQueue(
                     room = room,
                     items = items,
                     startIndex = startIndex,
@@ -685,14 +605,14 @@ internal class AppStatePlaybackCoordinator(
     }
 
     /** Plans one queue entry without blocking (no FLAC warm-up; see [warmSonosQueue]). */
-    private fun sonosQueueEntryFor(track: PlexTrackStream): SonosQueueEntry {
+    private fun sonosQueueEntryFor(track: MusicTrack): SonosQueueEntry {
         val caps = (runCatching { state.clientFor(track.sourceId) }.getOrNull() as? Music032Client)?.capabilities()
         val original = SonosPlan(track.streamUrl, Music032Json.original032MimeType(track.sourceAudioCodec, null), SonosPlanKind.ORIGINAL)
         val plan = plan032(track, state.opusTranscodeMode, state.sonosHiResTranscodeMode, caps).getOrDefault(original)
         return SonosQueueEntry(track.sourceId, track.ratingKey, plan.kind, plan.url, plan.mime ?: track.playbackMimeType)
     }
 
-    private fun sonosQueueItem(track: PlexTrackStream, entry: SonosQueueEntry, album: PlexAlbum?): SonosQueueItem =
+    private fun sonosQueueItem(track: MusicTrack, entry: SonosQueueEntry, album: MusicAlbum?): SonosQueueItem =
         SonosQueueItem(
             url = entry.url,
             title = track.title,
@@ -781,7 +701,7 @@ internal class AppStatePlaybackCoordinator(
      * Re-points the current track at [url] (live transcode resume / seek). In queue mode the
      * queue entry is swapped in place so Sonos keeps advancing through the rest of the queue.
      */
-    private suspend fun pushSonosUrl(room: SonosRoom, track: PlexTrackStream, url: String, albumTitle: String, mime: String?) {
+    private suspend fun pushSonosUrl(room: SonosRoom, track: MusicTrack, url: String, albumTitle: String, mime: String?) {
         val player = state.miniPlayerState
         val session = player?.let { sonosQueueFor(room, it.tracks) }
         val index = player?.currentIndex ?: -1
@@ -798,7 +718,7 @@ internal class AppStatePlaybackCoordinator(
     // --- Adopting the speaker's queue -------------------------------------------------------
 
     private class AdoptedSonosQueue(
-        val tracks: List<PlexTrackStream>,
+        val tracks: List<MusicTrack>,
         val reusedKnown: Boolean,
         val refs: List<AdoptedQueueRef>,
         val index: Int,
@@ -834,7 +754,7 @@ internal class AppStatePlaybackCoordinator(
         }
     }
 
-    private suspend fun loadAdoptableSonosQueue(room: SonosRoom, known: List<PlexTrackStream>): AdoptedSonosQueue? {
+    private suspend fun loadAdoptableSonosQueue(room: SonosRoom, known: List<MusicTrack>): AdoptedSonosQueue? {
         val controller = state.sonosController
         val status = controller.getPlaybackStatus(room)
         if (status.transportState !in ADOPTABLE_TRANSPORT_STATES) return null
@@ -851,7 +771,7 @@ internal class AppStatePlaybackCoordinator(
     }
 
     /** Loads the tracks of a foreign queue (e.g. pushed by the web panel); null if any is gone. */
-    private suspend fun fetchQueueTracks(refs: List<AdoptedQueueRef>): List<PlexTrackStream>? = coroutineScope {
+    private suspend fun fetchQueueTracks(refs: List<AdoptedQueueRef>): List<MusicTrack>? = coroutineScope {
         val permits = Semaphore(ADOPT_FETCH_CONCURRENCY)
         val unique = refs.map { it.sourceId to it.ratingKey }.distinct()
         val fetched = unique.map { key ->
@@ -902,7 +822,7 @@ internal class AppStatePlaybackCoordinator(
         room: SonosRoom,
         session: SonosQueueSession,
         insertIndex: Int,
-        tracks: List<PlexTrackStream>,
+        tracks: List<MusicTrack>,
         previousSize: Int,
     ) {
         if (!canUseSonosQueue(tracks, ::is032Source)) {
@@ -1003,7 +923,7 @@ internal class AppStatePlaybackCoordinator(
     }
 
     fun startPlaylistPlayback(
-        playlistResult: PlexPlaylistTracksResult,
+        playlistResult: PlaylistTracksResult,
         shuffle: Boolean,
     ) {
         if (playlistResult.tracks.isEmpty()) return
@@ -1028,7 +948,7 @@ internal class AppStatePlaybackCoordinator(
             return
         }
         val tracks = requestedTracks
-        val fakeAlbum = PlexAlbum(
+        val fakeAlbum = MusicAlbum(
             ratingKey = playlistResult.playlist.ratingKey,
             title = playlistResult.playlist.title,
             artistName = null,
@@ -1037,7 +957,7 @@ internal class AppStatePlaybackCoordinator(
             userRating = null,
             addedAtEpochSeconds = null,
             lastViewedAtEpochSeconds = null,
-            section = PlexSection("", "", ""),
+            section = LibrarySection("", "", ""),
             sourceId = playlistResult.playlist.sourceId.ifBlank { tracks.firstOrNull()?.sourceId.orEmpty() },
         )
         when (val target = state.selectedPlaybackTarget) {
@@ -1059,11 +979,11 @@ internal class AppStatePlaybackCoordinator(
     }
 
     private fun startLocalPlaylistTracks(
-        playlistResult: PlexPlaylistTracksResult,
-        tracks: List<PlexTrackStream>,
+        playlistResult: PlaylistTracksResult,
+        tracks: List<MusicTrack>,
     ) {
         if (tracks.isEmpty() || state.selectedPlaybackTarget != PlaybackTarget.LocalDevice) return
-        val fakeAlbum = PlexAlbum(
+        val fakeAlbum = MusicAlbum(
             ratingKey = playlistResult.playlist.ratingKey,
             title = playlistResult.playlist.title,
             artistName = null,
@@ -1072,7 +992,7 @@ internal class AppStatePlaybackCoordinator(
             userRating = null,
             addedAtEpochSeconds = null,
             lastViewedAtEpochSeconds = null,
-            section = PlexSection("", "", ""),
+            section = LibrarySection("", "", ""),
             sourceId = playlistResult.playlist.sourceId.ifBlank { tracks.firstOrNull()?.sourceId.orEmpty() },
         )
         val initialAlbum = tracks.firstOrNull()?.let { resolveAlbumForTrack(it, fakeAlbum) } ?: fakeAlbum
@@ -1085,7 +1005,7 @@ internal class AppStatePlaybackCoordinator(
     }
 
     private fun startPlaylistPlaybackOnSonos(
-        playlistResult: PlexPlaylistTracksResult,
+        playlistResult: PlaylistTracksResult,
         room: SonosRoom,
         shuffle: Boolean,
     ) {
@@ -1099,7 +1019,7 @@ internal class AppStatePlaybackCoordinator(
         state.volumeSyncKey += 1
         syncSleepTimerRoom(room)
         val tracks = if (shuffle) playlistResult.tracks.shuffled() else playlistResult.tracks
-        val fakeAlbum = PlexAlbum(
+        val fakeAlbum = MusicAlbum(
             ratingKey = playlistResult.playlist.ratingKey,
             title = playlistResult.playlist.title,
             artistName = null,
@@ -1108,7 +1028,7 @@ internal class AppStatePlaybackCoordinator(
             userRating = null,
             addedAtEpochSeconds = null,
             lastViewedAtEpochSeconds = null,
-            section = PlexSection("", "", ""),
+            section = LibrarySection("", "", ""),
             sourceId = playlistResult.playlist.sourceId.ifBlank { tracks.firstOrNull()?.sourceId.orEmpty() },
         )
         val initialAlbum = tracks.firstOrNull()?.let { resolveAlbumForTrack(it, fakeAlbum) } ?: fakeAlbum
@@ -1139,32 +1059,20 @@ internal class AppStatePlaybackCoordinator(
                 playAlbumSequentially(
                     sonosController = state.sonosController,
                     room = room,
-                    trackResult = PlexAlbumTracksResult("", fakeAlbum, tracks),
+                    trackResult = AlbumTracksResult("", fakeAlbum, tracks),
                     startIndex = 0,
                     initialPositionMillis = 0L,
                     preparePlayback = { track ->
                         val prepared = prepareSonosTrack(track) { isCurrentPlaybackRequest(requestGeneration) }
                         if (prepared.plan != null) ensureCurrentPlaybackRequest(requestGeneration)
                         val effectiveTrack = prepared.track
-                        val isOpus = effectiveTrack.sourceAudioCodec.equals("opus", ignoreCase = true)
-                        if (isOpus && isPlexSource(effectiveTrack) && state.opusTranscodeMode == OpusTranscodeMode.PROXY_FLAC) {
-                            state.actionMessage = "正在准备 FLAC 缓存：${effectiveTrack.title}"
-                        }
-                        val isLiveTranscodeDirectMp3 = effectiveTrack.streamUrl.contains("/:/transcode/universal/start.mp3", ignoreCase = true)
+                        ensureCurrentPlaybackRequest(requestGeneration)
                         val playbackUrl = if (prepared.plan != null) {
-                            ensureCurrentPlaybackRequest(requestGeneration)
-                            state.plexTranscodeProxy.cancelPendingDownload()
                             if (prepared.plan.kind == SonosPlanKind.LIVE_MP3)
                                 Music032TranscodeUrls.withOffsetMs(prepared.plan.url, 0L, effectiveTrack.durationMillis)
                             else prepared.plan.url
-                        } else if (isLiveTranscodeDirectMp3) {
-                            ensureCurrentPlaybackRequest(requestGeneration)
-                            state.plexTranscodeProxy.cancelPendingDownload()
-                            effectiveTrack.streamUrl
                         } else {
-                            state.plexTranscodeProxy.preparePlaybackUrl(effectiveTrack).also {
-                                ensureCurrentPlaybackRequest(requestGeneration)
-                            }
+                            effectiveTrack.streamUrl
                         }
                         if (prepared.plan != null) {
                             ensureCurrentPlaybackRequest(requestGeneration)
@@ -1173,8 +1081,7 @@ internal class AppStatePlaybackCoordinator(
                             pending032Fallback = prepared.plan.fellBackFromFlac
                         }
                         SonosPlayback(playbackUrl, if (prepared.plan != null) prepared.plan.mime else effectiveTrack.playbackMimeType,
-                            if (prepared.plan != null) false
-                            else playbackUrl.contains("/:/transcode/universal/start", ignoreCase = true))
+                            false)
                     },
                     onTrackPushed = { track, playback ->
                         if (isCurrentPlaybackRequest(requestGeneration)) {
@@ -1293,7 +1200,7 @@ internal class AppStatePlaybackCoordinator(
                         "positionMs=${latest.currentPositionMillis}",
                 )
 
-                // Pausing a Plex live MP3 response can close its HTTP stream even while
+                // Pausing a live MP3 transcode response can close its HTTP stream even while
                 // Sonos still briefly reports PAUSED_PLAYBACK. A plain Play is therefore
                 // inherently racy: always create a fresh offset stream for this format.
                 if (resumesLiveTranscodeDirectMp3 || (shouldResume && isActuallyStopped)) {
@@ -1311,8 +1218,7 @@ internal class AppStatePlaybackCoordinator(
                             return@withLock
                         }
                         val outcome = runCatching {
-                            state.plexTranscodeProxy.cancelPendingDownload()
-                            pushSonosUrl(room, currentTrack, url, currentTrack.albumTitle ?: latest.album.title, active032.mime)
+                                                        pushSonosUrl(room, currentTrack, url, currentTrack.albumTitle ?: latest.album.title, active032.mime)
                         }
                         if (commandGeneration == playbackToggleGeneration.get() && activePlanFor(currentTrack) == active032) {
                             outcome.onSuccess {
@@ -1621,7 +1527,6 @@ internal class AppStatePlaybackCoordinator(
                             } == true
                     } else null
                     val effectiveTrack = prepared?.track ?: targetTrack
-                    val offsetSeconds = (targetMillis / 1_000L).toInt()
                     val actual032Kind = prepared?.plan?.kind
                     if (active032 == null && prepared?.plan != null &&
                         !shouldRestart032Seek(isLiveTranscodeDirectMp3, actual032Kind ?: SonosPlanKind.ORIGINAL)) {
@@ -1634,12 +1539,11 @@ internal class AppStatePlaybackCoordinator(
                         active032 != null -> Music032TranscodeUrls.withOffsetMs(active032.url, targetMillis, durationMillis)
                         prepared?.plan?.kind == SonosPlanKind.LIVE_MP3 ->
                             Music032TranscodeUrls.withOffsetMs(prepared.plan.url, targetMillis, durationMillis)
-                        else -> effectiveTrack.streamUrl.withPlexTranscodeOffsetSeconds(offsetSeconds)
+                        else -> effectiveTrack.streamUrl
                     }
                     Log.i(LOG_TAG, "opus seek restart targetMs=$targetMillis generation=$seekGeneration")
                     if (active032 != null || prepared?.plan != null) ensureCurrent032Seek(targetTrack, room, seekGeneration)
-                    state.plexTranscodeProxy.cancelPendingDownload()
-                    pushSonosUrl(
+                                        pushSonosUrl(
                         room = room,
                         track = effectiveTrack,
                         url = seekUrl,
@@ -1684,7 +1588,7 @@ internal class AppStatePlaybackCoordinator(
     }
 
     fun enqueueTracks(
-        tracks: List<PlexTrackStream>,
+        tracks: List<MusicTrack>,
         placement: QueuePlacement,
         displayTitle: String,
     ) {
@@ -1696,12 +1600,12 @@ internal class AppStatePlaybackCoordinator(
             return
         }
 
-        // A speaker-side 032 queue cannot hold Plex tracks (proxy/transcode sessions need the
-        // phone): refuse instead of silently dropping them at the end of the speaker queue.
+        // A speaker-side 032 queue can only hold 032 tracks: refuse others instead of silently
+        // dropping them at the end of the speaker queue.
         if (!isRestoredSessionPending && sonosQueueFor(playerState.sonosRoom, playerState.tracks) != null &&
             !canUseSonosQueue(tracks, ::is032Source)) {
             state.actionMessage = null
-            state.errorMessage = "Sonos 正在播放 032 队列，Plex 曲目无法加入，请单独播放"
+            state.errorMessage = "Sonos 正在播放 032 队列，该曲目无法加入，请单独播放"
             return
         }
         val insertIndex = when (placement) {
@@ -1732,7 +1636,7 @@ internal class AppStatePlaybackCoordinator(
         }
     }
 
-    fun playAlbum(album: PlexAlbum, startIndex: Int = 0) {
+    fun playAlbum(album: MusicAlbum, startIndex: Int = 0) {
         state.isPlaybackCommandLoading = true
         state.errorMessage = null
         state.scope.launch {
@@ -1741,7 +1645,7 @@ internal class AppStatePlaybackCoordinator(
                     state.albumLocalStore.getAlbumTracks(album.sourceId, album.ratingKey)
                 }
                 if (cachedTracks.isNotEmpty()) {
-                    val result = PlexAlbumTracksResult("", album, cachedTracks)
+                    val result = AlbumTracksResult("", album, cachedTracks)
                     state.selectedAlbum = album
                     state.trackResult = result
                     startAlbumPlayback(result, startIndex, 0L)
@@ -1781,7 +1685,7 @@ internal class AppStatePlaybackCoordinator(
         }
     }
 
-    fun enqueueAlbum(album: PlexAlbum, placement: QueuePlacement) {
+    fun enqueueAlbum(album: MusicAlbum, placement: QueuePlacement) {
         if (state.miniPlayerState == null) {
             state.actionMessage = null
             state.errorMessage = Strings.startPlaybackBeforeQueueing
@@ -1828,7 +1732,7 @@ internal class AppStatePlaybackCoordinator(
 
     private fun startPlaybackReporting(
         room: SonosRoom,
-        tracks: List<PlexTrackStream>,
+        tracks: List<MusicTrack>,
         initialTrackIndex: Int,
         initialPositionMillis: Long = 0L,
         autoAdvanceWhenStopped: Boolean,
@@ -1938,7 +1842,7 @@ internal class AppStatePlaybackCoordinator(
                 val queueIndex = queueSession?.let { resolveSonosQueueIndex(it.entries, status) }
                 val resolvedTrack = queueIndex?.let(currentQueue::getOrNull)
                     ?: resolveActiveTrack(currentQueue, latestMiniPlayerState, status) ?: continue
-                val playbackState = status.toPlexPlaybackState()
+                val playbackState = status.toReportedPlaybackState()
                 val rawPositionMillis = ((status.relTimeSeconds ?: 0) * 1_000L).coerceAtLeast(0L)
                 val restartSeek = transcodeRestartSeek?.takeIf {
                     it.sourceId == resolvedTrack.sourceId && it.ratingKey == resolvedTrack.ratingKey
@@ -2301,7 +2205,7 @@ internal class AppStatePlaybackCoordinator(
         }
     }
 
-    private fun ensureCurrent032Seek(track: PlexTrackStream, room: SonosRoom, generation: Long) {
+    private fun ensureCurrent032Seek(track: MusicTrack, room: SonosRoom, generation: Long) {
         if (seekRequestGeneration.get() != generation ||
             state.miniPlayerState?.sonosRoom?.coordinatorUuid != room.coordinatorUuid ||
             state.miniPlayerState?.tracks?.getOrNull(state.miniPlayerState?.currentIndex ?: -1)?.let {
@@ -2309,39 +2213,20 @@ internal class AppStatePlaybackCoordinator(
             } != true) throw CancellationException("播放请求已被新的操作取代。")
     }
 
-    private fun isPlexSource(track: PlexTrackStream): Boolean = shouldApplyPlexSonosTranscode(
-        runCatching { state.clientFor(track.sourceId) is PlexClient }.getOrNull(), track.streamUrl,
-    )
-
-    private fun PlexTrackStream.isConfiguredDirectMp3(): Boolean = if (is032Source(this)) {
+    private fun MusicTrack.isConfiguredDirectMp3(): Boolean = if (is032Source(this)) {
         predictSonosKind(this, state.opusTranscodeMode, state.sonosHiResTranscodeMode,
             (runCatching { state.clientFor(sourceId) }.getOrNull() as? Music032Client)?.capabilities()) == SonosPlanKind.LIVE_MP3
-    } else configuredPlexDirectMp3(this, isPlexSource(this), state.opusTranscodeMode, state.sonosHiResTranscodeMode.forPlex())
+    } else false
 
-    private suspend fun hydrate032Track(track: PlexTrackStream): PlexTrackStream =
+    private suspend fun hydrate032Track(track: MusicTrack): MusicTrack =
         hydrationCache.hydrate(track) { state.clientFor(track.sourceId).fetchTrackStream(track.ratingKey) }
 
     private suspend fun prepareSonosTrack(
-        track: PlexTrackStream,
+        track: MusicTrack,
         isCurrent: () -> Boolean = { true },
     ): PreparedSonosTrack {
         val is032 = is032Source(track)
-        val codec = track.sourceAudioCodec?.lowercase()
-        val hydrated = if (is032) hydrate032Track(track) else if (codec in LOSSLESS_AUDIO_CODECS && track.sourceAudioSampleRate == null) {
-            runCatching {
-                state.clientFor(track.sourceId).fetchTrackStream(track.ratingKey)
-            }.getOrNull()?.let { fresh ->
-                track.copy(
-                    streamUrl = fresh.streamUrl,
-                    sourceAudioCodec = fresh.sourceAudioCodec ?: track.sourceAudioCodec,
-                    sourceAudioBitrateKbps = fresh.sourceAudioBitrateKbps ?: track.sourceAudioBitrateKbps,
-                    sourceAudioSampleRate = fresh.sourceAudioSampleRate,
-                    playbackMimeType = fresh.playbackMimeType,
-                )
-            } ?: track
-        } else {
-            track
-        }
+        val hydrated = if (is032) hydrate032Track(track) else track
         if (hydrated.sourceAudioSampleRate != track.sourceAudioSampleRate ||
             (is032 && hydrated.sourceAudioCodec != track.sourceAudioCodec)) {
             state.miniPlayerState = state.miniPlayerState?.let { player ->
@@ -2379,8 +2264,7 @@ internal class AppStatePlaybackCoordinator(
             Music032Warmup.ensureCurrent(isCurrent)
             return PreparedSonosTrack(hydrated, plan)
         }
-        return PreparedSonosTrack(preparePlexSonosTranscode(hydrated, isPlexSource(hydrated),
-            state.opusTranscodeMode, state.sonosHiResTranscodeMode, state.plexClientIdentifier), null)
+        return PreparedSonosTrack(hydrated, null)
     }
 
     private data class TranscodeRestartSeek(
@@ -2402,7 +2286,7 @@ internal class AppStatePlaybackCoordinator(
     }
 
     private suspend fun reportTimelineSafely(
-        track: PlexTrackStream,
+        track: MusicTrack,
         stateName: String,
         timeMillis: Long,
         durationMillis: Long?,
@@ -2420,7 +2304,7 @@ internal class AppStatePlaybackCoordinator(
     }
 
     private suspend fun reportStoppedTrackIfNeeded(
-        track: PlexTrackStream,
+        track: MusicTrack,
         timeMillis: Long,
         durationMillis: Long?,
         continuing: Boolean,
@@ -2436,7 +2320,7 @@ internal class AppStatePlaybackCoordinator(
 
     private suspend fun scrobbleIfNeeded(
         scrobbledTrackKeys: MutableSet<String>,
-        track: PlexTrackStream,
+        track: MusicTrack,
         timeMillis: Long,
         durationMillis: Long?,
     ) {
@@ -2455,7 +2339,7 @@ internal class AppStatePlaybackCoordinator(
         }
     }
 
-    private suspend fun recordTrackPlaybackSafely(track: PlexTrackStream) {
+    private suspend fun recordTrackPlaybackSafely(track: MusicTrack) {
         withContext(Dispatchers.IO) {
             runCatching {
                 state.albumLocalStore.recordTrackPlayback(track.sourceId, track.ratingKey)
@@ -2464,10 +2348,10 @@ internal class AppStatePlaybackCoordinator(
     }
 
     private fun resolveActiveTrack(
-        tracks: List<PlexTrackStream>,
+        tracks: List<MusicTrack>,
         latestMiniPlayerState: MiniPlayerState,
         status: SonosPlaybackStatus,
-    ): PlexTrackStream? {
+    ): MusicTrack? {
         val normalizedCurrentUri = playbackUrlIdentity(status.currentTrackUri.orEmpty())
         if (normalizedCurrentUri.isNotBlank()) {
             tracks.firstOrNull { playbackUrlIdentity(it.streamUrl) == normalizedCurrentUri }?.let { return it }
@@ -2498,7 +2382,7 @@ internal class AppStatePlaybackCoordinator(
         }
     }
 
-    private fun SonosPlaybackStatus.toPlexPlaybackState(): String = when {
+    private fun SonosPlaybackStatus.toReportedPlaybackState(): String = when {
         transportState.equals("PLAYING", ignoreCase = true) -> "playing"
         transportState.equals("PAUSED_PLAYBACK", ignoreCase = true) -> "paused"
         transportState.equals("TRANSITIONING", ignoreCase = true) -> "buffering"
@@ -2506,9 +2390,9 @@ internal class AppStatePlaybackCoordinator(
     }
 
     private fun resolveAlbumForTrack(
-        track: PlexTrackStream,
-        fallbackAlbum: PlexAlbum? = null,
-    ): PlexAlbum {
+        track: MusicTrack,
+        fallbackAlbum: MusicAlbum? = null,
+    ): MusicAlbum {
         val matchedAlbum = track.albumRatingKey?.let { ratingKey ->
             state.allAlbums.firstOrNull { album -> album.ratingKey == ratingKey && album.sourceId == track.sourceId }
         }
@@ -2517,7 +2401,7 @@ internal class AppStatePlaybackCoordinator(
         }
 
         val fallback = fallbackAlbum ?: state.selectedAlbum
-        return PlexAlbum(
+        return MusicAlbum(
             ratingKey = track.albumRatingKey ?: fallback?.ratingKey ?: track.ratingKey,
             title = track.albumTitle ?: fallback?.title ?: track.title,
             artistName = track.artistName ?: fallback?.artistName,
@@ -2526,7 +2410,7 @@ internal class AppStatePlaybackCoordinator(
             userRating = fallback?.userRating,
             addedAtEpochSeconds = fallback?.addedAtEpochSeconds,
             lastViewedAtEpochSeconds = fallback?.lastViewedAtEpochSeconds,
-            section = fallback?.section ?: PlexSection("", "", ""),
+            section = fallback?.section ?: LibrarySection("", "", ""),
             sourceId = track.sourceId.ifBlank { fallback?.sourceId.orEmpty() },
         )
     }

@@ -70,14 +70,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import kotlin.math.roundToLong
-import com.lux032.musicbridge.plex.ArtistRef
-import com.lux032.musicbridge.plex.PlexAlbum
-import com.lux032.musicbridge.plex.PlexAlbumTracksResult
-import com.lux032.musicbridge.plex.PlexTrackStream
-import com.lux032.musicbridge.plex.isFavorite
-import com.lux032.musicbridge.plex.playbackUrlIdentity
+import com.lux032.musicbridge.music.ArtistRef
+import com.lux032.musicbridge.music.MusicAlbum
+import com.lux032.musicbridge.music.AlbumTracksResult
+import com.lux032.musicbridge.music.MusicTrack
+import com.lux032.musicbridge.music.isFavorite
+import com.lux032.musicbridge.music.playbackUrlIdentity
 import com.lux032.musicbridge.music.LyricsTranslationSettings
-import com.lux032.musicbridge.plex.willTranscodeLocally
+import com.lux032.musicbridge.music.willTranscodeLocally
 import com.lux032.musicbridge.music.Music032LocalTranscode
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
@@ -112,9 +112,9 @@ internal fun PlaybackDetailSection(
     onNext: () -> Unit,
     onTogglePause: (MiniPlayerState) -> Unit,
     onSeek: (MiniPlayerState, Long) -> Unit,
-    onAlbumClick: (PlexAlbum) -> Unit,
+    onAlbumClick: (MusicAlbum) -> Unit,
     onArtistClick: (String?, List<ArtistRef>) -> Unit,
-    onToggleTrackFavorite: (PlexTrackStream) -> Unit,
+    onToggleTrackFavorite: (MusicTrack) -> Unit,
     onSelectTrack: (Int) -> Unit,
     onSelectPlaybackMode: (PlaybackMode) -> Unit,
     onSelectTarget: (PlaybackTarget) -> Unit,
@@ -124,7 +124,7 @@ internal fun PlaybackDetailSection(
     lyricsRepository: TrackLyricsRepository,
     lyricsTranslationSettings: LyricsTranslationSettings,
     onLyricsTranslationSettingsChange: (LyricsTranslationSettings) -> Unit,
-    loadTrackWorks: suspend (PlexTrackStream) -> List<com.lux032.musicbridge.music.Music032TrackWork> = { emptyList() },
+    loadTrackWorks: suspend (MusicTrack) -> List<com.lux032.musicbridge.music.Music032TrackWork> = { emptyList() },
     onOpenWork: (String, Long) -> Unit = { _, _ -> },
     loadWorkInfo: suspend (String, Long) -> com.lux032.musicbridge.music.Music032Work? = { _, _ -> null },
     sonosVolume: Float = 0f,
@@ -169,7 +169,7 @@ internal fun PlaybackDetailSection(
     var sleepTimerMinutes by remember { mutableIntStateOf(30) }
     var sleepTimerInputError by remember { mutableStateOf<String?>(null) }
     var optimisticFavorite by remember(currentTrack.sourceId, currentTrack.ratingKey) { mutableStateOf(currentTrack.isFavorite) }
-    // 032 servers resolve lyrics (and translate them); Plex falls back to the in-app lookup.
+    // 032 servers resolve lyrics (and translate them); older servers fall back to the in-app lookup.
     val lyricsState = rememberTrackLyricsState(currentTrack, lyricsRepository, lyricsTranslationSettings)
     LaunchedEffect(currentTrack.isFavorite, isFavoriteLoading) {
         if (!isFavoriteLoading) optimisticFavorite = currentTrack.isFavorite
@@ -1305,7 +1305,7 @@ internal fun originalAudioQualityBadges(codec: String?, bitDepth: Int?, sampleRa
     }
 }
 
-private fun PlexTrackStream.outputQualityBadges(
+private fun MusicTrack.outputQualityBadges(
     target: PlaybackTarget,
     policy: LocalPlaybackPolicy,
     cachedOriginalTrackKeys: Set<String>,
@@ -1322,15 +1322,15 @@ private fun PlexTrackStream.outputQualityBadges(
     }
 }
 
-/** 本机转码实际使用的 Opus 码率：032 按服务端白名单映射，Plex 直接用设置值。 */
-private fun PlexTrackStream.localTranscodeOpusKbps(policy: LocalPlaybackPolicy): Int =
+/** 本机转码实际使用的 Opus 码率：032 按服务端白名单映射，其他来源直接用设置值。 */
+private fun MusicTrack.localTranscodeOpusKbps(policy: LocalPlaybackPolicy): Int =
     if (Music032LocalTranscode.isMusic032Track(this)) {
         Music032LocalTranscode.opusBitrate(policy.opusBitrate.kbps, Music032LocalTranscode.capabilitiesFor(this))
     } else {
         policy.opusBitrate.kbps
     }
 
-private fun PlexTrackStream.trackDetailText(
+private fun MusicTrack.trackDetailText(
     target: PlaybackTarget,
     policy: LocalPlaybackPolicy,
     cachedOriginalTrackKeys: Set<String>,
@@ -1384,7 +1384,7 @@ private fun PlayerToolButton(
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun AlbumDetailSection(
-    trackResult: PlexAlbumTracksResult?,
+    trackResult: AlbumTracksResult?,
     outputTargetName: String,
     isPlaybackLoading: Boolean,
     isFavoriteLoading: Boolean,
@@ -1393,18 +1393,18 @@ internal fun AlbumDetailSection(
     trackListState: LazyListState = rememberLazyListState(),
     onReturnHome: () -> Unit,
     onArtistClick: (String?, List<ArtistRef>) -> Unit,
-    onToggleAlbumFavorite: (PlexAlbum) -> Unit,
-    onToggleTrackFavorite: (PlexTrackStream) -> Unit,
-    onQueueAlbum: (PlexAlbum, QueuePlacement) -> Unit,
-    onQueueTrack: (PlexTrackStream, QueuePlacement) -> Unit,
+    onToggleAlbumFavorite: (MusicAlbum) -> Unit,
+    onToggleTrackFavorite: (MusicTrack) -> Unit,
+    onQueueAlbum: (MusicAlbum, QueuePlacement) -> Unit,
+    onQueueTrack: (MusicTrack, QueuePlacement) -> Unit,
     downloadedTrackKeys: Set<String> = emptySet(),
     downloadProgress: Map<String, Float> = emptyMap(),
-    onDownloadTrack: (PlexTrackStream) -> Unit = {},
-    onDeleteDownloadedTrack: (PlexTrackStream) -> Unit = {},
-    onDownloadAlbum: (PlexAlbum, List<PlexTrackStream>) -> Unit = { _, _ -> },
-    onDeleteDownloadedAlbum: (PlexAlbum) -> Unit = {},
-    onPlayAlbum: (PlexAlbumTracksResult) -> Unit,
-    onPlayTrack: (PlexAlbum, PlexTrackStream) -> Unit,
+    onDownloadTrack: (MusicTrack) -> Unit = {},
+    onDeleteDownloadedTrack: (MusicTrack) -> Unit = {},
+    onDownloadAlbum: (MusicAlbum, List<MusicTrack>) -> Unit = { _, _ -> },
+    onDeleteDownloadedAlbum: (MusicAlbum) -> Unit = {},
+    onPlayAlbum: (AlbumTracksResult) -> Unit,
+    onPlayTrack: (MusicAlbum, MusicTrack) -> Unit,
     nowPlaying: NowPlayingMarker? = LocalNowPlaying.current,
 ) {
     val currentTrackResult = trackResult
@@ -1560,20 +1560,20 @@ internal fun AlbumDetailSection(
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun AlbumDetailHeroWide(
-    trackResult: PlexAlbumTracksResult,
+    trackResult: AlbumTracksResult,
     outputTargetName: String,
     isPlaybackLoading: Boolean,
     isFavoriteLoading: Boolean,
     showAlbumQueueMenu: Boolean,
     onShowAlbumQueueMenuChange: (Boolean) -> Unit,
     onArtistClick: (String?, List<ArtistRef>) -> Unit,
-    onToggleAlbumFavorite: (PlexAlbum) -> Unit,
-    onQueueAlbum: (PlexAlbum, QueuePlacement) -> Unit,
-    onPlayAlbum: (PlexAlbumTracksResult) -> Unit,
+    onToggleAlbumFavorite: (MusicAlbum) -> Unit,
+    onQueueAlbum: (MusicAlbum, QueuePlacement) -> Unit,
+    onPlayAlbum: (AlbumTracksResult) -> Unit,
     downloadedTrackKeys: Set<String> = emptySet(),
     downloadProgress: Map<String, Float> = emptyMap(),
-    onDownloadAlbum: (PlexAlbum, List<PlexTrackStream>) -> Unit = { _, _ -> },
-    onDeleteDownloadedAlbum: (PlexAlbum) -> Unit = {},
+    onDownloadAlbum: (MusicAlbum, List<MusicTrack>) -> Unit = { _, _ -> },
+    onDeleteDownloadedAlbum: (MusicAlbum) -> Unit = {},
 ) {
     val layoutInfo = LocalAppLayoutInfo.current
     val palette = LocalArtworkPalette.current
@@ -1700,17 +1700,17 @@ private fun AlbumDetailHeroWide(
  */
 @Composable
 private fun AlbumActionRow(
-    trackResult: PlexAlbumTracksResult,
+    trackResult: AlbumTracksResult,
     outputTargetName: String,
     isPlaybackLoading: Boolean,
     isFavoriteLoading: Boolean,
     isAllDownloaded: Boolean,
     isAnyDownloading: Boolean,
-    onPlayAlbum: (PlexAlbumTracksResult) -> Unit,
-    onToggleAlbumFavorite: (PlexAlbum) -> Unit,
-    onDownloadAlbum: (PlexAlbum, List<PlexTrackStream>) -> Unit,
+    onPlayAlbum: (AlbumTracksResult) -> Unit,
+    onToggleAlbumFavorite: (MusicAlbum) -> Unit,
+    onDownloadAlbum: (MusicAlbum, List<MusicTrack>) -> Unit,
     onRequestDeleteDownload: () -> Unit,
-    onQueueAlbum: (PlexAlbum, QueuePlacement) -> Unit,
+    onQueueAlbum: (MusicAlbum, QueuePlacement) -> Unit,
     onBeforeQueueMenu: () -> Unit = {},
 ) {
     val palette = LocalArtworkPalette.current
@@ -1790,20 +1790,20 @@ private fun AlbumActionRow(
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun AlbumDetailHeroCompact(
-    trackResult: PlexAlbumTracksResult,
+    trackResult: AlbumTracksResult,
     outputTargetName: String,
     isPlaybackLoading: Boolean,
     isFavoriteLoading: Boolean,
     showAlbumQueueMenu: Boolean,
     onShowAlbumQueueMenuChange: (Boolean) -> Unit,
     onArtistClick: (String?, List<ArtistRef>) -> Unit,
-    onToggleAlbumFavorite: (PlexAlbum) -> Unit,
-    onQueueAlbum: (PlexAlbum, QueuePlacement) -> Unit,
-    onPlayAlbum: (PlexAlbumTracksResult) -> Unit,
+    onToggleAlbumFavorite: (MusicAlbum) -> Unit,
+    onQueueAlbum: (MusicAlbum, QueuePlacement) -> Unit,
+    onPlayAlbum: (AlbumTracksResult) -> Unit,
     downloadedTrackKeys: Set<String> = emptySet(),
     downloadProgress: Map<String, Float> = emptyMap(),
-    onDownloadAlbum: (PlexAlbum, List<PlexTrackStream>) -> Unit = { _, _ -> },
-    onDeleteDownloadedAlbum: (PlexAlbum) -> Unit = {},
+    onDownloadAlbum: (MusicAlbum, List<MusicTrack>) -> Unit = { _, _ -> },
+    onDeleteDownloadedAlbum: (MusicAlbum) -> Unit = {},
 ) {
     val palette = LocalArtworkPalette.current
     val album = trackResult.album
@@ -1965,17 +1965,17 @@ private fun DeleteAlbumDownloadDialog(onConfirm: () -> Unit, onDismiss: () -> Un
 @Composable
 private fun AlbumTrackRow(
     index: Int,
-    album: PlexAlbum,
-    track: PlexTrackStream,
+    album: MusicAlbum,
+    track: MusicTrack,
     isPlaybackLoading: Boolean,
     isFavoriteLoading: Boolean,
     downloadedTrackKeys: Set<String> = emptySet(),
     downloadProgress: Map<String, Float> = emptyMap(),
-    onDownloadTrack: (PlexTrackStream) -> Unit = {},
-    onDeleteDownloadedTrack: (PlexTrackStream) -> Unit = {},
-    onToggleTrackFavorite: (PlexTrackStream) -> Unit,
-    onQueueTrack: (PlexTrackStream, QueuePlacement) -> Unit,
-    onPlayTrack: (PlexAlbum, PlexTrackStream) -> Unit,
+    onDownloadTrack: (MusicTrack) -> Unit = {},
+    onDeleteDownloadedTrack: (MusicTrack) -> Unit = {},
+    onToggleTrackFavorite: (MusicTrack) -> Unit,
+    onQueueTrack: (MusicTrack, QueuePlacement) -> Unit,
+    onPlayTrack: (MusicAlbum, MusicTrack) -> Unit,
     nowPlaying: NowPlayingMarker? = null,
 ) {
     var showQueueMenu by remember { mutableStateOf(false) }
@@ -2352,15 +2352,15 @@ internal fun BottomMiniPlayer(
 internal suspend fun playAlbumSequentially(
     sonosController: SonosController,
     room: SonosRoom,
-    trackResult: PlexAlbumTracksResult,
+    trackResult: AlbumTracksResult,
     startIndex: Int = 0,
     initialPositionMillis: Long = 0L,
-    prepareTrackUrl: suspend (PlexTrackStream) -> String = { it.streamUrl },
-    getTracks: () -> List<PlexTrackStream> = { trackResult.tracks },
+    prepareTrackUrl: suspend (MusicTrack) -> String = { it.streamUrl },
+    getTracks: () -> List<MusicTrack> = { trackResult.tracks },
     getNextIndex: (Int) -> Int?,
-    onTrackChanged: (Int, PlexTrackStream, Long) -> Unit,
-    preparePlayback: (suspend (PlexTrackStream) -> SonosPlayback)? = null,
-    onTrackPushed: (PlexTrackStream, SonosPlayback) -> Unit = { _, _ -> },
+    onTrackChanged: (Int, MusicTrack, Long) -> Unit,
+    preparePlayback: (suspend (MusicTrack) -> SonosPlayback)? = null,
+    onTrackPushed: (MusicTrack, SonosPlayback) -> Unit = { _, _ -> },
 ) {
     val initialTracks = getTracks()
     require(initialTracks.isNotEmpty()) { "专辑里没有可播放的单曲。" }
@@ -2390,8 +2390,8 @@ internal suspend fun playAlbumSequentially(
             mimeType = mimeType,
         )
         onTrackPushed(track, playback)
-        // Plex universal transcodes are live responses and do not support reliable Sonos
-        // REL_TIME seeking. Their source offset is already encoded in playbackUrl.
+        // Live transcodes do not support reliable Sonos REL_TIME seeking; their source
+        // offset is already encoded in playbackUrl.
         if (startPositionMillis > 0L && !positionIsEncodedInUrl) {
             sonosController.seek(room, (startPositionMillis / 1_000L).toInt())
         }
@@ -2454,8 +2454,8 @@ internal suspend fun waitForTrackToFinish(
         }
 
         val relTimeSeconds = status.relTimeSeconds
-        // Sonos commonly reports 00:00:00 while a Plex transcode is starting. A zero
-        // duration is unknown, not a completed zero-length track; prefer Plex metadata
+        // Sonos commonly reports 00:00:00 while a live transcode is starting. A zero
+        // duration is unknown, not a completed zero-length track; prefer server metadata
         // until Sonos publishes a positive duration.
         val trackDurationSeconds = resolvePlaybackDurationSeconds(
             sonosDurationSeconds = status.trackDurationSeconds,
@@ -2513,8 +2513,8 @@ private fun formatSleepTimerCountdown(remainingMillis: Long): String {
     }
 }
 
-private fun PlexTrackStream.toDisplayAlbum(fallbackAlbum: PlexAlbum): PlexAlbum =
-    PlexAlbum(
+private fun MusicTrack.toDisplayAlbum(fallbackAlbum: MusicAlbum): MusicAlbum =
+    MusicAlbum(
         ratingKey = albumRatingKey ?: fallbackAlbum.ratingKey,
         title = albumTitle ?: fallbackAlbum.title,
         artistName = artistName ?: fallbackAlbum.artistName,

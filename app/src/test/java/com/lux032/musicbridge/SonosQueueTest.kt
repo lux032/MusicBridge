@@ -1,6 +1,6 @@
 package com.lux032.musicbridge
 
-import com.lux032.musicbridge.plex.PlexTrackStream
+import com.lux032.musicbridge.music.MusicTrack
 import com.lux032.musicbridge.sonos.SonosController
 import com.lux032.musicbridge.sonos.SonosPlaybackStatus
 import com.lux032.musicbridge.sonos.SonosQueueBrowseEntry
@@ -18,7 +18,7 @@ import org.junit.Test
 import java.net.InetSocketAddress
 
 class SonosQueueTest {
-    private fun track(id: String, source: String = "032") = PlexTrackStream(
+    private fun track(id: String, source: String = "032") = MusicTrack(
         id, "Track $id", "http://10.0.0.2:4533/api/v1/tracks/$id/stream?mediaToken=t", "/api/v1/tracks/$id/stream", 180_000L, null,
         albumTitle = "Album", artistName = "Singer", sourceId = source,
     )
@@ -33,19 +33,19 @@ class SonosQueueTest {
     @Test fun queueModeOnlyFor032Tracks() {
         val tracks = listOf(track("1"), track("2"))
         assertTrue(canUseSonosQueue(tracks) { it.sourceId == "032" })
-        assertFalse(canUseSonosQueue(tracks + track("3", source = "plex")) { it.sourceId == "032" })
+        assertFalse(canUseSonosQueue(tracks + track("3", source = "other")) { it.sourceId == "032" })
         assertFalse(canUseSonosQueue(emptyList()) { true })
     }
 
-    @Test fun plexStreamsNeverQualifyForQueueMode() {
-        val is032 = { t: PlexTrackStream -> com.lux032.musicbridge.music.Music032TranscodeUrls.isOriginalStream(t.streamUrl) }
-        val plex = PlexTrackStream("99", "Plex", "http://10.0.0.3:32400/library/parts/99/file.flac?X-Plex-Token=x",
-            "/library/parts/99/file.flac", 1L, null, sourceId = "plex")
-        val plexLive = plex.copy(streamUrl = "http://10.0.0.3:32400/music/:/transcode/universal/start.mp3?path=%2Flibrary%2Fmetadata%2F99&X-Plex-Token=x")
+    @Test fun foreignStreamsNeverQualifyForQueueMode() {
+        val is032 = { t: MusicTrack -> com.lux032.musicbridge.music.Music032TranscodeUrls.isOriginalStream(t.streamUrl) }
+        val foreign = MusicTrack("99", "Foreign", "http://10.0.0.3:32400/library/parts/99/file.flac?X-Plex-Token=x",
+            "/library/parts/99/file.flac", 1L, null, sourceId = "other")
+        val foreignLive = foreign.copy(streamUrl = "http://10.0.0.3:32400/music/:/transcode/universal/start.mp3?path=%2Flibrary%2Fmetadata%2F99&X-Plex-Token=x")
         assertTrue(canUseSonosQueue(listOf(track("1")), is032))
-        assertFalse(canUseSonosQueue(listOf(plex), is032))
-        assertFalse(canUseSonosQueue(listOf(plexLive), is032))
-        assertFalse(canUseSonosQueue(listOf(track("1"), plex), is032))
+        assertFalse(canUseSonosQueue(listOf(foreign), is032))
+        assertFalse(canUseSonosQueue(listOf(foreignLive), is032))
+        assertFalse(canUseSonosQueue(listOf(track("1"), foreign), is032))
     }
 
     @Test fun sessionMirrorsTrackList() {
@@ -206,7 +206,7 @@ class SonosQueueTest {
         // A subpath deployment behind a reverse proxy.
         val sub = resolveAdoptableQueue(browsed("https://h/music/api/v1/tracks/7/stream?mediaToken=media-tok"), servers)!!
         assertEquals("7", sub.single().ratingKey)
-        // Any foreign entry (Plex, streaming service, no token) leaves the speaker alone.
+        // Any foreign entry (other server, streaming service, no token) leaves the speaker alone.
         assertNull(resolveAdoptableQueue(browsed(
             "http://192.168.50.10:4533/api/v1/tracks/12/stream?mediaToken=media-tok",
             "http://10.0.0.3:32400/library/parts/99/file.flac?X-Plex-Token=x",

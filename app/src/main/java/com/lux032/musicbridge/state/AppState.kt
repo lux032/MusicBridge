@@ -12,20 +12,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.lifecycle.AndroidViewModel
-import com.lux032.musicbridge.plex.ArtistRef
-import com.lux032.musicbridge.plex.PlexAlbum
-import com.lux032.musicbridge.plex.PlexAlbumTracksResult
-import com.lux032.musicbridge.plex.PlexAuthConfig
-import com.lux032.musicbridge.plex.PlexClient
-import com.lux032.musicbridge.plex.PlexPlaylist
-import com.lux032.musicbridge.plex.PlexPlaylistTracksResult
-import com.lux032.musicbridge.plex.PlexTrackStream
-import com.lux032.musicbridge.plex.PlexTranscodeProxy
-import com.lux032.musicbridge.plex.isFavorite
-import com.lux032.musicbridge.plex.SonicCapableSource
-import com.lux032.musicbridge.ai.AiLlmClient
-import com.lux032.musicbridge.ai.AiSettings
-import com.lux032.musicbridge.ai.HybridRecommender
+import com.lux032.musicbridge.music.ArtistRef
+import com.lux032.musicbridge.music.MusicAlbum
+import com.lux032.musicbridge.music.AlbumTracksResult
+import com.lux032.musicbridge.music.MusicPlaylist
+import com.lux032.musicbridge.music.PlaylistTracksResult
+import com.lux032.musicbridge.music.MusicTrack
+import com.lux032.musicbridge.music.isFavorite
 import com.lux032.musicbridge.local.LocalAudioCache
 import com.lux032.musicbridge.local.LocalPlaybackEngine
 import com.lux032.musicbridge.local.LocalPlaybackService
@@ -33,7 +26,9 @@ import com.lux032.musicbridge.local.NetworkQualityMonitor
 import com.lux032.musicbridge.music.LyricsTranslationSettings
 import com.lux032.musicbridge.music.MediaTokenProbeResult
 import com.lux032.musicbridge.music.Music032CapabilitiesStore
+import com.lux032.musicbridge.music.Music032AiPlaylistJson
 import com.lux032.musicbridge.music.Music032Client
+import com.lux032.musicbridge.music.Music032HttpException
 import com.lux032.musicbridge.music.Music032DailyMix
 import com.lux032.musicbridge.music.Music032PlaybackReporter
 import com.lux032.musicbridge.music.Music032ReporterApi
@@ -57,7 +52,6 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 import java.util.UUID
 
 /** Cursor save cadence while playing; bounds what a process kill can lose. */
@@ -81,10 +75,8 @@ class AppState(
     internal val context = application.applicationContext
     internal val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     internal val appPreferences = AppPreferences(context)
-    internal val plexClientIdentifier = appPreferences.loadOrCreatePlexClientIdentifier()
     internal val albumLocalStore = AlbumLocalStore(context)
     internal val sonosController = SonosController()
-    internal val plexTranscodeProxy = PlexTranscodeProxy.getInstance(context)
     internal val networkQualityMonitor = NetworkQualityMonitor(context)
     var currentNetworkIsWifi by mutableStateOf(networkQualityMonitor.currentIsWifi())
         internal set
@@ -126,7 +118,7 @@ class AppState(
     var albumFavoritesOnly by mutableStateOf(appPreferences.loadAlbumFavoritesOnly())
         private set
 
-    /** Lyrics come from the 032 server (or the in-app lookup for Plex); see [TrackLyricsRepository]. */
+    /** Lyrics come from the 032 server (or the in-app lookup); see [TrackLyricsRepository]. */
     internal val lyricsRepository = TrackLyricsRepository { sourceId -> runCatching { clientFor(sourceId) }.getOrNull() }
     internal var lyricsTranslationSettings by mutableStateOf(
         appPreferences.loadLyricsTranslationSettings(Strings.defaultLyricsLanguage),
@@ -240,15 +232,15 @@ class AppState(
     var isSonosLoading by mutableStateOf(false)
     var errorMessage by mutableStateOf<String?>(null)
     var actionMessage by mutableStateOf<String?>(null)
-    var allAlbums by mutableStateOf<List<PlexAlbum>>(emptyList())
+    var allAlbums by mutableStateOf<List<MusicAlbum>>(emptyList())
     var hasLoadedLocalAlbums by mutableStateOf(false)
     var lastAlbumSyncEpochMillis by mutableStateOf(appPreferences.loadLastAlbumSyncEpochMillis(initialPreferences.id))
     var albumSearchQuery by mutableStateOf("")
-    var albumSearchResults by mutableStateOf<List<PlexAlbum>>(emptyList())
+    var albumSearchResults by mutableStateOf<List<MusicAlbum>>(emptyList())
     var isAlbumSearchLoading by mutableStateOf(false)
-    var selectedAlbum by mutableStateOf<PlexAlbum?>(null)
+    var selectedAlbum by mutableStateOf<MusicAlbum?>(null)
     var selectedArtistName by mutableStateOf<String?>(null)
-    /** 032 artist id of the open artist page (sync model identity); null = Plex name lookup. */
+    /** 032 artist id of the open artist page (sync model identity); null = name lookup. */
     var selectedArtistKey by mutableStateOf<String?>(null)
     /** True while an artist link is being resolved against the server (shows a loader). */
     var isResolvingArtist by mutableStateOf(false)
@@ -256,9 +248,9 @@ class AppState(
     var remoteArtist by mutableStateOf<ArtistSummary?>(null)
     /** Multi-artist link awaiting the user's pick (e.g. "A, B" duet credits). */
     var artistChoices by mutableStateOf<List<ArtistRef>>(emptyList())
-    var artistTracks by mutableStateOf<List<PlexTrackStream>>(emptyList())
+    var artistTracks by mutableStateOf<List<MusicTrack>>(emptyList())
     var isArtistTracksLoading by mutableStateOf(false)
-    var artistTopTracks by mutableStateOf<List<PlexTrackStream>>(emptyList())
+    var artistTopTracks by mutableStateOf<List<MusicTrack>>(emptyList())
     var artistTopTracksArePopular by mutableStateOf(false)
     var artistTracksTotal by mutableStateOf(0)
     var artistTracksOffset by mutableStateOf(0)
@@ -272,7 +264,7 @@ class AppState(
     var artistFavoritesOnly by mutableStateOf(appPreferences.loadArtistFavoritesOnly())
         private set
     var artistSearchQuery by mutableStateOf("")
-    var trackResult by mutableStateOf<PlexAlbumTracksResult?>(null)
+    var trackResult by mutableStateOf<AlbumTracksResult?>(null)
     var sonosRooms by mutableStateOf<List<SonosRoom>>(emptyList())
     var sonosDiscoveryAttempted by mutableStateOf(false)
     var sonosVolume by mutableFloatStateOf(0f)
@@ -291,16 +283,14 @@ class AppState(
     var recentPlayedAlbumKeys by mutableStateOf(appPreferences.loadRecentPlayedAlbumKeys(initialPreferences.id))
     var artists by mutableStateOf<List<ArtistSummary>>(emptyList())
     var artistAlbumsRevision by mutableIntStateOf(0)
-    var playlists by mutableStateOf<List<PlexPlaylist>>(emptyList())
-    var selectedPlaylist by mutableStateOf<PlexPlaylist?>(null)
-    var playlistTrackResult by mutableStateOf<PlexPlaylistTracksResult?>(null)
+    var playlists by mutableStateOf<List<MusicPlaylist>>(emptyList())
+    var selectedPlaylist by mutableStateOf<MusicPlaylist?>(null)
+    var playlistTrackResult by mutableStateOf<PlaylistTracksResult?>(null)
     var isPlaylistSyncing by mutableStateOf(false)
         internal set
     var playlistSyncProgress by mutableStateOf(0 to 0)
         internal set
-    var favoriteTracks by mutableStateOf<List<PlexTrackStream>>(emptyList())
-    var aiSettings by mutableStateOf(appPreferences.loadAiSettings())
-        private set
+    var favoriteTracks by mutableStateOf<List<MusicTrack>>(emptyList())
     var isAiGenerating by mutableStateOf(false)
         private set
     private var aiGenerationJob: Job? = null
@@ -333,11 +323,11 @@ class AppState(
     // Derived collections are wrapped in derivedStateOf so the filter/sort runs only
     // when their snapshot inputs (allAlbums / recentPlayedAlbumKeys) actually change,
     // instead of re-sorting the whole library on every recomposition that reads them.
-    val favoriteAlbums: List<PlexAlbum> by derivedStateOf {
+    val favoriteAlbums: List<MusicAlbum> by derivedStateOf {
         allAlbums
-            .filter(PlexAlbum::isFavorite)
+            .filter(MusicAlbum::isFavorite)
             .sortedWith(
-                compareBy<PlexAlbum> { album ->
+                compareBy<MusicAlbum> { album ->
                     recentPlayedAlbumKeys.indexOf(album.ratingKey).takeIf { it >= 0 } ?: Int.MAX_VALUE
                 }
                     .thenByDescending { it.lastViewedAtEpochSeconds ?: 0L }
@@ -345,13 +335,13 @@ class AppState(
             )
     }
 
-    val recentPlayedAlbums: List<PlexAlbum> by derivedStateOf {
+    val recentPlayedAlbums: List<MusicAlbum> by derivedStateOf {
         allAlbums
             .filter { album ->
                 album.ratingKey in recentPlayedAlbumKeys || (album.lastViewedAtEpochSeconds ?: 0L) > 0L
             }
             .sortedWith(
-                compareBy<PlexAlbum> { album ->
+                compareBy<MusicAlbum> { album ->
                     recentPlayedAlbumKeys.indexOf(album.ratingKey).takeIf { it >= 0 } ?: Int.MAX_VALUE
                 }
                     .thenByDescending { it.lastViewedAtEpochSeconds ?: 0L }
@@ -360,7 +350,7 @@ class AppState(
     }
 
     /** Record the actual current album, not the album used to seed a mixed queue. */
-    internal fun recordPlayedAlbum(album: PlexAlbum) {
+    internal fun recordPlayedAlbum(album: MusicAlbum) {
         val keys = appPreferences.recordPlayedAlbum(album)
         // Playback may continue on another server while its library is not selected.
         if (album.sourceId == connectionPreferences.id) {
@@ -368,10 +358,10 @@ class AppState(
         }
     }
 
-    val recentAddedAlbums: List<PlexAlbum> by derivedStateOf {
+    val recentAddedAlbums: List<MusicAlbum> by derivedStateOf {
         allAlbums
             .sortedWith(
-                compareByDescending<PlexAlbum> { it.addedAtEpochSeconds ?: 0L }
+                compareByDescending<MusicAlbum> { it.addedAtEpochSeconds ?: 0L }
                     .thenBy { it.title.lowercase() }
             )
     }
@@ -443,13 +433,13 @@ class AppState(
     fun loadHomeWorks(force: Boolean = false) = worksCoordinator.loadHome(force = force)
     fun rotateHomeWorks() = worksCoordinator.loadHome(next = true)
     fun openWork(sourceId: String, workId: Long) = worksCoordinator.open(sourceId, workId)
-    suspend fun fetchTrackWorks(track: PlexTrackStream) = worksCoordinator.trackWorks(track)
+    suspend fun fetchTrackWorks(track: MusicTrack) = worksCoordinator.trackWorks(track)
     suspend fun fetchWorkInfo(sourceId: String, workId: Long) = worksCoordinator.info(sourceId, workId)
     suspend fun fetchWork(sourceId: String, workId: Long) = worksCoordinator.detail(sourceId, workId)
     suspend fun fetchWorkSeries(sourceId: String, seriesId: Long) = worksCoordinator.series(sourceId, seriesId)
     fun playWork(sourceId: String, work: com.lux032.musicbridge.music.Music032Work, shuffle: Boolean = false, series: Boolean = false) =
         worksCoordinator.play(sourceId, work, shuffle, series)
-    fun enqueueWorkTracks(tracks: List<PlexTrackStream>, title: String) =
+    fun enqueueWorkTracks(tracks: List<MusicTrack>, title: String) =
         playbackCoordinator.enqueueTracks(tracks, QueuePlacement.End, title)
 
     fun openPlaybackDetail() {
@@ -489,19 +479,6 @@ class AppState(
         val fingerprint = ClientFingerprint(preferences, opusTranscodeMode, sonosHiResTranscodeMode)
         musicSourceClients[cacheKey]?.takeIf { it.fingerprint == fingerprint }?.let { return it.client }
         return when (preferences.type) {
-            MusicServerType.Plex -> PlexClient(
-                PlexAuthConfig(
-                    username = preferences.username,
-                    password = preferences.password,
-                    preferredServer = preferences.server,
-                    baseUrl = preferences.baseUrl,
-                    token = preferences.token,
-                    sourceId = preferences.id,
-                    clientIdentifier = plexClientIdentifier,
-                    opusTranscodeMode = opusTranscodeMode,
-                    sonosHiResTranscodeMode = sonosHiResTranscodeMode.forPlex(),
-                )
-            )
             MusicServerType.Music032 -> Music032Client(preferences)
         }.also { musicSourceClients[cacheKey] = CachedMusicSourceClient(fingerprint, it) }
     }
@@ -565,17 +542,17 @@ class AppState(
 
     fun totalDownloadedBytes(): Long = albumLocalStore.totalDownloadedBytes()
 
-    fun isTrackDownloaded(track: PlexTrackStream): Boolean =
+    fun isTrackDownloaded(track: MusicTrack): Boolean =
         offlineDownloadManager.isTrackDownloaded(track.sourceId, track.ratingKey)
 
-    fun downloadTrack(track: PlexTrackStream) {
+    fun downloadTrack(track: MusicTrack) {
         actionMessage = Strings.downloadStarted(track.title)
         offlineDownloadManager.enqueueDownload(track) { success ->
             actionMessage = if (success) Strings.downloadSuccess(track.title) else Strings.downloadFailed(track.title)
         }
     }
 
-    fun deleteDownloadedTrack(track: PlexTrackStream) {
+    fun deleteDownloadedTrack(track: MusicTrack) {
         offlineDownloadManager.deleteDownload(track.sourceId, track.ratingKey)
         actionMessage = Strings.deleteDownloadedSuccess(track.title)
     }
@@ -586,8 +563,8 @@ class AppState(
     }
 
     fun openDownloadedTracks() = libraryCoordinator.openDownloadedTracks()
-    fun downloadAlbum(album: PlexAlbum, tracks: List<PlexTrackStream>) = libraryCoordinator.downloadAlbum(album, tracks)
-    fun deleteDownloadedAlbum(album: PlexAlbum) = libraryCoordinator.deleteDownloadedAlbum(album)
+    fun downloadAlbum(album: MusicAlbum, tracks: List<MusicTrack>) = libraryCoordinator.downloadAlbum(album, tracks)
+    fun deleteDownloadedAlbum(album: MusicAlbum) = libraryCoordinator.deleteDownloadedAlbum(album)
     fun deleteDownloadedAlbum(group: DownloadedAlbumGroup) = libraryCoordinator.deleteDownloadedAlbum(group)
     fun playDownloadedAlbum(group: DownloadedAlbumGroup, startIndex: Int = 0) = libraryCoordinator.playDownloadedAlbum(group, startIndex)
     fun shuffleAllDownloadedTracks() = libraryCoordinator.shuffleAllDownloadedTracks()
@@ -651,10 +628,7 @@ class AppState(
         ).normalizedForStorage()
         val index = serverProfiles.indexOfFirst { it.id == normalized.id }
         if (!normalized.hasCredentials()) {
-            errorMessage = when (normalized.type) {
-                MusicServerType.Plex -> "请填写 Plex Token，或填写 Plex 用户名和密码。"
-                MusicServerType.Music032 -> Strings.music032MissingMediaToken
-            }
+            errorMessage = Strings.music032MissingMediaToken
             return
         }
         if (normalized.type == MusicServerType.Music032 && normalized.mediaToken.isBlank()) {
@@ -794,7 +768,7 @@ class AppState(
         worksCoordinator.reset()
     }
 
-    fun openAlbumDetail(album: PlexAlbum) = libraryCoordinator.openAlbumDetail(album)
+    fun openAlbumDetail(album: MusicAlbum) = libraryCoordinator.openAlbumDetail(album)
 
     fun openArtistAlbums(artist: ArtistSummary) = libraryCoordinator.openArtistAlbums(artist)
 
@@ -819,7 +793,7 @@ class AppState(
 
     fun openFavoriteTracks() = libraryCoordinator.openFavoriteTracks()
 
-    fun openPlaylistDetail(playlist: PlexPlaylist) = libraryCoordinator.openPlaylistDetail(playlist)
+    fun openPlaylistDetail(playlist: MusicPlaylist) = libraryCoordinator.openPlaylistDetail(playlist)
 
     // --- Playlist editing (032 servers) ---------------------------------------------------
 
@@ -829,7 +803,7 @@ class AppState(
 
     fun canAddToPlaylist(sourceId: String): Boolean = playlistCoordinator.canAddFrom(sourceId)
 
-    fun canEditPlaylist(playlist: PlexPlaylist): Boolean = playlistCoordinator.canEditPlaylist(playlist)
+    fun canEditPlaylist(playlist: MusicPlaylist): Boolean = playlistCoordinator.canEditPlaylist(playlist)
 
     fun requestAddToPlaylist(addition: PlaylistAddition) = playlistCoordinator.requestAdd(addition)
 
@@ -841,18 +815,18 @@ class AppState(
         name: String,
         description: String,
         addition: PlaylistAddition? = null,
-    ): Result<PlexPlaylist> = playlistCoordinator.create(name, description, addition)
+    ): Result<MusicPlaylist> = playlistCoordinator.create(name, description, addition)
 
-    fun openCreatedPlaylist(playlist: PlexPlaylist) = playlistCoordinator.openCreated(playlist)
+    fun openCreatedPlaylist(playlist: MusicPlaylist) = playlistCoordinator.openCreated(playlist)
 
-    fun addToPlaylist(playlist: PlexPlaylist, addition: PlaylistAddition) = playlistCoordinator.addTo(playlist, addition)
+    fun addToPlaylist(playlist: MusicPlaylist, addition: PlaylistAddition) = playlistCoordinator.addTo(playlist, addition)
 
-    suspend fun updatePlaylist(playlist: PlexPlaylist, name: String, description: String): Result<PlexPlaylist> =
+    suspend fun updatePlaylist(playlist: MusicPlaylist, name: String, description: String): Result<MusicPlaylist> =
         playlistCoordinator.update(playlist, name, description)
 
-    suspend fun deletePlaylist(playlist: PlexPlaylist): Result<Unit> = playlistCoordinator.delete(playlist)
+    suspend fun deletePlaylist(playlist: MusicPlaylist): Result<Unit> = playlistCoordinator.delete(playlist)
 
-    fun removeTrackFromOpenPlaylist(track: PlexTrackStream) = playlistCoordinator.removeTrack(track)
+    fun removeTrackFromOpenPlaylist(track: MusicTrack) = playlistCoordinator.removeTrack(track)
 
     /** Global snackbar (playlist writes, daily mix feedback). */
     internal fun notifyPlaylist(message: String, actionLabel: String? = null, isError: Boolean = false, onAction: (() -> Unit)? = null) =
@@ -872,19 +846,19 @@ class AppState(
 
     fun saveOpenDailyMix() = dailyMixCoordinator.save()
 
-    fun toggleRecommendationBlock(track: PlexTrackStream) = dailyMixCoordinator.toggleBlock(track)
+    fun toggleRecommendationBlock(track: MusicTrack) = dailyMixCoordinator.toggleBlock(track)
 
     fun consumePlaylistNotice(id: Long) {
         if (playlistNotice?.id == id) playlistNotice = null
     }
 
-    fun replaceAlbumInState(updatedAlbum: PlexAlbum) = libraryCoordinator.replaceAlbumInState(updatedAlbum)
+    fun replaceAlbumInState(updatedAlbum: MusicAlbum) = libraryCoordinator.replaceAlbumInState(updatedAlbum)
 
-    fun replaceTrackInState(updatedTrack: PlexTrackStream) = libraryCoordinator.replaceTrackInState(updatedTrack)
+    fun replaceTrackInState(updatedTrack: MusicTrack) = libraryCoordinator.replaceTrackInState(updatedTrack)
 
-    fun toggleAlbumFavorite(album: PlexAlbum) = libraryCoordinator.toggleAlbumFavorite(album)
+    fun toggleAlbumFavorite(album: MusicAlbum) = libraryCoordinator.toggleAlbumFavorite(album)
 
-    fun toggleTrackFavorite(track: PlexTrackStream) = libraryCoordinator.toggleTrackFavorite(track)
+    fun toggleTrackFavorite(track: MusicTrack) = libraryCoordinator.toggleTrackFavorite(track)
 
     fun toggleArtistFavorite(artist: ArtistSummary) = libraryCoordinator.toggleArtistFavorite(artist)
 
@@ -906,14 +880,14 @@ class AppState(
     suspend fun loadArtists() = libraryCoordinator.loadArtists()
 
     fun startSingleTrackPlayback(
-        album: PlexAlbum,
-        tracks: List<PlexTrackStream>,
+        album: MusicAlbum,
+        tracks: List<MusicTrack>,
         trackIndex: Int,
         initialPositionMillis: Long = 0L,
     ) = playbackCoordinator.startSingleTrackPlayback(album, tracks, trackIndex, initialPositionMillis)
 
     fun startAlbumPlayback(
-        albumTrackResult: PlexAlbumTracksResult,
+        albumTrackResult: AlbumTracksResult,
         startIndex: Int = 0,
         initialPositionMillis: Long = 0L,
     ) = playbackCoordinator.startAlbumPlayback(albumTrackResult, startIndex, initialPositionMillis)
@@ -938,19 +912,9 @@ class AppState(
     fun applyVolumeChange(room: SonosRoom, newValue: Float) = playbackCoordinator.applyVolumeChange(room, newValue)
 
     fun startPlaylistPlayback(
-        playlistResult: PlexPlaylistTracksResult,
+        playlistResult: PlaylistTracksResult,
         shuffle: Boolean = false,
     ) = playbackCoordinator.startPlaylistPlayback(playlistResult, shuffle)
-
-    fun updateAiSettings(settings: AiSettings) {
-        aiSettings = settings.copy(
-            baseUrl = settings.baseUrl.trim().trimEnd('/'),
-            apiKey = settings.apiKey.trim(),
-            model = settings.model.trim(),
-        )
-        appPreferences.saveAiSettings(aiSettings)
-        actionMessage = Strings.saveAiSettings
-    }
 
     fun cancelAiGeneration() {
         aiGenerationToken++
@@ -959,97 +923,61 @@ class AppState(
         isAiGenerating = false
     }
 
+    /**
+     * AI playlist from one sentence, generated by the active 032 server
+     * (`POST /api/v1/ai/playlists`): the server's model reads the prompt, the server
+     * picks the tracks with its daily-mix selection. Played at once, not saved.
+     */
     fun generateAiPlaylist(prompt: String) {
-        if (connectionPreferences.type != MusicServerType.Plex) {
-            errorMessage = Strings.aiPlexOnly
-            return
-        }
         val requestPrompt = prompt.trim()
         if (requestPrompt.isBlank()) return
         cancelAiGeneration()
         val token = ++aiGenerationToken
         isAiGenerating = true
+        val sourceId = connectionPreferences.id
         aiGenerationJob = scope.launch {
             runCatching {
-                val source = clientFor(connectionPreferences.id)
-                val library = withContext(Dispatchers.IO) {
-                    val cached = allAlbums.flatMap { album ->
-                        albumLocalStore.getAlbumTracks(album.sourceId, album.ratingKey).ifEmpty {
-                            source.fetchAlbumTrackStreams(album).tracks
-                        }
-                    }
-                    val recent = (source as? PlexClient)?.let { plex ->
-                        withTimeoutOrNull(5_000L) {
-                            runCatching { plex.fetchRecentlyPlayedTracks() }.getOrDefault(emptyList())
-                        }.orEmpty()
-                    }.orEmpty()
-                    (cached + recent).groupBy { it.ratingKey }.values.map { matches ->
-                        matches.drop(1).fold(matches.first()) { merged, track ->
-                            HybridRecommender.mergeBehavior(merged, track)
-                        }
-                    }
-                }
-                val libraryArtists = library.mapNotNull { it.artistName?.trim() }
-                    .filter { it.isNotBlank() }
-                    .distinct()
-                    .shuffled()
-                    .take(80)
-                val intent = withContext(Dispatchers.IO) {
-                    AiLlmClient(aiSettings).generateIntent(requestPrompt, libraryArtists)
-                }
-                val recommended = HybridRecommender.recommend(
-                    intent, library, source as? SonicCapableSource, favoriteTracks, 30,
-                    prompt = requestPrompt,
+                val client = clientFor(sourceId) as? Music032Client ?: error(Strings.aiPlaylistUnavailable)
+                val caps = runCatching { client.ensureCapabilities() }.getOrNull()
+                check(caps?.hasFeature(Music032AiPlaylistJson.FEATURE) == true) { Strings.aiPlaylistUnavailable }
+                client.generateAiPlaylist(requestPrompt).also { check(it.tracks.isNotEmpty()) { Strings.aiNoMatches } }
+            }.onSuccess { generated ->
+                if (token != aiGenerationToken) return@onSuccess
+                val playlist = MusicPlaylist(
+                    "ai:${UUID.randomUUID()}",
+                    generated.title.ifBlank { Strings.aiPlaylist },
+                    generated.tracks.firstOrNull()?.thumbUrl,
+                    generated.tracks.size,
+                    sourceId,
                 )
-                check(recommended.isNotEmpty()) { Strings.aiNoMatches }
-                if (token != aiGenerationToken) return@launch
-                val playlist = PlexPlaylist("ai:${UUID.randomUUID()}", intent.title, recommended.firstOrNull()?.thumbUrl, recommended.size, connectionPreferences.id)
-                val result = PlexPlaylistTracksResult("", playlist, recommended)
+                val result = PlaylistTracksResult("", playlist, generated.tracks)
                 selectedPlaylist = playlist
                 playlistTrackResult = result
-                aiPlaylistDescription = intent.description
+                aiPlaylistDescription = listOf(
+                    generated.description,
+                    generated.conditions.takeIf { it.isNotEmpty() }?.let(Strings::aiPlaylistConditions).orEmpty(),
+                ).filter(String::isNotBlank).joinToString("\n")
                 navigateTo(AppSection.PlaylistDetail)
                 startPlaylistPlayback(result)
             }.onFailure {
                 if (token == aiGenerationToken && it !is kotlinx.coroutines.CancellationException) {
-                    errorMessage = when (it.message) {
-                        "AI_NOT_CONFIGURED" -> Strings.aiNotConfigured
-                        "AI_RESPONSE_NOT_JSON" -> Strings.aiResponseInvalid
-                        else -> it.message
-                    }
+                    errorMessage = (it as? Music032HttpException)?.serverMessage ?: it.message
                 }
             }
             if (token == aiGenerationToken) isAiGenerating = false
         }
     }
 
-    fun saveCurrentAiPlaylistToPlex() {
+    /** Saves the open AI playlist as an ordinary server playlist. */
+    fun saveCurrentAiPlaylist() {
         val current = playlistTrackResult ?: return
-        if (!current.playlist.ratingKey.startsWith("ai:")) return
+        if (!current.playlist.ratingKey.startsWith("ai:") || current.tracks.isEmpty()) return
         scope.launch {
-            runCatching {
-                (clientFor(current.playlist.sourceId) as? SonicCapableSource)
-                    ?.createPlaylist(current.playlist.title, current.tracks.map { it.ratingKey })
-                    ?: error(Strings.plexSaveUnsupported)
-            }.onSuccess { saved ->
-                actionMessage = Strings.savedToPlex
-                loadPlaylists()
-                selectedPlaylist = saved
-                playlistTrackResult = current.copy(playlist = saved.copy(leafCount = current.tracks.size))
-            }.onFailure { errorMessage = it.message }
-        }
-    }
-
-    fun startSonicRadio(track: PlexTrackStream) {
-        scope.launch {
-            runCatching {
-                val sonic = clientFor(track.sourceId) as? SonicCapableSource ?: error(Strings.sonicUnavailable)
-                val matches = sonic.fetchNearestTracks(track.ratingKey, 30).map { it.track }
-                check(matches.isNotEmpty()) { Strings.sonicNoNeighbors }
-                val playlist = PlexPlaylist("ai:${UUID.randomUUID()}", Strings.sonicRadio, track.thumbUrl, matches.size + 1, track.sourceId)
-                PlexPlaylistTracksResult("", playlist, listOf(track) + matches)
-            }.onSuccess { result -> aiPlaylistDescription = null; playlistTrackResult = result; selectedPlaylist = result.playlist; navigateTo(AppSection.PlaylistDetail); startPlaylistPlayback(result) }
-                .onFailure { errorMessage = it.message }
+            createPlaylist(
+                current.playlist.title,
+                aiPlaylistDescription.orEmpty().substringBefore('\n'),
+                PlaylistAddition.Tracks(current.tracks),
+            ).onFailure { errorMessage = it.message }
         }
     }
 
@@ -1064,13 +992,13 @@ class AppState(
 
     fun playNext() = playbackCoordinator.playNext()
 
-    fun enqueueTrack(track: PlexTrackStream, placement: QueuePlacement) =
+    fun enqueueTrack(track: MusicTrack, placement: QueuePlacement) =
         playbackCoordinator.enqueueTracks(listOf(track), placement, track.title)
 
-    fun enqueueAlbum(album: PlexAlbum, placement: QueuePlacement) =
+    fun enqueueAlbum(album: MusicAlbum, placement: QueuePlacement) =
         playbackCoordinator.enqueueAlbum(album, placement)
 
-    fun playAlbum(album: PlexAlbum, startIndex: Int = 0) =
+    fun playAlbum(album: MusicAlbum, startIndex: Int = 0) =
         playbackCoordinator.playAlbum(album, startIndex)
 
     fun switchPlaybackTarget(target: PlaybackTarget) = playbackCoordinator.switchPlaybackTarget(target)
@@ -1096,10 +1024,14 @@ class AppState(
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     private val playbackSessionIo = Dispatchers.IO.limitedParallelism(1)
     private var persistedQueueId = 0L
-    private var persistedTracks: List<PlexTrackStream>? = null
-    private var persistedAlbum: PlexAlbum? = null
+    private var persistedTracks: List<MusicTrack>? = null
+    private var persistedAlbum: MusicAlbum? = null
 
     init {
+        // Library caches of servers whose type is no longer supported (Plex).
+        appPreferences.retiredServerIds.takeIf { it.isNotEmpty() }?.let { retired ->
+            scope.launch(Dispatchers.IO) { retired.forEach(albumLocalStore::deleteServerData) }
+        }
         scope.launch {
             val saved = withContext(playbackSessionIo) { playbackSessionStore.load() }
             // Only if the user has not started something in the meantime.

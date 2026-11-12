@@ -13,10 +13,10 @@ import com.lux032.musicbridge.music.Music032Client
 import com.lux032.musicbridge.music.Music032TranscodeUrls
 import com.lux032.musicbridge.music.ReporterEndReason
 import com.lux032.musicbridge.music.ReporterPlayState
-import com.lux032.musicbridge.plex.PlexAlbum
-import com.lux032.musicbridge.plex.PlexTrackStream
-import com.lux032.musicbridge.plex.willTranscodeLocally
-import com.lux032.musicbridge.plex.withLocalPlaybackPolicy
+import com.lux032.musicbridge.music.MusicAlbum
+import com.lux032.musicbridge.music.MusicTrack
+import com.lux032.musicbridge.music.willTranscodeLocally
+import com.lux032.musicbridge.music.withLocalPlaybackPolicy
 import com.lux032.musicbridge.service.PlaybackForegroundService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancelAndJoin
@@ -81,7 +81,7 @@ internal fun localReporterPlayState(
 /**
  * Drives on-device playback through [LocalPlaybackEngine]. Mirrors the Sonos side of
  * [AppStatePlaybackCoordinator]: the engine owns rendering, this coordinator owns queue
- * state, Plex timeline reporting, and scrobbling. The system media notification is
+ * state, playback reporting, and scrobbling. The system media notification is
  * published by [LocalPlaybackService] via a MediaSession bound to the same player, so
  * notification/lockscreen/headset controls drive the player directly and flow back here
  * through the engine's listener callbacks.
@@ -89,7 +89,7 @@ internal fun localReporterPlayState(
 internal class AppStateLocalPlaybackCoordinator(
     private val state: AppState,
 ) {
-    private fun is032Track(track: PlexTrackStream): Boolean =
+    private fun is032Track(track: MusicTrack): Boolean =
         runCatching { state.clientFor(track.sourceId) is Music032Client }.getOrNull()
             ?: Music032TranscodeUrls.isOriginalStream(track.streamUrl)
 
@@ -276,7 +276,7 @@ internal class AppStateLocalPlaybackCoordinator(
         state.localPlaybackEngine.replaceQueueItems(replacements, policy.precacheCount.count)
     }
 
-    private fun resolveTrackWithLocalDownload(track: PlexTrackStream): PlexTrackStream {
+    private fun resolveTrackWithLocalDownload(track: MusicTrack): MusicTrack {
         val downloaded = state.albumLocalStore.getDownloadedTrack(track.sourceId, track.ratingKey)
         if (downloaded != null && java.io.File(downloaded.localAudioPath).exists()) {
             val effectiveRating = track.userRating ?: downloaded.userRating
@@ -300,8 +300,8 @@ internal class AppStateLocalPlaybackCoordinator(
     }
 
     fun startLocalPlayback(
-        album: PlexAlbum,
-        tracks: List<PlexTrackStream>,
+        album: MusicAlbum,
+        tracks: List<MusicTrack>,
         startIndex: Int,
         initialPositionMillis: Long,
         continueChain: Boolean = false,
@@ -380,7 +380,7 @@ internal class AppStateLocalPlaybackCoordinator(
     /** Rebuilds the engine queue from the current display queue, applying the
      *  network-appropriate stream quality to every URL. */
     private suspend fun rebuildEngineQueue(
-        tracks: List<PlexTrackStream>,
+        tracks: List<MusicTrack>,
         startIndex: Int,
         startPositionMillis: Long,
     ) {
@@ -398,7 +398,7 @@ internal class AppStateLocalPlaybackCoordinator(
         )
     }
 
-    private fun PlexTrackStream.toLocalQueueItem(policy: LocalPlaybackPolicy): LocalQueueItem {
+    private fun MusicTrack.toLocalQueueItem(policy: LocalPlaybackPolicy): LocalQueueItem {
         // Tier 1: Check offline downloaded original file
         val downloaded = state.albumLocalStore.getDownloadedTrack(sourceId, ratingKey)
         if (downloaded != null && java.io.File(downloaded.localAudioPath).exists()) {
@@ -420,7 +420,7 @@ internal class AppStateLocalPlaybackCoordinator(
         val origKey = originalCacheKey(sourceId, ratingKey, partKey)
         val needsTranscode = willTranscodeLocally(policy)
         if (shouldUseCachedOriginal(needsTranscode, LocalAudioCache.isFullyCached(origKey))) {
-            val direct = withLocalPlaybackPolicy(policy.copy(streamingLimit = LocalStreamingLimit.MAXIMUM), state.plexClientIdentifier)
+            val direct = withLocalPlaybackPolicy(policy.copy(streamingLimit = LocalStreamingLimit.MAXIMUM))
             return direct.toQueueItem(origKey, isTranscoded = false).copy(
                 isCachedOriginal = true,
                 fallbackItem = toTranscodedLocalQueueItem(policy),
@@ -428,8 +428,8 @@ internal class AppStateLocalPlaybackCoordinator(
         }
 
         // Tier 3: Remote Network stream
-        val effective = withLocalPlaybackPolicy(policy, state.plexClientIdentifier)
-        // Plex universal transcode 或 032 transcode.ogg 都是实时转码流。
+        val effective = withLocalPlaybackPolicy(policy)
+        // 032 transcode.ogg 是实时转码流。
         val isTranscoded = effective.streamUrl.isLiveTranscodeUrl()
         val key = if (isTranscoded) {
             transcodedCacheKey(sourceId, ratingKey, partKey, policy.opusBitrate.kbps)
@@ -440,15 +440,15 @@ internal class AppStateLocalPlaybackCoordinator(
     }
 
 
-    private fun PlexTrackStream.toTranscodedLocalQueueItem(policy: LocalPlaybackPolicy): LocalQueueItem {
-        val effective = withLocalPlaybackPolicy(policy, state.plexClientIdentifier)
+    private fun MusicTrack.toTranscodedLocalQueueItem(policy: LocalPlaybackPolicy): LocalQueueItem {
+        val effective = withLocalPlaybackPolicy(policy)
         return effective.toQueueItem(
             transcodedCacheKey(sourceId, ratingKey, partKey, policy.opusBitrate.kbps),
             isTranscoded = true,
         )
     }
 
-    private fun PlexTrackStream.toQueueItem(cacheKey: String, isTranscoded: Boolean) = LocalQueueItem(
+    private fun MusicTrack.toQueueItem(cacheKey: String, isTranscoded: Boolean) = LocalQueueItem(
         url = streamUrl,
         cacheKey = cacheKey,
         isTranscoded = isTranscoded,
@@ -464,7 +464,7 @@ internal class AppStateLocalPlaybackCoordinator(
 
     /** Inserts tracks into the live engine queue so its indices stay aligned with
      *  [MiniPlayerState.tracks] after an enqueue. */
-    fun insertIntoLocalQueue(insertIndex: Int, tracks: List<PlexTrackStream>) {
+    fun insertIntoLocalQueue(insertIndex: Int, tracks: List<MusicTrack>) {
         val policy = state.currentLocalPlaybackPolicy()
         val resolvedTracks = tracks.map(::resolveTrackWithLocalDownload)
         state.scope.launch {
@@ -582,7 +582,7 @@ internal class AppStateLocalPlaybackCoordinator(
             var ownedSession: Pair<String, String>? = null
             try {
                 val scrobbledTrackKeys = mutableSetOf<String>()
-                var reportedTrack: PlexTrackStream? = null
+                var reportedTrack: MusicTrack? = null
                 var lastReportedState: String? = null
                 var lastTimelineReportAt = 0L
 
@@ -620,7 +620,7 @@ internal class AppStateLocalPlaybackCoordinator(
                     ) {
                         val finished = reportedTrack!!
                         // 032 transitions are closed by the engine transition callback with
-                        // the old session's own position; the legacy path stays Plex-only.
+                        // the old session's own position; the generic timeline path covers other sources.
                         if (!is032Track(finished)) {
                             reportTimelineSafelyLocal(finished, "stopped", positionMillis = 0L, finished.durationMillis, continuing = true)
                             scrobbleIfNeededLocal(scrobbledTrackKeys, finished, positionMillis, finished.durationMillis)
@@ -677,7 +677,7 @@ internal class AppStateLocalPlaybackCoordinator(
     }
 
     private suspend fun reportTimelineSafelyLocal(
-        track: PlexTrackStream,
+        track: MusicTrack,
         stateName: String,
         positionMillis: Long,
         durationMillis: Long?,
@@ -696,7 +696,7 @@ internal class AppStateLocalPlaybackCoordinator(
 
     private suspend fun scrobbleIfNeededLocal(
         scrobbledTrackKeys: MutableSet<String>,
-        track: PlexTrackStream,
+        track: MusicTrack,
         positionMillis: Long,
         durationMillis: Long?,
     ) {
@@ -712,7 +712,7 @@ internal class AppStateLocalPlaybackCoordinator(
         }
     }
 
-    private suspend fun recordTrackPlaybackSafely(track: PlexTrackStream) {
+    private suspend fun recordTrackPlaybackSafely(track: MusicTrack) {
         withContext(Dispatchers.IO) {
             runCatching {
                 state.albumLocalStore.recordTrackPlayback(track.sourceId, track.ratingKey)

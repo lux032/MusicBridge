@@ -2,12 +2,12 @@ package com.lux032.musicbridge.storage
 
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
-import com.lux032.musicbridge.plex.ArtistRef
-import com.lux032.musicbridge.plex.PlexAlbum
-import com.lux032.musicbridge.plex.PlexArtist
-import com.lux032.musicbridge.plex.PlexPlaylist
-import com.lux032.musicbridge.plex.PlexSection
-import com.lux032.musicbridge.plex.PlexTrackStream
+import com.lux032.musicbridge.music.ArtistRef
+import com.lux032.musicbridge.music.MusicAlbum
+import com.lux032.musicbridge.music.MusicArtist
+import com.lux032.musicbridge.music.MusicPlaylist
+import com.lux032.musicbridge.music.LibrarySection
+import com.lux032.musicbridge.music.MusicTrack
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -66,7 +66,7 @@ class AlbumLocalStoreMigrationTest {
 
         val context = cleanDatabaseContext()
         val store = AlbumLocalStore(context)
-        val album = PlexAlbum(
+        val album = MusicAlbum(
             ratingKey = "album",
             title = "Live Release",
             artistName = "Artist",
@@ -75,7 +75,7 @@ class AlbumLocalStoreMigrationTest {
             userRating = null,
             addedAtEpochSeconds = null,
             lastViewedAtEpochSeconds = null,
-            section = PlexSection("1", "Music", "artist"),
+            section = LibrarySection("1", "Music", "artist"),
             sourceId = "source",
             leafCount = 10,
             format = "Album",
@@ -546,7 +546,7 @@ class AlbumLocalStoreMigrationTest {
             assertTrue(db.columnNames("albums").contains("release_date"))
         }
 
-        val album = PlexAlbum(
+        val album = MusicAlbum(
             ratingKey = "new",
             title = "New",
             artistName = "Artist",
@@ -555,7 +555,7 @@ class AlbumLocalStoreMigrationTest {
             userRating = null,
             addedAtEpochSeconds = null,
             lastViewedAtEpochSeconds = null,
-            section = PlexSection("1", "Music", "artist"),
+            section = LibrarySection("1", "Music", "artist"),
             sourceId = "source",
             releaseDate = "2004-12-01",
         )
@@ -594,7 +594,7 @@ class AlbumLocalStoreMigrationTest {
         val singerA = ArtistRef("2", "高橋あず美")
         val singerB = ArtistRef("3", "Lotus Juice")
         val guest = ArtistRef("4", "目黒将司")
-        fun album(key: String, artists: List<ArtistRef>, subformat: String? = null) = PlexAlbum(
+        fun album(key: String, artists: List<ArtistRef>, subformat: String? = null) = MusicAlbum(
             ratingKey = key,
             title = key,
             artistName = artists.joinToString(", ") { it.name },
@@ -603,7 +603,7 @@ class AlbumLocalStoreMigrationTest {
             userRating = null,
             addedAtEpochSeconds = null,
             lastViewedAtEpochSeconds = null,
-            section = PlexSection("032", "032", "artist"),
+            section = LibrarySection("032", "032", "artist"),
             sourceId = "source",
             subformat = subformat,
             artists = artists,
@@ -629,8 +629,8 @@ class AlbumLocalStoreMigrationTest {
         store.replaceAllArtists(
             "source",
             listOf(
-                PlexArtist(team.id, team.name, null, sourceId = "source", albumCount = 2),
-                PlexArtist(guest.id, guest.name, null, userRating = 10f, sourceId = "source", albumCount = 1),
+                MusicArtist(team.id, team.name, null, sourceId = "source", albumCount = 2),
+                MusicArtist(guest.id, guest.name, null, userRating = 10f, sourceId = "source", albumCount = 1),
             ),
         )
 
@@ -672,9 +672,9 @@ class AlbumLocalStoreMigrationTest {
         store.replaceAllPlaylists(
             "source",
             listOf(
-                PlexPlaylist("playlist-2", "Second", null, 2, "source"),
-                PlexPlaylist("ai:temp", "AI", null, 1, "source"),
-                PlexPlaylist("playlist-1", "First", null, 1, "source"),
+                MusicPlaylist("playlist-2", "Second", null, 2, "source"),
+                MusicPlaylist("ai:temp", "AI", null, 1, "source"),
+                MusicPlaylist("playlist-1", "First", null, 1, "source"),
             ),
         )
         assertEquals(listOf("playlist-2", "playlist-1"), store.getAllPlaylists("source").map { it.ratingKey })
@@ -695,8 +695,8 @@ class AlbumLocalStoreMigrationTest {
     fun replacingPlaylistListRemovesOrphanedPlaylistTracks() {
         val context = cleanDatabaseContext()
         val store = AlbumLocalStore(context)
-        val first = PlexPlaylist("playlist-1", "First", null, 1, "source")
-        val second = PlexPlaylist("playlist-2", "Second", null, 1, "source")
+        val first = MusicPlaylist("playlist-1", "First", null, 1, "source")
+        val second = MusicPlaylist("playlist-2", "Second", null, 1, "source")
         val cachedTrack = track("source", "track-1", 0, 0)
         store.replaceAllPlaylists("source", listOf(first, second))
         store.savePlaylistTracks("source", first.ratingKey, listOf(cachedTrack))
@@ -734,7 +734,7 @@ class AlbumLocalStoreMigrationTest {
     fun artistAlbumsUseStoredTrackCountWhenLeafCountIsMissing() {
         val context = cleanDatabaseContext()
         val store = AlbumLocalStore(context)
-        val album = PlexAlbum(
+        val album = MusicAlbum(
             ratingKey = "album",
             title = "Release",
             artistName = "Artist",
@@ -743,7 +743,7 @@ class AlbumLocalStoreMigrationTest {
             userRating = null,
             addedAtEpochSeconds = null,
             lastViewedAtEpochSeconds = null,
-            section = PlexSection("1", "Music", "artist"),
+            section = LibrarySection("1", "Music", "artist"),
             sourceId = "source",
             leafCount = null,
         )
@@ -764,7 +764,7 @@ class AlbumLocalStoreMigrationTest {
     fun updateAlbumsMetadataUpdatesOnlyNonNullValues() {
         val context = cleanDatabaseContext()
         val store = AlbumLocalStore(context)
-        val original = PlexAlbum(
+        val original = MusicAlbum(
             ratingKey = "album",
             title = "Release",
             artistName = "Artist",
@@ -773,7 +773,7 @@ class AlbumLocalStoreMigrationTest {
             userRating = null,
             addedAtEpochSeconds = null,
             lastViewedAtEpochSeconds = null,
-            section = PlexSection("1", "Music", "artist"),
+            section = LibrarySection("1", "Music", "artist"),
             sourceId = "source",
             leafCount = 8,
             format = "Album",
@@ -913,7 +913,7 @@ class AlbumLocalStoreMigrationTest {
     private fun cleanDatabaseContext(): Context =
         RuntimeEnvironment.getApplication().also { it.deleteDatabase(DATABASE_NAME) }
 
-    private fun track(sourceId: String, ratingKey: String, viewCount: Long, lastViewedAt: Long) = PlexTrackStream(
+    private fun track(sourceId: String, ratingKey: String, viewCount: Long, lastViewedAt: Long) = MusicTrack(
         ratingKey = ratingKey,
         title = "Track",
         streamUrl = "url",

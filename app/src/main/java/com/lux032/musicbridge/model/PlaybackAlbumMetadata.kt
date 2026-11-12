@@ -1,15 +1,15 @@
 package com.lux032.musicbridge
 
-import com.lux032.musicbridge.plex.PlexAlbum
-import com.lux032.musicbridge.plex.PlexTrackStream
-import com.lux032.musicbridge.plex.PlexSection
+import com.lux032.musicbridge.music.MusicAlbum
+import com.lux032.musicbridge.music.MusicTrack
+import com.lux032.musicbridge.music.LibrarySection
 
-internal fun PlexTrackStream.resolvePlaybackAlbum(
-    albums: List<PlexAlbum>,
-    fallback: PlexAlbum?,
-): PlexAlbum = albums.firstOrNull {
+internal fun MusicTrack.resolvePlaybackAlbum(
+    albums: List<MusicAlbum>,
+    fallback: MusicAlbum?,
+): MusicAlbum = albums.firstOrNull {
     !albumRatingKey.isNullOrBlank() && it.ratingKey == albumRatingKey && it.sourceId == sourceId
-} ?: PlexAlbum(
+} ?: MusicAlbum(
     ratingKey = albumRatingKey ?: fallback?.ratingKey ?: ratingKey,
     title = albumTitle ?: fallback?.title ?: title,
     artistName = artistName ?: fallback?.artistName,
@@ -18,12 +18,12 @@ internal fun PlexTrackStream.resolvePlaybackAlbum(
     userRating = fallback?.userRating,
     addedAtEpochSeconds = fallback?.addedAtEpochSeconds,
     lastViewedAtEpochSeconds = fallback?.lastViewedAtEpochSeconds,
-    section = fallback?.section ?: PlexSection("", "", ""),
+    section = fallback?.section ?: LibrarySection("", "", ""),
     sourceId = sourceId.ifBlank { fallback?.sourceId.orEmpty() },
 )
 
 /** A mixed queue's fallback album may belong to the previous track. */
-internal fun PlexTrackStream.albumYearFrom(fallbackAlbum: PlexAlbum?): Int? =
+internal fun MusicTrack.albumYearFrom(fallbackAlbum: MusicAlbum?): Int? =
     fallbackAlbum?.year?.takeIf {
         !albumRatingKey.isNullOrBlank() &&
             albumRatingKey == fallbackAlbum.ratingKey &&

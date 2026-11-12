@@ -2,21 +2,21 @@ package com.lux032.musicbridge.model
 
 import com.lux032.musicbridge.albumYearFrom
 import com.lux032.musicbridge.resolvePlaybackAlbum
-import com.lux032.musicbridge.plex.PlexAlbum
-import com.lux032.musicbridge.plex.PlexSection
-import com.lux032.musicbridge.plex.PlexTrackStream
+import com.lux032.musicbridge.music.MusicAlbum
+import com.lux032.musicbridge.music.LibrarySection
+import com.lux032.musicbridge.music.MusicTrack
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 
 class PlaybackAlbumMetadataTest {
-    private val firstAlbum = PlexAlbum(
+    private val firstAlbum = MusicAlbum(
         ratingKey = "album-a", title = "First album", artistName = null,
         year = 1999, thumbUrl = null, userRating = null,
         addedAtEpochSeconds = null, lastViewedAtEpochSeconds = null,
-        section = PlexSection("1", "Music", "artist"), sourceId = "server-a",
+        section = LibrarySection("1", "Music", "artist"), sourceId = "server-a",
     )
-    private fun track(albumKey: String?, source: String = "server-a") = PlexTrackStream(
+    private fun track(albumKey: String?, source: String = "server-a") = MusicTrack(
         ratingKey = "track", title = "Track", streamUrl = "", partKey = "",
         durationMillis = null, userRating = null, albumRatingKey = albumKey, sourceId = source,
     )

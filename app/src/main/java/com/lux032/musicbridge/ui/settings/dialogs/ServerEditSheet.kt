@@ -49,7 +49,6 @@ import androidx.compose.ui.unit.dp
 import com.lux032.musicbridge.AppColors
 import com.lux032.musicbridge.LocalArtworkPalette
 import com.lux032.musicbridge.MusicServerProfile
-import com.lux032.musicbridge.MusicServerType
 import com.lux032.musicbridge.Strings
 
 /**
@@ -70,7 +69,6 @@ fun ServerEditSheet(
 
     var isTokenVisible by remember { mutableStateOf(false) }
     var isMediaTokenVisible by remember { mutableStateOf(false) }
-    var isPasswordVisible by remember { mutableStateOf(false) }
 
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
@@ -96,35 +94,6 @@ fun ServerEditSheet(
                 color = AppColors.TextPrimary,
             )
 
-            // Server type chips
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                MusicServerType.entries.forEach { type ->
-                    val isSelected = draft.type == type
-                    // Segmented choice: the selected type inverts to the hi fill.
-                    KeyButton(
-                        onClick = {
-                            if (draft.type != type) draft = draft.freshDraftForType(type)
-                        },
-                        enabled = isNew || isSelected,
-                        style = if (isSelected) KeyStyle.Hi else KeyStyle.Tonal,
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        Text(type.label, maxLines = 1)
-                    }
-                }
-            }
-
-            if (!isNew) {
-                Text(
-                    text = "服务器类型在保存后不可更改。如需使用另一种服务，请在主页点击“添加”创建独立配置。",
-                    color = AppColors.TextSecondary,
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
-
             // Display name
             OutlinedTextField(
                 value = draft.name,
@@ -132,7 +101,7 @@ fun ServerEditSheet(
                 modifier = Modifier.fillMaxWidth(),
                 label = { Text("显示名称") },
                 placeholder = {
-                    Text(if (draft.type == MusicServerType.Plex) "家里的 Plex" else "032 Music Server")
+                    Text("032 Music Server")
                 },
                 singleLine = true,
                 trailingIcon = {
@@ -152,10 +121,7 @@ fun ServerEditSheet(
                 modifier = Modifier.fillMaxWidth(),
                 label = { Text("服务器地址") },
                 placeholder = {
-                    Text(
-                        if (draft.type == MusicServerType.Plex) "http://192.168.1.10:32400"
-                        else "http://192.168.1.10:4533"
-                    )
+                    Text("http://192.168.1.10:4533")
                 },
                 singleLine = true,
                 trailingIcon = {
@@ -173,7 +139,7 @@ fun ServerEditSheet(
                 value = draft.token,
                 onValueChange = { draft = draft.copy(token = it) },
                 modifier = Modifier.fillMaxWidth(),
-                label = { Text(if (draft.type == MusicServerType.Plex) "Plex Token" else "API Token") },
+                label = { Text("API Token") },
                 singleLine = true,
                 visualTransformation = if (isTokenVisible) VisualTransformation.None else PasswordVisualTransformation(),
                 trailingIcon = {
@@ -195,97 +161,34 @@ fun ServerEditSheet(
                 colors = textFieldColors(),
             )
 
-            if (draft.type == MusicServerType.Music032) {
-                // Media Token for 032
-                OutlinedTextField(
-                    value = draft.mediaToken,
-                    onValueChange = { draft = draft.copy(mediaToken = it) },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("媒体 Token") },
-                    supportingText = { Text("必填：服务端 MUSIC_SERVER_MEDIA_TOKEN 的值。") },
-                    isError = draft.mediaToken.isBlank(),
-                    singleLine = true,
-                    visualTransformation = if (isMediaTokenVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                    trailingIcon = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            if (draft.mediaToken.isNotEmpty()) {
-                                IconButton(onClick = { draft = draft.copy(mediaToken = "") }) {
-                                    Icon(Icons.Filled.Clear, contentDescription = "清空", tint = AppColors.TextTertiary)
-                                }
-                            }
-                            IconButton(onClick = { isMediaTokenVisible = !isMediaTokenVisible }) {
-                                Icon(
-                                    imageVector = if (isMediaTokenVisible) Icons.Filled.Visibility else Icons.Filled.VisibilityOff,
-                                    contentDescription = if (isMediaTokenVisible) "隐藏内容" else "显示明文",
-                                    tint = AppColors.TextSecondary,
-                                )
-                            }
-                        }
-                    },
-                    colors = textFieldColors(),
-                )
-            } else {
-                // Plex server name (optional)
-                OutlinedTextField(
-                    value = draft.server,
-                    onValueChange = { draft = draft.copy(server = it) },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Plex 服务器名称（可选）") },
-                    singleLine = true,
-                    trailingIcon = {
-                        if (draft.server.isNotEmpty()) {
-                            IconButton(onClick = { draft = draft.copy(server = "") }) {
+            // Media Token
+            OutlinedTextField(
+                value = draft.mediaToken,
+                onValueChange = { draft = draft.copy(mediaToken = it) },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("媒体 Token") },
+                supportingText = { Text("必填：服务端 MUSIC_SERVER_MEDIA_TOKEN 的值。") },
+                isError = draft.mediaToken.isBlank(),
+                singleLine = true,
+                visualTransformation = if (isMediaTokenVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                trailingIcon = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (draft.mediaToken.isNotEmpty()) {
+                            IconButton(onClick = { draft = draft.copy(mediaToken = "") }) {
                                 Icon(Icons.Filled.Clear, contentDescription = "清空", tint = AppColors.TextTertiary)
                             }
                         }
-                    },
-                    colors = textFieldColors(),
-                )
-
-                // Plex username
-                OutlinedTextField(
-                    value = draft.username,
-                    onValueChange = { draft = draft.copy(username = it) },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Plex 用户名（无 Token 时使用）") },
-                    singleLine = true,
-                    trailingIcon = {
-                        if (draft.username.isNotEmpty()) {
-                            IconButton(onClick = { draft = draft.copy(username = "") }) {
-                                Icon(Icons.Filled.Clear, contentDescription = "清空", tint = AppColors.TextTertiary)
-                            }
+                        IconButton(onClick = { isMediaTokenVisible = !isMediaTokenVisible }) {
+                            Icon(
+                                imageVector = if (isMediaTokenVisible) Icons.Filled.Visibility else Icons.Filled.VisibilityOff,
+                                contentDescription = if (isMediaTokenVisible) "隐藏内容" else "显示明文",
+                                tint = AppColors.TextSecondary,
+                            )
                         }
-                    },
-                    colors = textFieldColors(),
-                )
-
-                // Plex password
-                OutlinedTextField(
-                    value = draft.password,
-                    onValueChange = { draft = draft.copy(password = it) },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Plex 密码") },
-                    singleLine = true,
-                    visualTransformation = if (isPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                    trailingIcon = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            if (draft.password.isNotEmpty()) {
-                                IconButton(onClick = { draft = draft.copy(password = "") }) {
-                                    Icon(Icons.Filled.Clear, contentDescription = "清空", tint = AppColors.TextTertiary)
-                                }
-                            }
-                            IconButton(onClick = { isPasswordVisible = !isPasswordVisible }) {
-                                Icon(
-                                    imageVector = if (isPasswordVisible) Icons.Filled.Visibility else Icons.Filled.VisibilityOff,
-                                    contentDescription = if (isPasswordVisible) "隐藏内容" else "显示明文",
-                                    tint = AppColors.TextSecondary,
-                                )
-                            }
-                        }
-                    },
-                    colors = textFieldColors(),
-                )
-            }
+                    }
+                },
+                colors = textFieldColors(),
+            )
 
             Spacer(Modifier.height(8.dp))
 
@@ -295,7 +198,7 @@ fun ServerEditSheet(
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 KeyButton(
-                    enabled = draft.type != MusicServerType.Music032 || draft.mediaToken.isNotBlank(),
+                    enabled = draft.mediaToken.isNotBlank(),
                     onClick = {
                         onSave(draft, false)
                         onDismiss()
@@ -307,7 +210,7 @@ fun ServerEditSheet(
                 }
 
                 KeyButton(
-                    enabled = draft.type != MusicServerType.Music032 || draft.mediaToken.isNotBlank(),
+                    enabled = draft.mediaToken.isNotBlank(),
                     onClick = {
                         onSave(draft, true)
                         onDismiss()

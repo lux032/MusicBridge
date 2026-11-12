@@ -2,7 +2,7 @@ package com.lux032.musicbridge.music
 
 import com.lux032.musicbridge.MusicServerProfile
 import com.lux032.musicbridge.MusicServerType
-import com.lux032.musicbridge.plex.PlexAlbum
+import com.lux032.musicbridge.music.MusicAlbum
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -25,7 +25,7 @@ class Music032PlaylistLiveTest {
         val client = Music032Client(
             MusicServerProfile(id = "e2e", type = MusicServerType.Music032, token = token, mediaToken = mediaToken, baseUrl = url),
         )
-        val albums: List<PlexAlbum> = client.fetchAlbums().albums
+        val albums: List<MusicAlbum> = client.fetchAlbums().albums
         val first = client.fetchAlbumTrackStreams(albums[0]).tracks
         val second = albums[1]
 

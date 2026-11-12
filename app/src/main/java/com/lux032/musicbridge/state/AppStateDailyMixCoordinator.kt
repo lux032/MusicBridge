@@ -5,9 +5,9 @@ import com.lux032.musicbridge.music.Music032DailyMix
 import com.lux032.musicbridge.music.Music032DailyMixDetail
 import com.lux032.musicbridge.music.Music032DailyMixStatus
 import com.lux032.musicbridge.music.Music032HttpException
-import com.lux032.musicbridge.plex.PlexPlaylist
-import com.lux032.musicbridge.plex.PlexPlaylistTracksResult
-import com.lux032.musicbridge.plex.PlexTrackStream
+import com.lux032.musicbridge.music.MusicPlaylist
+import com.lux032.musicbridge.music.PlaylistTracksResult
+import com.lux032.musicbridge.music.MusicTrack
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -39,9 +39,9 @@ data class DailyMixDetailState(
 internal fun dailyMixPlaylistKey(id: Long) = "mix:$id"
 
 /** Synthetic playlist so the mix reuses the playlist detail page and playback paths. */
-internal fun dailyMixPlaylistResult(sourceId: String, detail: Music032DailyMixDetail): PlexPlaylistTracksResult {
+internal fun dailyMixPlaylistResult(sourceId: String, detail: Music032DailyMixDetail): PlaylistTracksResult {
     val mix = detail.mix
-    val playlist = PlexPlaylist(
+    val playlist = MusicPlaylist(
         ratingKey = dailyMixPlaylistKey(mix.id),
         title = mix.title,
         thumbUrl = mix.coverUrls.firstOrNull() ?: detail.tracks.firstOrNull()?.thumbUrl,
@@ -49,7 +49,7 @@ internal fun dailyMixPlaylistResult(sourceId: String, detail: Music032DailyMixDe
         sourceId = sourceId,
         description = mix.description,
     )
-    return PlexPlaylistTracksResult("", playlist, detail.tracks)
+    return PlaylistTracksResult("", playlist, detail.tracks)
 }
 
 /** Snackbar copy for a rating change (server design §6). */
@@ -248,12 +248,12 @@ internal class AppStateDailyMixCoordinator(
         }
     }
 
-    fun toggleBlock(track: PlexTrackStream) {
+    fun toggleBlock(track: MusicTrack) {
         val open = state.openDailyMix ?: return
         setBlock(track, track.ratingKey !in open.blockedTrackIds)
     }
 
-    private fun setBlock(track: PlexTrackStream, block: Boolean) {
+    private fun setBlock(track: MusicTrack, block: Boolean) {
         val open = state.openDailyMix ?: return
         val (sourceId, client) = activeClient() ?: return
         if (sourceId != open.sourceId) return

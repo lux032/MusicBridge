@@ -19,7 +19,7 @@ import org.robolectric.RobolectricTestRunner
 
 @RunWith(RobolectricTestRunner::class)
 class TranscodeLoadErrorHandlingPolicyTest {
-    private val uri = Uri.parse("https://plex.example/music/:/transcode/universal/start.ogg?offset=0")
+    private val uri = Uri.parse("https://032.example/api/v1/tracks/1/transcode.ogg?mediaToken=t&bitrate=128")
     private val spec = DataSpec(uri)
     private val policy = TranscodeLoadErrorHandlingPolicy()
 

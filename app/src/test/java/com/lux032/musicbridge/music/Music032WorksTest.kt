@@ -2,14 +2,14 @@ package com.lux032.musicbridge.music
 
 import com.lux032.musicbridge.NavigationEntry
 import com.lux032.musicbridge.AppSection
-import com.lux032.musicbridge.plex.PlexSection
+import com.lux032.musicbridge.music.LibrarySection
 import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Test
 
 class Music032WorksTest {
     private val media: (String) -> String? = { Music032Json.mediaUrl(it, "https://music.example", "media-secret") }
-    private val track: (JSONObject) -> com.lux032.musicbridge.plex.PlexTrackStream = {
+    private val track: (JSONObject) -> com.lux032.musicbridge.music.MusicTrack = {
         Music032Json.parseTrack(it, "https://music.example", "media-secret", "source-a")
     }
 
@@ -70,7 +70,7 @@ class Music032WorksTest {
         val albums = Music032WorksJson.albums(JSONObject("""{"items":[
           {"albumId":45,"workId":12,"title":"Soundtrack","albumRole":"ost",
           "trackRoles":["op","insert"],"artworkUrl":"/api/v1/artwork/9","trackCount":36}]}""")) {
-            Music032Json.parseAlbum(it, "https://music.example", "media-secret", PlexSection("032", "Library", "artist"), "source-a")
+            Music032Json.parseAlbum(it, "https://music.example", "media-secret", LibrarySection("032", "Library", "artist"), "source-a")
         }
         val album = albums.single()
         assertEquals("45", album.album.ratingKey)

@@ -3,7 +3,7 @@ package com.lux032.musicbridge
 import com.lux032.musicbridge.music.Music032Capabilities
 import com.lux032.musicbridge.music.Music032Json
 import com.lux032.musicbridge.music.Music032TranscodeUrls
-import com.lux032.musicbridge.plex.PlexTrackStream
+import com.lux032.musicbridge.music.MusicTrack
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
@@ -24,7 +24,7 @@ internal fun shouldSonosSeekAfterPush(kind: SonosPlanKind, offset: Long): Boolea
     offset > 0 && kind != SonosPlanKind.LIVE_MP3
 
 internal fun retainSonosPlanForTrack(planSourceId: String?, planRatingKey: String?,
-                                    track: PlexTrackStream): Boolean =
+                                    track: MusicTrack): Boolean =
     planSourceId == track.sourceId && planRatingKey == track.ratingKey
 
 internal fun shouldRestart032Seek(predictedLive: Boolean, actualKind: SonosPlanKind): Boolean =
@@ -34,11 +34,11 @@ internal class Music032HydrationCache(
     private val scope: CoroutineScope,
     private val nowMillis: () -> Long = System::currentTimeMillis,
 ) {
-    private data class Entry(val track: PlexTrackStream?, val expiresAt: Long)
+    private data class Entry(val track: MusicTrack?, val expiresAt: Long)
     private val results = mutableMapOf<String, Entry>()
-    private val inFlight = mutableMapOf<String, Deferred<PlexTrackStream?>>()
+    private val inFlight = mutableMapOf<String, Deferred<MusicTrack?>>()
 
-    suspend fun hydrate(track: PlexTrackStream, fetch: suspend () -> PlexTrackStream?): PlexTrackStream {
+    suspend fun hydrate(track: MusicTrack, fetch: suspend () -> MusicTrack?): MusicTrack {
         if (!needs032SonosHydration(track)) return track
         val key = "${track.sourceId}:${track.ratingKey}"
         val request = synchronized(results) {
@@ -62,7 +62,7 @@ internal class Music032HydrationCache(
     }
 }
 
-internal fun merge032Hydration(track: PlexTrackStream, fresh: PlexTrackStream?): PlexTrackStream =
+internal fun merge032Hydration(track: MusicTrack, fresh: MusicTrack?): MusicTrack =
     fresh?.let {
         track.copy(
             streamUrl = it.streamUrl,
@@ -73,11 +73,11 @@ internal fun merge032Hydration(track: PlexTrackStream, fresh: PlexTrackStream?):
         )
     } ?: track
 
-internal fun needs032SonosHydration(track: PlexTrackStream): Boolean =
+internal fun needs032SonosHydration(track: MusicTrack): Boolean =
     track.sourceAudioCodec == null ||
         (track.sourceAudioCodec.lowercase() in LOSSLESS_AUDIO_CODECS && track.sourceAudioSampleRate == null)
 
-internal fun plan032(track: PlexTrackStream, opusMode: OpusTranscodeMode,
+internal fun plan032(track: MusicTrack, opusMode: OpusTranscodeMode,
                      hiResMode: SonosHiResTranscodeMode, caps: Music032Capabilities?): Result<SonosPlan> {
     val original = SonosPlan(track.streamUrl, Music032Json.original032MimeType(track.sourceAudioCodec, null), SonosPlanKind.ORIGINAL)
     val opus = track.sourceAudioCodec.equals("opus", true)
@@ -95,7 +95,7 @@ internal fun plan032(track: PlexTrackStream, opusMode: OpusTranscodeMode,
     return fallback032Mp3(track, caps, original, opus)
 }
 
-internal fun fallback032Mp3(track: PlexTrackStream, caps: Music032Capabilities?, original: SonosPlan,
+internal fun fallback032Mp3(track: MusicTrack, caps: Music032Capabilities?, original: SonosPlan,
                             opus: Boolean = track.sourceAudioCodec.equals("opus", true)): Result<SonosPlan> {
     if (caps != null && (caps.apiRevision <= 1 || !caps.isFormatAvailable("mp3"))) {
         return if (opus) Result.failure(IllegalStateException(Strings.music032SonosTranscodeUnavailable)) else Result.success(original)
@@ -106,16 +106,16 @@ internal fun fallback032Mp3(track: PlexTrackStream, caps: Music032Capabilities?,
 }
 
 internal fun next032WarmupCandidate(
-    tracks: List<PlexTrackStream>,
+    tracks: List<MusicTrack>,
     currentIndex: Int,
     sequential: Boolean,
     opusMode: OpusTranscodeMode,
     hiResMode: SonosHiResTranscodeMode,
-    caps: (PlexTrackStream) -> Music032Capabilities?,
-): PlexTrackStream? = tracks.getOrNull(currentIndex + 1)?.takeIf {
+    caps: (MusicTrack) -> Music032Capabilities?,
+): MusicTrack? = tracks.getOrNull(currentIndex + 1)?.takeIf {
     sequential && predictSonosKind(it, opusMode, hiResMode, caps(it)) == SonosPlanKind.STATIC_FLAC
 }
 
-internal fun predictSonosKind(track: PlexTrackStream, opusMode: OpusTranscodeMode,
+internal fun predictSonosKind(track: MusicTrack, opusMode: OpusTranscodeMode,
                               hiResMode: SonosHiResTranscodeMode, capsSnapshot: Music032Capabilities?): SonosPlanKind =
     plan032(track, opusMode, hiResMode, capsSnapshot).getOrNull()?.kind ?: SonosPlanKind.ORIGINAL

@@ -17,8 +17,8 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import com.lux032.musicbridge.music.Music032TrackWork
 import com.lux032.musicbridge.music.Music032Work
-import com.lux032.musicbridge.plex.PlexTrackStream
-import com.lux032.musicbridge.ui.theme.PlexToSonosPlayerTheme
+import com.lux032.musicbridge.music.MusicTrack
+import com.lux032.musicbridge.ui.theme.MusicBridgeTheme
 import kotlinx.coroutines.awaitCancellation
 import org.junit.Assert.*
 import org.junit.Rule
@@ -27,12 +27,12 @@ import org.junit.Test
 /** Native regressions for option A, text clipping, and the work page's system-bar backdrop. */
 class WorksUiRegressionTest {
     @get:Rule val compose = createComposeRule()
-    private val track = PlexTrackStream("9", "Song", "", "", 240000, null, sourceId = "server")
+    private val track = MusicTrack("9", "Song", "", "", 240000, null, sourceId = "server")
 
     @Test fun moreListsWorksDirectlyAndOmitsRedundantActions() {
         var opened: Pair<String, Long>? = null
         compose.setContent {
-            PlexToSonosPlayerTheme {
+            MusicBridgeTheme {
                 PlaybackMoreContent(
                     track, null, "Artist · Album", "FLAC · 16bit · 44.1kHz",
                     loadWorks = { listOf(
@@ -61,7 +61,7 @@ class WorksUiRegressionTest {
         val visible = mutableStateOf(false)
         var calls = 0
         compose.setContent {
-            PlexToSonosPlayerTheme {
+            MusicBridgeTheme {
                 if (visible.value) PlaybackMoreContent(
                     track, null, "Artist · Album", "FLAC",
                     loadWorks = { calls++; emptyList() }, loadWorkInfo = { _, _ -> null },
@@ -79,7 +79,7 @@ class WorksUiRegressionTest {
 
     @Test fun posterMetadataPixelsMatchUnclippedTextAtLargeFontScale() {
         compose.setContent {
-            PlexToSonosPlayerTheme {
+            MusicBridgeTheme {
                 val density = LocalDensity.current
                 CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale = 1.3f)) {
                     Column(Modifier.background(Color.Black)) {
@@ -104,7 +104,7 @@ class WorksUiRegressionTest {
 
     @Test fun workBackgroundPaintsBehindTopSafeInsetInsteadOfNowPlayingColor() {
         compose.setContent {
-            PlexToSonosPlayerTheme {
+            MusicBridgeTheme {
                 Box(Modifier.fillMaxSize().background(Color.Magenta).testTag("work-root")) {
                     CompositionLocalProvider(LocalArtworkPalette provides DefaultArtworkPalette.copy(
                         backgroundTop = Color.Magenta, backgroundBottom = Color.Magenta,

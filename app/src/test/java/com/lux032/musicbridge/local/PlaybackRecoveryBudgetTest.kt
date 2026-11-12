@@ -126,7 +126,7 @@ class PlaybackRecoveryBudgetTest {
         assertEquals(
             LiveTranscodeRetryAction.RESTART_AT_POSITION,
             liveTranscodeRetryAction(
-                streamUrl = "https://plex/music/:/transcode/universal/start.mp3?offset=0",
+                streamUrl = "https://032.example/api/v1/tracks/1/transcode.mp3?mediaToken=t&offsetMs=0",
                 durationMillis = 180_000L,
                 currentPositionMillis = 90_000L,
             ),
@@ -134,11 +134,11 @@ class PlaybackRecoveryBudgetTest {
     }
 
     @Test
-    fun oggLiveTranscodeRetriesAtCurrentPositionWithFastSeekSupport() {
+    fun oggLiveTranscodeRetriesAtCurrentPosition() {
         assertEquals(
             LiveTranscodeRetryAction.RESTART_AT_POSITION,
             liveTranscodeRetryAction(
-                streamUrl = "https://plex/music/:/transcode/universal/start.ogg?offset=0",
+                streamUrl = "https://032.example/api/v1/tracks/1/transcode.ogg?mediaToken=t&offsetMs=0",
                 durationMillis = 180_000L,
                 currentPositionMillis = 90_000L,
             ),
@@ -150,7 +150,7 @@ class PlaybackRecoveryBudgetTest {
         assertEquals(
             LiveTranscodeRetryAction.SKIP_NEAR_END,
             liveTranscodeRetryAction(
-                streamUrl = "https://plex/music/:/transcode/universal/start.mp3?offset=0",
+                streamUrl = "https://032.example/api/v1/tracks/1/transcode.mp3?mediaToken=t&offsetMs=0",
                 durationMillis = 180_000L,
                 currentPositionMillis = 177_500L,
             ),
@@ -162,7 +162,7 @@ class PlaybackRecoveryBudgetTest {
         assertEquals(
             LiveTranscodeRetryAction.RESTART_AT_POSITION,
             liveTranscodeRetryAction(
-                streamUrl = "https://plex/music/:/transcode/universal/start.mp3?offset=0",
+                streamUrl = "https://032.example/api/v1/tracks/1/transcode.mp3?mediaToken=t&offsetMs=0",
                 durationMillis = null,
                 currentPositionMillis = 90_000L,
             ),
@@ -170,7 +170,7 @@ class PlaybackRecoveryBudgetTest {
         assertEquals(
             LiveTranscodeRetryAction.RESTART_AT_POSITION,
             liveTranscodeRetryAction(
-                streamUrl = "https://plex/music/:/transcode/universal/start.mp3?offset=0",
+                streamUrl = "https://032.example/api/v1/tracks/1/transcode.mp3?mediaToken=t&offsetMs=0",
                 durationMillis = 0L,
                 currentPositionMillis = 90_000L,
             ),
@@ -182,7 +182,7 @@ class PlaybackRecoveryBudgetTest {
         assertEquals(
             LiveTranscodeRetryAction.RETRY_FROM_START,
             liveTranscodeRetryAction(
-                streamUrl = "https://plex/library/parts/1/file.flac",
+                streamUrl = "https://032.example/api/v1/tracks/1/stream?mediaToken=t",
                 durationMillis = 180_000L,
                 currentPositionMillis = 90_000L,
             ),

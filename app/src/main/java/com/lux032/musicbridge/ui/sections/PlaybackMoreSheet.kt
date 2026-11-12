@@ -23,19 +23,19 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.lux032.musicbridge.music.Music032TrackWork
 import com.lux032.musicbridge.music.Music032Work
-import com.lux032.musicbridge.plex.PlexTrackStream
+import com.lux032.musicbridge.music.MusicTrack
 import kotlinx.coroutines.CancellationException
 
 /** Option A: the works are direct destinations in More, never a second sheet or a badge. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun PlaybackMoreSheet(
-    track: PlexTrackStream,
+    track: MusicTrack,
     artworkUrl: String?,
     artistAlbum: String,
     technicalDetails: String,
     palette: ArtworkPalette,
-    loadWorks: suspend (PlexTrackStream) -> List<Music032TrackWork>,
+    loadWorks: suspend (MusicTrack) -> List<Music032TrackWork>,
     loadWorkInfo: suspend (String, Long) -> Music032Work?,
     onOpenWork: (String, Long) -> Unit,
     onAddToPlaylist: (() -> Unit)?,
@@ -55,11 +55,11 @@ internal fun PlaybackMoreSheet(
 
 @Composable
 internal fun PlaybackMoreContent(
-    track: PlexTrackStream,
+    track: MusicTrack,
     artworkUrl: String?,
     artistAlbum: String,
     technicalDetails: String,
-    loadWorks: suspend (PlexTrackStream) -> List<Music032TrackWork>,
+    loadWorks: suspend (MusicTrack) -> List<Music032TrackWork>,
     loadWorkInfo: suspend (String, Long) -> Music032Work?,
     onOpenWork: (String, Long) -> Unit,
     onAddToPlaylist: (() -> Unit)?,

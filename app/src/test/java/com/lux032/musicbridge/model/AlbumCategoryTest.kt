@@ -1,15 +1,15 @@
 package com.lux032.musicbridge.model
 
 import com.lux032.musicbridge.music.Music032Json
-import com.lux032.musicbridge.plex.PlexAlbum
-import com.lux032.musicbridge.plex.PlexSection
+import com.lux032.musicbridge.music.MusicAlbum
+import com.lux032.musicbridge.music.LibrarySection
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class AlbumCategoryTest {
     @Test fun music032MappedReleasesClassifyByTypeAndFlags() {
-        val section = PlexSection("032", "032", "artist")
+        val section = LibrarySection("032", "032", "artist")
         for ((json, kind) in listOf(
             """{"id":1,"title":"Ordinary","albumType":"single","formats":"FLAC"}""" to ReleaseKind.Single,
             """{"id":2,"title":"Ordinary","albumType":"ep","formats":"MP3"}""" to ReleaseKind.Ep,
@@ -22,7 +22,7 @@ class AlbumCategoryTest {
     }
 
     @Test fun music032DefaultAlbumTypesRetainTitleAndCountHeuristics() {
-        val section = PlexSection("032", "032", "artist")
+        val section = LibrarySection("032", "032", "artist")
         for (albumType in listOf("album", "soundtrack")) {
             val tagged = Music032Json.parseAlbum(
                 JSONObject("""{"id":5,"title":"Ordinary","trackCount":2,"albumType":"$albumType"}"""),
@@ -39,7 +39,7 @@ class AlbumCategoryTest {
     }
 
     @Test fun music032ReleaseKindIsAuthoritative() {
-        val section = PlexSection("032", "032", "artist")
+        val section = LibrarySection("032", "032", "artist")
         for ((json, kind) in listOf(
             // 服务端判定为 album 的 2 曲专辑不再被本地曲目数启发式判成单曲。
             """{"id":6,"title":"Ordinary","trackCount":2,"albumType":"album","releaseKind":"album"}""" to ReleaseKind.Album,
@@ -55,13 +55,13 @@ class AlbumCategoryTest {
         }
     }
 
-    @Test fun plexFormatsAreAuthoritative() {
+    @Test fun serverFormatsAreAuthoritative() {
         assertKind(album(format = "Single", tracks = 12), ArtistAlbumCategory.SingleEp, ReleaseKind.Single)
         assertKind(album(format = "EP", tracks = 12), ArtistAlbumCategory.SingleEp, ReleaseKind.Ep)
         assertKind(album(format = "Album", tracks = 1), ArtistAlbumCategory.Album, ReleaseKind.Album)
     }
 
-    @Test fun plexSubformatsOverridePrimaryFormat() {
+    @Test fun serverSubformatsOverridePrimaryFormat() {
         assertKind(album(format = "Album", subformat = "Live"), ArtistAlbumCategory.CompilationLive, ReleaseKind.Live)
         assertKind(album(format = "Single", subformat = "Compilation"), ArtistAlbumCategory.CompilationLive, ReleaseKind.Compilation)
         assertKind(album(format = "Album", subformat = "Live,Remix"), ArtistAlbumCategory.CompilationLive, ReleaseKind.Live)
@@ -89,12 +89,12 @@ class AlbumCategoryTest {
         assertKind(album(title = "作品［ＥＰ］", tracks = 12), ArtistAlbumCategory.SingleEp, ReleaseKind.Ep)
     }
 
-    @Test fun unknownNonEmptyPlexTagsContinueThroughFallback() {
+    @Test fun unknownNonEmptyFormatTagsContinueThroughFallback() {
         assertKind(album(title = "Release - Single", format = "Other", tracks = 12), ArtistAlbumCategory.SingleEp, ReleaseKind.Single)
         assertKind(album(title = "Ordinary", format = "Other", tracks = 5), ArtistAlbumCategory.SingleEp, ReleaseKind.Ep)
     }
 
-    private fun assertKind(album: PlexAlbum, category: ArtistAlbumCategory, kind: ReleaseKind) {
+    private fun assertKind(album: MusicAlbum, category: ArtistAlbumCategory, kind: ReleaseKind) {
         assertEquals(ArtistAlbumClassification(category, kind), classifyArtistAlbum(album))
     }
 
@@ -103,7 +103,7 @@ class AlbumCategoryTest {
         tracks: Int? = 10,
         format: String? = null,
         subformat: String? = null,
-    ) = PlexAlbum(
+    ) = MusicAlbum(
         ratingKey = title,
         title = title,
         artistName = "Artist",
@@ -112,7 +112,7 @@ class AlbumCategoryTest {
         userRating = null,
         addedAtEpochSeconds = null,
         lastViewedAtEpochSeconds = null,
-        section = PlexSection("1", "Music", "artist"),
+        section = LibrarySection("1", "Music", "artist"),
         leafCount = tracks,
         format = format,
         subformat = subformat,

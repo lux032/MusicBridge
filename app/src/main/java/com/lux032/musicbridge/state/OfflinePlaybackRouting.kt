@@ -1,6 +1,6 @@
 package com.lux032.musicbridge
 
-import com.lux032.musicbridge.plex.PlexTrackStream
+import com.lux032.musicbridge.music.MusicTrack
 import com.lux032.musicbridge.sonos.SonosRoom
 
 /**
@@ -32,7 +32,7 @@ internal fun offlinePlaybackRoute(target: PlaybackTarget): OfflinePlaybackRoute 
  * rating key instead, falling back to the head of the queue.
  */
 internal fun resolveHydratedStartIndex(
-    hydratedTracks: List<PlexTrackStream>,
+    hydratedTracks: List<MusicTrack>,
     requestedRatingKey: String?,
 ): Int {
     if (requestedRatingKey.isNullOrBlank()) return 0

@@ -2,7 +2,7 @@ package com.lux032.musicbridge
 
 import com.lux032.musicbridge.music.Music032Capabilities
 import com.lux032.musicbridge.music.Music032FormatCaps
-import com.lux032.musicbridge.plex.PlexTrackStream
+import com.lux032.musicbridge.music.MusicTrack
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
@@ -11,7 +11,7 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class SonosPlanTest {
-    private fun track(codec: String?, rate: Int? = null, url: String = "https://h/api/v1/tracks/12/stream?mediaToken=x") = PlexTrackStream(
+    private fun track(codec: String?, rate: Int? = null, url: String = "https://h/api/v1/tracks/12/stream?mediaToken=x") = MusicTrack(
         "12", "Track", url, "/api/v1/tracks/12/stream", 120000, null,
         sourceAudioCodec = codec, sourceAudioSampleRate = rate)
     private val available = Music032Capabilities(2, emptySet(), mapOf("mp3" to Music032FormatCaps(true, listOf(320), emptyList())), emptyList())
@@ -100,7 +100,7 @@ class SonosPlanTest {
     @Test fun canceledInitiatorDoesNotCancelAnotherHydrationWaiter() = runBlocking {
         withTimeout(5_000) {
             val cache = Music032HydrationCache(this)
-            val fetched = CompletableDeferred<PlexTrackStream>()
+            val fetched = CompletableDeferred<MusicTrack>()
             val started = CompletableDeferred<Unit>()
             var calls = 0
             val sparse = track("flac")
@@ -145,7 +145,7 @@ class SonosPlanTest {
         assertEquals("正在连续播放：下一首", playlistTrackMessage("下一首", is032 = true, fellBackFromFlac = false))
         assertEquals("正在连续播放：下一首（${Strings.music032FlacFallback}）",
             playlistTrackMessage("下一首", is032 = true, fellBackFromFlac = true))
-        assertNull(playlistTrackMessage("Plex 曲目", is032 = false, fellBackFromFlac = true))
+        assertNull(playlistTrackMessage("其他曲目", is032 = false, fellBackFromFlac = true))
     }
 
     @Test fun seekAfterPushOnlyOriginalOrStatic() {

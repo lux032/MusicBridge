@@ -64,21 +64,17 @@ import androidx.compose.ui.zIndex
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
-import com.lux032.musicbridge.plex.PlexAlbum
-import com.lux032.musicbridge.plex.PlexAlbumTracksResult
-import com.lux032.musicbridge.plex.PlexSection
-import com.lux032.musicbridge.plex.PlexTrackStream
+import com.lux032.musicbridge.music.MusicAlbum
+import com.lux032.musicbridge.music.AlbumTracksResult
+import com.lux032.musicbridge.music.LibrarySection
+import com.lux032.musicbridge.music.MusicTrack
 import com.lux032.musicbridge.service.PlaybackForegroundService.Companion.ACTION_OPEN_PLAYBACK_DETAIL
-import com.lux032.musicbridge.local.PlaybackDiagnostics
-import com.lux032.musicbridge.local.isPlexLiveTranscodeUrl
 import com.lux032.musicbridge.ui.settings.SettingsActions
 import com.lux032.musicbridge.ui.settings.SettingsScreen
 import com.lux032.musicbridge.ui.settings.SettingsViewState
-import com.lux032.musicbridge.ui.theme.PlexToSonosPlayerTheme
-import kotlinx.coroutines.Dispatchers
+import com.lux032.musicbridge.ui.theme.MusicBridgeTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 
 class MainActivity : ComponentActivity() {
@@ -97,14 +93,14 @@ class MainActivity : ComponentActivity() {
         )
         handlePlaybackIntent(intent)
         setContent {
-            PlexToSonosPlayerTheme {
+            MusicBridgeTheme {
                 // Content draws its own full-screen gradient; a transparent scaffold avoids
                 // painting a solid background underneath it every frame.
                 Scaffold(
                     modifier = Modifier.fillMaxSize(),
                     containerColor = androidx.compose.ui.graphics.Color.Transparent,
                 ) { innerPadding ->
-                    PlexAlbumScreen(
+                    MusicBridgeApp(
                         // Applied per-section inside: the playback screen goes edge-to-edge so
                         // its artwork backdrop paints behind the transparent system bars.
                         contentPadding = innerPadding,
@@ -161,7 +157,7 @@ class MainActivity : ComponentActivity() {
 }
 @OptIn(androidx.compose.animation.ExperimentalSharedTransitionApi::class)
 @Composable
-fun PlexAlbumScreen(
+fun MusicBridgeApp(
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(),
     systemBarTopPadding: androidx.compose.ui.unit.Dp = 0.dp,
@@ -181,7 +177,7 @@ fun PlexAlbumScreen(
         derivedStateOf { state.miniPlayerState != null }
     }
 
-    // Global Plexamp-style tint: the whole app background and accent highlights follow the
+    // Global artwork tint: the whole app background and accent highlights follow the
     // now-playing artwork. Null when nothing is playing -> DefaultArtworkPalette, i.e. the
     // original neutral dark look. Every page (including detail pages) shares this one tint.
     val nowPlayingArtworkUrl by remember(state) {
@@ -511,8 +507,7 @@ fun PlexAlbumScreen(
                                 state.startPlaylistPlayback(playlistResult, shuffle = true)
                             },
                             aiDescription = state.aiPlaylistDescription,
-                            onSaveToPlex = state::saveCurrentAiPlaylistToPlex,
-                            onSonicRadio = state::startSonicRadio,
+                            onSaveAiPlaylist = state::saveCurrentAiPlaylist,
                             canEditPlaylist = state.playlistTrackResult?.playlist?.let(state::canEditPlaylist) == true,
                             onRemoveTrack = state::removeTrackFromOpenPlaylist,
                             onUpdatePlaylist = { playlist, name, description ->
@@ -530,7 +525,7 @@ fun PlexAlbumScreen(
                                 val currentResult = state.playlistTrackResult
                                 if (currentResult != null) {
                                     val tracksFromIndex = currentResult.tracks.drop(index)
-                                    val fakeAlbum = PlexAlbum(
+                                    val fakeAlbum = MusicAlbum(
                                         ratingKey = playlist.ratingKey,
                                         title = playlist.title,
                                         artistName = null,
@@ -539,7 +534,7 @@ fun PlexAlbumScreen(
                                         userRating = null,
                                         addedAtEpochSeconds = null,
                                         lastViewedAtEpochSeconds = null,
-                                        section = PlexSection("", "", ""),
+                                        section = LibrarySection("", "", ""),
                                         sourceId = playlist.sourceId,
                                     )
                                     state.startSingleTrackPlayback(fakeAlbum, tracksFromIndex, 0)
@@ -565,11 +560,11 @@ fun PlexAlbumScreen(
                             onPlay = { work, shuffle, series -> state.playWork(currentEntry.sourceId, work, shuffle, series) },
                             onQueue = state::enqueueWorkTracks,
                             onTrack = { work, tracks, index ->
-                                val album = PlexAlbum(
+                                val album = MusicAlbum(
                                     ratingKey = "work:${work.id}", title = work.title, artistName = null,
                                     year = work.year.takeIf { it > 0 }, thumbUrl = work.artworkUrl, userRating = null,
                                     addedAtEpochSeconds = null, lastViewedAtEpochSeconds = null,
-                                    section = PlexSection("", "", ""), sourceId = currentEntry.sourceId,
+                                    section = LibrarySection("", "", ""), sourceId = currentEntry.sourceId,
                                 )
                                 state.startSingleTrackPlayback(album, tracks, index)
                             },
@@ -630,13 +625,13 @@ fun PlexAlbumScreen(
                     DisposableEffect(selectedArtistIdentity) {
                         onDispose { state.cancelArtistTracks() }
                     }
-                    val playArtistQueue: (ArtistSummary, List<PlexTrackStream>, Int) -> Unit = { artist, queue, index ->
+                    val playArtistQueue: (ArtistSummary, List<MusicTrack>, Int) -> Unit = { artist, queue, index ->
                         if (queue.isNotEmpty()) {
-                            val queueAlbum = PlexAlbum(
+                            val queueAlbum = MusicAlbum(
                                 ratingKey = artist.ratingKey ?: artist.name, title = artist.name,
                                 artistName = artist.name, year = null, thumbUrl = artist.coverUrl,
                                 userRating = null, addedAtEpochSeconds = null, lastViewedAtEpochSeconds = null,
-                                section = PlexSection("", "", ""), sourceId = artist.sourceId,
+                                section = LibrarySection("", "", ""), sourceId = artist.sourceId,
                             )
                             state.startSingleTrackPlayback(queueAlbum, queue, index)
                         }
@@ -789,10 +784,10 @@ fun PlexAlbumScreen(
                             onToggleTrackFavorite = state::toggleTrackFavorite,
                             onQueueAlbum = state::enqueueAlbum,
                             onQueueTrack = state::enqueueTrack,
-                            onPlayAlbum = { albumTrackResult: PlexAlbumTracksResult ->
+                            onPlayAlbum = { albumTrackResult: AlbumTracksResult ->
                                 state.startAlbumPlayback(albumTrackResult)
                             },
-                            onPlayTrack = { album: PlexAlbum, track: PlexTrackStream ->
+                            onPlayTrack = { album: MusicAlbum, track: MusicTrack ->
                                 val currentTrackResult = state.trackResult
                                 if (
                                     currentTrackResult != null &&
@@ -917,7 +912,6 @@ fun PlexAlbumScreen(
                             wifiPrecacheCount = state.wifiPrecacheCount,
                             cellularPrecacheCount = state.cellularPrecacheCount,
                             localCacheSize = state.localCacheSize,
-                            aiSettings = state.aiSettings,
                         ),
                         actions = SettingsActions(
                             onOpusTranscodeModeChange = state::updateOpusTranscodeMode,
@@ -934,35 +928,8 @@ fun PlexAlbumScreen(
                             onSwitchServer = state::switchServer,
                             onDeleteServer = state::deleteServer,
                             onRefreshHome = { scope.launch { state.refreshAlbums() } },
-                            onSaveAiSettings = state::updateAiSettings,
                             loadLocalCacheUsedBytes = { state.localCacheUsedBytes() },
                             loadOfflineDownloadedBytes = { state.totalDownloadedBytes() },
-                            runPlexOffsetProbe = probe@{
-                                val playerState = state.miniPlayerState
-                                    ?: return@probe Result.failure(
-                                        IllegalStateException("请先播放一首 Plex 转码曲目"),
-                                    )
-                                if (playerState.target != PlaybackTarget.LocalDevice) {
-                                    return@probe Result.failure(
-                                        IllegalStateException("请先使用本机播放一首 Plex 转码曲目"),
-                                    )
-                                }
-                                val liveUrl = state.localPlaybackEngine.currentLiveTranscodeUrl
-                                if (liveUrl?.isPlexLiveTranscodeUrl() != true) {
-                                    return@probe Result.failure(
-                                        IllegalStateException("请先播放一首 Plex 转码曲目"),
-                                    )
-                                }
-                                if (state.localPlaybackEngine.isPlayRequested) {
-                                    state.togglePause(playerState)
-                                }
-                                withContext(Dispatchers.IO) {
-                                    PlaybackDiagnostics.testPlexOffsetCompatibility(
-                                        context = state.context,
-                                        liveTranscodeUrl = liveUrl,
-                                    )
-                                }
-                            },
                         ),
                         scrollState = scrollState,
                         bottomContentPadding = contentBottomPadding,

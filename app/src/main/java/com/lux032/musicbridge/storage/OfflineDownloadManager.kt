@@ -6,7 +6,7 @@ import androidx.media3.datasource.DefaultHttpDataSource
 import com.lux032.musicbridge.local.LocalAudioCache
 import com.lux032.musicbridge.local.originalCacheKey
 import com.lux032.musicbridge.music.Music032TranscodeUrls
-import com.lux032.musicbridge.plex.PlexTrackStream
+import com.lux032.musicbridge.music.MusicTrack
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -81,7 +81,7 @@ class OfflineDownloadManager(
     private val pendingKeys = ConcurrentHashMap.newKeySet<String>()
 
     private data class DownloadTask(
-        val track: PlexTrackStream,
+        val track: MusicTrack,
         val onComplete: ((Boolean) -> Unit)? = null,
     )
 
@@ -141,7 +141,7 @@ class OfflineDownloadManager(
         return "${sourceId}:${ratingKey}" in keys || ratingKey in keys
     }
 
-    fun enqueueDownload(track: PlexTrackStream, onComplete: ((Boolean) -> Unit)? = null) {
+    fun enqueueDownload(track: MusicTrack, onComplete: ((Boolean) -> Unit)? = null) {
         val taskKey = "${track.sourceId}:${track.ratingKey}"
         if (isTrackDownloaded(track.sourceId, track.ratingKey) || taskKey in pendingKeys) {
             onComplete?.invoke(isTrackDownloaded(track.sourceId, track.ratingKey))
@@ -222,7 +222,7 @@ class OfflineDownloadManager(
     }
 
     private suspend fun executeDownload(
-        track: PlexTrackStream,
+        track: MusicTrack,
         onProgress: (Float) -> Unit,
     ): Boolean = withContext(Dispatchers.IO) {
         val safePartKey = track.partKey.replace(Regex("[^a-zA-Z0-9_-]"), "_")

@@ -3,10 +3,10 @@ package com.lux032.musicbridge
 import com.lux032.musicbridge.music.Music032Client
 import com.lux032.musicbridge.music.Music032HttpException
 import com.lux032.musicbridge.music.Music032PlaylistItemResult
-import com.lux032.musicbridge.plex.PlexAlbum
-import com.lux032.musicbridge.plex.PlexPlaylist
-import com.lux032.musicbridge.plex.PlexPlaylistTracksResult
-import com.lux032.musicbridge.plex.PlexTrackStream
+import com.lux032.musicbridge.music.MusicAlbum
+import com.lux032.musicbridge.music.MusicPlaylist
+import com.lux032.musicbridge.music.PlaylistTracksResult
+import com.lux032.musicbridge.music.MusicTrack
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -17,11 +17,11 @@ import java.io.IOException
 sealed interface PlaylistAddition {
     val sourceId: String
 
-    data class Tracks(val tracks: List<PlexTrackStream>) : PlaylistAddition {
+    data class Tracks(val tracks: List<MusicTrack>) : PlaylistAddition {
         override val sourceId: String get() = tracks.firstOrNull()?.sourceId.orEmpty()
     }
 
-    data class Album(val album: PlexAlbum, val trackCount: Int? = null) : PlaylistAddition {
+    data class Album(val album: MusicAlbum, val trackCount: Int? = null) : PlaylistAddition {
         override val sourceId: String get() = album.sourceId
     }
 }
@@ -81,7 +81,7 @@ internal class AppStatePlaylistCoordinator(
     fun canAddFrom(sourceId: String): Boolean =
         canEdit(sourceId) && sourceId == state.connectionPreferences.id
 
-    fun canEditPlaylist(playlist: PlexPlaylist): Boolean =
+    fun canEditPlaylist(playlist: MusicPlaylist): Boolean =
         canEdit(playlist.sourceId.ifBlank { state.connectionPreferences.id }) && isEditableServerPlaylistKey(playlist.ratingKey)
 
     fun notify(message: String, actionLabel: String? = null, isError: Boolean = false, onAction: (() -> Unit)? = null) {
@@ -100,14 +100,14 @@ internal class AppStatePlaylistCoordinator(
     }
 
     /** Shows a just-created (empty) playlist without a round trip. */
-    fun openCreated(playlist: PlexPlaylist) {
+    fun openCreated(playlist: MusicPlaylist) {
         state.aiPlaylistDescription = null
         state.selectedPlaylist = playlist
-        state.playlistTrackResult = PlexPlaylistTracksResult("", playlist, emptyList())
+        state.playlistTrackResult = PlaylistTracksResult("", playlist, emptyList())
         state.navigateTo(AppSection.PlaylistDetail)
     }
 
-    suspend fun create(name: String, description: String, addition: PlaylistAddition?): Result<PlexPlaylist> {
+    suspend fun create(name: String, description: String, addition: PlaylistAddition?): Result<MusicPlaylist> {
         val sourceId = addition?.sourceId ?: state.connectionPreferences.id
         if (!canEdit(sourceId)) return Result.failure(IllegalStateException(Strings.playlistEditUnsupported))
         if (name.isBlank()) return Result.failure(IllegalArgumentException(Strings.playlistNameRequired))
@@ -146,7 +146,7 @@ internal class AppStatePlaylistCoordinator(
         }
     }
 
-    fun addTo(playlist: PlexPlaylist, addition: PlaylistAddition) {
+    fun addTo(playlist: MusicPlaylist, addition: PlaylistAddition) {
         val sourceId = playlist.sourceId.ifBlank { addition.sourceId }
         if (!canEdit(sourceId) || !isEditableServerPlaylistKey(playlist.ratingKey)) return
         state.isPlaylistMutating = true
@@ -171,7 +171,7 @@ internal class AppStatePlaylistCoordinator(
         }
     }
 
-    suspend fun update(playlist: PlexPlaylist, name: String, description: String): Result<PlexPlaylist> {
+    suspend fun update(playlist: MusicPlaylist, name: String, description: String): Result<MusicPlaylist> {
         val sourceId = playlist.sourceId.ifBlank { state.connectionPreferences.id }
         if (!canEditPlaylist(playlist)) return Result.failure(IllegalStateException(Strings.playlistEditUnsupported))
         if (name.isBlank()) return Result.failure(IllegalArgumentException(Strings.playlistNameRequired))
@@ -190,7 +190,7 @@ internal class AppStatePlaylistCoordinator(
         }
     }
 
-    suspend fun delete(playlist: PlexPlaylist): Result<Unit> {
+    suspend fun delete(playlist: MusicPlaylist): Result<Unit> {
         val sourceId = playlist.sourceId.ifBlank { state.connectionPreferences.id }
         if (!canEditPlaylist(playlist)) return Result.failure(IllegalStateException(Strings.playlistEditUnsupported))
         state.isPlaylistMutating = true
@@ -215,7 +215,7 @@ internal class AppStatePlaylistCoordinator(
     }
 
     /** Removes [track] from the open playlist: optimistic, with undo and rollback. */
-    fun removeTrack(track: PlexTrackStream) {
+    fun removeTrack(track: MusicTrack) {
         val current = state.playlistTrackResult ?: return
         val playlist = current.playlist
         if (!canEditPlaylist(playlist)) return
@@ -263,7 +263,7 @@ internal class AppStatePlaylistCoordinator(
         }
     }
 
-    private fun undoRemove(sourceId: String, playlist: PlexPlaylist, track: PlexTrackStream, index: Int) {
+    private fun undoRemove(sourceId: String, playlist: MusicPlaylist, track: MusicTrack, index: Int) {
         state.scope.launch {
             try {
                 val result = withContext(Dispatchers.IO) {
@@ -281,7 +281,7 @@ internal class AppStatePlaylistCoordinator(
         }
     }
 
-    private fun restoreTrack(playlistKey: String, track: PlexTrackStream, index: Int) {
+    private fun restoreTrack(playlistKey: String, track: MusicTrack, index: Int) {
         val current = state.playlistTrackResult ?: return
         if (current.playlist.ratingKey != playlistKey) return
         if (current.tracks.any { it.ratingKey == track.ratingKey }) return
@@ -305,7 +305,7 @@ internal class AppStatePlaylistCoordinator(
     }
 
     /** Pulls the server's track list so the cache and an open detail match the server. */
-    private suspend fun refreshPlaylistTracks(sourceId: String, playlist: PlexPlaylist) {
+    private suspend fun refreshPlaylistTracks(sourceId: String, playlist: MusicPlaylist) {
         val fresh = runCatching {
             withContext(Dispatchers.IO) { client(sourceId).fetchPlaylistTracks(playlist) }
         }.getOrElse { if (it is CancellationException) throw it; return }
@@ -316,7 +316,7 @@ internal class AppStatePlaylistCoordinator(
         replacePlaylistEverywhere(sourceId, fresh.playlist.copy(leafCount = fresh.tracks.size))
     }
 
-    private fun replacePlaylistEverywhere(sourceId: String, updated: PlexPlaylist) {
+    private fun replacePlaylistEverywhere(sourceId: String, updated: MusicPlaylist) {
         if (state.connectionPreferences.id != sourceId) return
         state.playlists = state.playlists.map { if (it.ratingKey == updated.ratingKey) updated else it }
         if (state.selectedPlaylist?.ratingKey == updated.ratingKey) state.selectedPlaylist = updated
@@ -325,7 +325,7 @@ internal class AppStatePlaylistCoordinator(
         }
     }
 
-    private suspend fun onPlaylistGone(sourceId: String, playlist: PlexPlaylist) {
+    private suspend fun onPlaylistGone(sourceId: String, playlist: MusicPlaylist) {
         if (state.connectionPreferences.id == sourceId) {
             state.playlists = state.playlists.filterNot { it.ratingKey == playlist.ratingKey }
             persistPlaylistList(sourceId)

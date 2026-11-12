@@ -1,7 +1,7 @@
 package com.lux032.musicbridge
 
-import com.lux032.musicbridge.plex.PlexAlbum
-import com.lux032.musicbridge.plex.PlexTrackStream
+import com.lux032.musicbridge.music.MusicAlbum
+import com.lux032.musicbridge.music.MusicTrack
 import com.lux032.musicbridge.sonos.SonosRoom
 
 enum class AppSection {
@@ -26,8 +26,8 @@ enum class MessageTone {
 }
 
 data class MiniPlayerState(
-    val album: PlexAlbum,
-    val tracks: List<PlexTrackStream>,
+    val album: MusicAlbum,
+    val tracks: List<MusicTrack>,
     val currentIndex: Int,
     val target: PlaybackTarget,
     val isPaused: Boolean,
@@ -117,10 +117,10 @@ private val RELEASE_DATE_PATTERN = Regex("""^(\d{4})(?:[-./]?(\d{1,2})(?:[-./]?(
 /**
  * Comparable release key `yyyyMMdd`; missing month/day count as 0, so a bare year sorts
  * after that year's dated releases when newest-first (same as the 032 web "date" sort).
- * A [PlexAlbum.year] that contradicts the date's year wins (it is the user-edited value),
+ * A [MusicAlbum.year] that contradicts the date's year wins (it is the user-edited value),
  * and an album without a usable date falls back to its year. Null when neither exists.
  */
-fun PlexAlbum.releaseSortKey(): Int? {
+fun MusicAlbum.releaseSortKey(): Int? {
     val validYear = year?.takeIf { it in 1..9999 }
     val match = releaseDate?.trim()?.let(RELEASE_DATE_PATTERN::find)
     if (match != null) {
@@ -135,9 +135,9 @@ fun PlexAlbum.releaseSortKey(): Int? {
 }
 
 /** Sorts by [releaseSortKey] (keys computed once); undated albums always last, ties by title. */
-fun List<PlexAlbum>.sortedByRelease(newestFirst: Boolean): List<PlexAlbum> {
+fun List<MusicAlbum>.sortedByRelease(newestFirst: Boolean): List<MusicAlbum> {
     val keyed = map { Triple(it, it.releaseSortKey(), it.title.lowercase()) }
-    val byKey: Comparator<Triple<PlexAlbum, Int?, String>> = if (newestFirst) {
+    val byKey: Comparator<Triple<MusicAlbum, Int?, String>> = if (newestFirst) {
         compareByDescending(nullsFirst()) { it.second }
     } else {
         compareBy(nullsLast()) { it.second }
@@ -218,7 +218,7 @@ enum class LocalStreamingLimit(val id: String, val maxSourceBitrateKbps: Int?) {
     }
 }
 
-/** Plexamp-style Opus output tiers used only by Android local playback. */
+/** Opus output tiers used only by Android local playback. */
 enum class LocalOpusBitrate(val id: String, val kbps: Int) {
     KBPS_256("256", 256),
     KBPS_192("192", 192),
@@ -307,14 +307,11 @@ enum class SonosHiResTranscodeMode(val id: String) {
     }
 }
 
-fun SonosHiResTranscodeMode.forPlex(): SonosHiResTranscodeMode =
-    if (this == SonosHiResTranscodeMode.TRANSCODE_FLAC_48K) SonosHiResTranscodeMode.TRANSCODE_MP3 else this
-
 enum class OpusTranscodeMode(val id: String, val mimeType: String) {
-    /** 直连秒播：Plex 实时转码 MP3 320k 直投 Sonos，绕过手机代理 */
+    /** 直连秒播：服务端实时转码 MP3 320k 直投 Sonos */
     DIRECT_MP3("direct_mp3", "audio/mpeg"),
 
-    /** 无损中继：Plex 实时转码 FLAC，通过手机本地 PlexTranscodeProxy 代理投送 */
+    /** 无损中继：服务端转码 FLAC（预热缓存后投送） */
     PROXY_FLAC("proxy_flac", "audio/flac");
 
     companion object {

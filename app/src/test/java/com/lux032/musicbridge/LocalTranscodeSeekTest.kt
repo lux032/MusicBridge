@@ -9,7 +9,7 @@ import org.junit.Test
 class LocalTranscodeSeekTest {
     @Test
     fun directFileKeepsNativeMedia3SeekPath() {
-        val url = "https://plex.example/library/parts/42/file.flac?X-Plex-Token=token"
+        val url = "https://032.example/api/v1/tracks/42/stream?mediaToken=token"
 
         val plan = buildLocalSeekPlan(url, 137_890L)
 
@@ -21,26 +21,15 @@ class LocalTranscodeSeekTest {
     }
 
     @Test
-    fun liveTranscodeRestartsAtWholeSecondPlexOffset() {
-        val url = "https://plex.example/music/:/transcode/universal/start.mp3?offset=0&path=%2Flibrary%2Fmetadata%2F42"
+    fun liveTranscodeRestartsAtMillisecondOffset() {
+        val url = "https://032.example/api/v1/tracks/42/transcode.ogg?mediaToken=token&bitrate=128"
 
-        val plan = buildLocalSeekPlan(url, 137_890L)
+        val plan = buildLocalSeekPlan(url, 137_890L, 180_000L)
 
         assertTrue(plan.restartsLiveTranscode)
-        assertTrue(plan.url.contains("offset=137"))
-        assertTrue(plan.url.contains("fastSeek=1"))
+        assertTrue(plan.url.contains("offsetMs=137890"))
         assertEquals(0L, plan.playerPositionMillis)
-        assertEquals(137_000L, plan.logicalBaseMillis)
-        assertEquals(137_000L, plan.effectiveTargetMillis)
-    }
-
-    @Test
-    fun liveTranscodeAtZeroOffsetDoesNotAddFastSeek() {
-        val url = "https://plex.example/music/:/transcode/universal/start.ogg?offset=30&path=%2Flibrary%2Fmetadata%2F42"
-
-        val plan = buildLocalSeekPlan(url, 0L)
-
-        assertTrue(plan.url.contains("offset=0"))
-        assertFalse(plan.url.contains("fastSeek="))
+        assertEquals(137_890L, plan.logicalBaseMillis)
+        assertEquals(137_890L, plan.effectiveTargetMillis)
     }
 }

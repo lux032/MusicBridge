@@ -1,5 +1,7 @@
 # MusicBridge 适配 032 Music Server 新能力 — 实施规划
 
+> **归档说明（2026-11）**：MusicBridge 已不再支持 Plex，相关代码（`PlexClient`、`PlexTranscodeProxy`、`SonicCapableSource` 等）已删除，共享模型改名为 `MusicTrack` / `MusicAlbum` 等并移入 `music` 包。下文中关于 Plex 路径的描述仅作历史记录。
+
 - **日期**：2026-09-26
 - **状态**：阶段 C 实施中（C1+C2 待真机验收）
 - **服务端基线**：`D:/032music-server` `main` @ `43b2006`（P0–P5 已完成，本地提交未推送）

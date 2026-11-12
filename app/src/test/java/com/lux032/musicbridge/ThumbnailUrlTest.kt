@@ -32,7 +32,7 @@ class ThumbnailUrlTest {
     @Test fun unrelatedUrlsAreNotChanged() {
         for (url in listOf(
             "https://h/api/v1/artwork/12", "https://h/api/v1/tracks/1/stream?mediaToken=x",
-            "https://h/library/metadata/12?X-Plex-Token=x", "file:///api/v1/artwork/12?mediaToken=x",
+            "https://h/library/metadata/12?token=x", "file:///api/v1/artwork/12?mediaToken=x",
             "https://h/api/v1/artwork/1?", "https://h/api/v1/artwork/1?MediaToken=x",
             "https://h/api/v1/artwork/1#mediaToken=x", "https://h/fooapi/v1/artwork/1?mediaToken=x",
             "https://h/x?next=http://h/api/v1/artwork/1?mediaToken=x",

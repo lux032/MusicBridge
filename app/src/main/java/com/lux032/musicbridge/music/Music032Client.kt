@@ -2,16 +2,16 @@ package com.lux032.musicbridge.music
 
 import android.util.Log
 import com.lux032.musicbridge.MusicServerProfile
-import com.lux032.musicbridge.plex.PlexAlbum
-import com.lux032.musicbridge.plex.PlexAlbumTracksResult
-import com.lux032.musicbridge.plex.PlexAlbumsResult
-import com.lux032.musicbridge.plex.PlexArtist
-import com.lux032.musicbridge.plex.PlexArtistsResult
-import com.lux032.musicbridge.plex.PlexPlaylist
-import com.lux032.musicbridge.plex.PlexPlaylistTracksResult
-import com.lux032.musicbridge.plex.PlexPlaylistsResult
-import com.lux032.musicbridge.plex.PlexSection
-import com.lux032.musicbridge.plex.PlexTrackStream
+import com.lux032.musicbridge.music.MusicAlbum
+import com.lux032.musicbridge.music.AlbumTracksResult
+import com.lux032.musicbridge.music.AlbumsResult
+import com.lux032.musicbridge.music.MusicArtist
+import com.lux032.musicbridge.music.ArtistsResult
+import com.lux032.musicbridge.music.MusicPlaylist
+import com.lux032.musicbridge.music.PlaylistTracksResult
+import com.lux032.musicbridge.music.PlaylistsResult
+import com.lux032.musicbridge.music.LibrarySection
+import com.lux032.musicbridge.music.MusicTrack
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -39,26 +39,26 @@ class Music032Client(
     private val artistDetails = mutableMapOf<String, Pair<Long, String>>()
     private val artistRequests = mutableMapOf<String, CompletableDeferred<String>>()
     private val artistGeneration = AtomicLong()
-    private val section by lazy { PlexSection("032", profile.displayName, "artist") }
+    private val section by lazy { LibrarySection("032", profile.displayName, "artist") }
 
     init {
         require(baseUrl.isNotBlank()) { "缺少 032 Music Server 地址。" }
         require(apiToken.isNotBlank()) { "缺少 032 Music Server API Token。" }
     }
 
-    override suspend fun fetchAlbums(): PlexAlbumsResult = withContext(Dispatchers.IO) {
+    override suspend fun fetchAlbums(): AlbumsResult = withContext(Dispatchers.IO) {
         val albums = runCatching {
             fetchCursorPaged("/api/v1/sync/albums") { parseAlbum(it) }
         }.getOrElse {
             fetchPaged("/api/v1/albums") { parseAlbum(it) }
         }
-        PlexAlbumsResult(profile.displayName, listOf(section), albums)
+        AlbumsResult(profile.displayName, listOf(section), albums)
     }
 
     /** Performer list of the sync model (album artists and primary track artists, canonical ids). */
-    override suspend fun fetchArtists(): PlexArtistsResult = withContext(Dispatchers.IO) {
+    override suspend fun fetchArtists(): ArtistsResult = withContext(Dispatchers.IO) {
         val artists = fetchCursorPaged("/api/v1/sync/artists") { parseArtist(it) }.filterNotNull()
-        PlexArtistsResult(profile.displayName, artists)
+        ArtistsResult(profile.displayName, artists)
     }
 
     /**
@@ -84,16 +84,16 @@ class Music032Client(
         )
     }
 
-    /** Name lookup for links that only carry text (old caches, Plex-style names). */
-    suspend fun searchArtists(name: String): List<PlexArtist> = withContext(Dispatchers.IO) {
+    /** Name lookup for links that only carry text (old caches, name-only links). */
+    suspend fun searchArtists(name: String): List<MusicArtist> = withContext(Dispatchers.IO) {
         val query = URLEncoder.encode(name.trim(), StandardCharsets.UTF_8.name())
         val root = JSONObject(request("GET", "/api/v1/artists?q=$query&limit=50"))
         root.optJSONArray("items").toObjects().mapNotNull { parseArtist(it) }
     }
 
-    override suspend fun fetchArtistTracks(artist: PlexArtist): List<PlexTrackStream> = withContext(Dispatchers.IO) {
+    override suspend fun fetchArtistTracks(artist: MusicArtist): List<MusicTrack> = withContext(Dispatchers.IO) {
         val id = fetchArtistDetail(artist.ratingKey).artist.ratingKey
-        val tracks = mutableListOf<PlexTrackStream>()
+        val tracks = mutableListOf<MusicTrack>()
         var offset = 0
         do {
             val page = fetchArtistTracksPage(id, limit = 500, offset = offset)
@@ -103,7 +103,7 @@ class Music032Client(
         tracks
     }
 
-    override suspend fun fetchArtistAlbums(artistRatingKey: String): List<PlexAlbum> = withContext(Dispatchers.IO) {
+    override suspend fun fetchArtistAlbums(artistRatingKey: String): List<MusicAlbum> = withContext(Dispatchers.IO) {
         artistDetail(artistRatingKey).optJSONArray("albums").toObjects().map(::parseAlbum)
     }
 
@@ -159,7 +159,7 @@ class Music032Client(
         return Music032WorksJson.series(JSONObject(cancellableGet("/api/v1/series/$id")), ::mediaUrl)
     }
 
-    suspend fun fetchSeriesTracks(id: Long): List<PlexTrackStream> {
+    suspend fun fetchSeriesTracks(id: Long): List<MusicTrack> {
         require(id > 0)
         return Music032WorksJson.tracks(JSONObject(cancellableGet("/api/v1/series/$id/tracks")), ::parseTrack).uniqueStreams()
     }
@@ -253,27 +253,27 @@ class Music032Client(
         }
     }
 
-    override suspend fun fetchTrackStream(ratingKey: String): PlexTrackStream? = withContext(Dispatchers.IO) {
+    override suspend fun fetchTrackStream(ratingKey: String): MusicTrack? = withContext(Dispatchers.IO) {
         try { parseTrack(JSONObject(request("GET", "/api/v1/tracks/$ratingKey"))) }
         catch (error: Music032HttpException) { if (trackDetailNotFound(error.status)) null else throw error }
     }
 
-    override suspend fun fetchFavoriteTracks(): List<PlexTrackStream> = withContext(Dispatchers.IO) {
+    override suspend fun fetchFavoriteTracks(): List<MusicTrack> = withContext(Dispatchers.IO) {
         fetchPaged("/api/v1/favorites/tracks") { parseTrack(it) }
     }
 
-    override suspend fun fetchAlbumTrackStreams(album: PlexAlbum): PlexAlbumTracksResult = withContext(Dispatchers.IO) {
+    override suspend fun fetchAlbumTrackStreams(album: MusicAlbum): AlbumTracksResult = withContext(Dispatchers.IO) {
         val body = request("GET", "/api/v1/albums/${album.ratingKey}")
         val root = JSONObject(body)
         val resolvedAlbum = root.optJSONObject("album")?.let(::parseAlbum) ?: album
         val tracks = root.optJSONArray("tracks").toObjects().map(::parseTrack)
-        PlexAlbumTracksResult(profile.displayName, resolvedAlbum, tracks)
+        AlbumTracksResult(profile.displayName, resolvedAlbum, tracks)
     }
 
     override suspend fun fetchAllAlbumTracks(
-        albums: List<PlexAlbum>,
+        albums: List<MusicAlbum>,
         onProgress: (current: Int, total: Int) -> Unit,
-    ): Map<String, List<PlexTrackStream>> = withContext(Dispatchers.IO) {
+    ): Map<String, List<MusicTrack>> = withContext(Dispatchers.IO) {
         runCatching {
             val tracks = fetchCursorPaged("/api/v1/sync/tracks", onProgress) { parseTrack(it) }
             tracks.groupBy { it.albumRatingKey.orEmpty() }.filterKeys(String::isNotBlank)
@@ -288,16 +288,16 @@ class Music032Client(
         }
     }
 
-    override suspend fun fetchPlaylists(): PlexPlaylistsResult = withContext(Dispatchers.IO) {
+    override suspend fun fetchPlaylists(): PlaylistsResult = withContext(Dispatchers.IO) {
         val playlists = fetchPaged("/api/v1/playlists") { parsePlaylist(it) }
-        PlexPlaylistsResult(profile.displayName, playlists)
+        PlaylistsResult(profile.displayName, playlists)
     }
 
-    override suspend fun fetchPlaylistTracks(playlist: PlexPlaylist): PlexPlaylistTracksResult = withContext(Dispatchers.IO) {
+    override suspend fun fetchPlaylistTracks(playlist: MusicPlaylist): PlaylistTracksResult = withContext(Dispatchers.IO) {
         val root = JSONObject(request("GET", "/api/v1/playlists/${playlist.ratingKey}"))
         val resolvedPlaylist = root.optJSONObject("playlist")?.let(::parsePlaylist) ?: playlist
         val tracks = root.optJSONArray("tracks").toObjects().map(::parseTrack)
-        PlexPlaylistTracksResult(profile.displayName, resolvedPlaylist, tracks)
+        PlaylistTracksResult(profile.displayName, resolvedPlaylist, tracks)
     }
 
     /**
@@ -315,7 +315,7 @@ class Music032Client(
         Music032PlaylistRequests.parseCreated(root) { parsePlaylist(it) }
     }
 
-    suspend fun updatePlaylist(id: String, name: String, description: String): PlexPlaylist = withContext(Dispatchers.IO) {
+    suspend fun updatePlaylist(id: String, name: String, description: String): MusicPlaylist = withContext(Dispatchers.IO) {
         val body = JSONObject().put("name", name.trim()).put("description", description.trim())
         parsePlaylist(JSONObject(request("PATCH", "/api/v1/playlists/${id.playlistId()}", body)))
     }
@@ -377,8 +377,20 @@ class Music032Client(
         Music032DailyMixJson.parseMix(JSONObject(request("POST", "/api/v1/daily-mixes/$id/regenerate")), ::mediaUrl)
     }
 
+    /**
+     * One-sentence AI playlist (`features.aiPlaylists`); not saved on the server. The
+     * server makes one model call, hence the long read timeout.
+     */
+    suspend fun generateAiPlaylist(prompt: String, trackCount: Int = 0): Music032AiPlaylist = withContext(Dispatchers.IO) {
+        val body = Music032AiPlaylistJson.request(prompt, trackCount)
+        Music032AiPlaylistJson.parse(
+            JSONObject(request("POST", "/api/v1/ai/playlists", body, readTimeoutMillis = AI_PLAYLIST_READ_TIMEOUT_MILLIS)),
+            ::parseTrack,
+        )
+    }
+
     /** Copies the mix into a new ordinary playlist (default name “title · day”). */
-    suspend fun saveDailyMix(id: Long): PlexPlaylist = withContext(Dispatchers.IO) {
+    suspend fun saveDailyMix(id: Long): MusicPlaylist = withContext(Dispatchers.IO) {
         val root = JSONObject(request("POST", "/api/v1/daily-mixes/$id/save"))
         parsePlaylist(root.optJSONObject("playlist") ?: root)
     }
@@ -611,6 +623,7 @@ class Music032Client(
                 status,
                 "032 Music Server HTTP $status：$message",
                 code = error?.optString("code")?.takeIf { it.isNotBlank() },
+                serverMessage = error?.optString("message")?.takeIf { it.isNotBlank() },
             )
         }
         return response
@@ -633,6 +646,8 @@ class Music032Client(
         /** Server online lookups take up to ~20 s; AI translation of a long song takes longer. */
         const val LYRICS_READ_TIMEOUT_MILLIS = 45_000
         const val TRANSLATION_READ_TIMEOUT_MILLIS = 180_000
+        /** The server bounds its model call at 30 s and then loads the library. */
+        const val AI_PLAYLIST_READ_TIMEOUT_MILLIS = 60_000
     }
 }
 
@@ -643,6 +658,8 @@ internal class Music032HttpException(
     val status: Int,
     message: String,
     val code: String? = null,
+    /** The server's own `error.message`, when it sent one. */
+    val serverMessage: String? = null,
 ) : IllegalStateException(message)
 
 enum class MediaTokenProbeResult { OK, INVALID, UNKNOWN }
@@ -657,16 +674,16 @@ internal fun trackDetailNotFound(status: Int): Boolean = status == 404
 
 /** Online artist page payload: canonical artist, web-style releases and performed tracks. */
 data class Music032ArtistDetail(
-    val artist: PlexArtist,
-    val albums: List<PlexAlbum>,
+    val artist: MusicArtist,
+    val albums: List<MusicAlbum>,
     val appearanceAlbumKeys: Set<String>,
-    val topTracks: List<PlexTrackStream>,
+    val topTracks: List<MusicTrack>,
     val topTracksArePopular: Boolean = false,
     val tracksTotal: Int,
 )
 
 data class Music032ArtistTracksPage(
-    val items: List<PlexTrackStream>, val total: Int, val limit: Int, val offset: Int,
+    val items: List<MusicTrack>, val total: Int, val limit: Int, val offset: Int,
 )
 
 enum class ArtistTrackSort(val apiValue: String, val defaultOrder: String) {

@@ -46,17 +46,12 @@ import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.LoadEventInfo
 import androidx.media3.exoplayer.source.MediaLoadData
-import com.lux032.musicbridge.plex.stopPlexTranscodeSession
-import com.lux032.musicbridge.plex.withPlexTranscodeSession
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.io.EOFException
 import java.io.File
 import java.io.IOException
-import java.net.URI
-import java.net.URLDecoder
-import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.util.Locale
 import java.util.UUID
@@ -243,15 +238,8 @@ object LocalAudioCache {
     private var evictor: ResizableCacheEvictor? = null
     private var tempDirectory: File? = null
     private val currentGeneration = AtomicInteger(0)
-    private data class ActivePlexPrecacheSession(
-        val serverUri: String,
-        val token: String,
-        val sessionId: String,
-    )
-
     @Volatile private var activePrecacheDataSource: DataSource? = null
     @Volatile private var activeCacheWriter: CacheWriter? = null
-    @Volatile private var activePlexPrecacheSession: ActivePlexPrecacheSession? = null
     private val precacheExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "local-audio-precache").apply {
             isDaemon = true
@@ -304,18 +292,14 @@ object LocalAudioCache {
             precacheTask?.cancel(true)
             precacheTask = null
             precacheKeys = emptyList()
-            val captured = Triple(activePrecacheDataSource, activeCacheWriter, activePlexPrecacheSession)
+            val captured = activePrecacheDataSource to activeCacheWriter
             activePrecacheDataSource = null
             activeCacheWriter = null
-            activePlexPrecacheSession = null
             captured
         }
         // Cancellation/close may block; never perform either while holding LocalAudioCache's
         // monitor or on the main thread handling a player/network transition.
         active.second?.cancel()
-        active.third?.let { session ->
-            stopPlexTranscodeSession(session.serverUri, session.token, session.sessionId)
-        }
         active.first?.let { dataSource ->
             maintenanceExecutor.execute { runCatching { dataSource.close() } }
         }
@@ -400,7 +384,6 @@ object LocalAudioCache {
         val requestedKeys = safeItems.map(LocalQueueItem::cacheKey)
         var priorDataSource: DataSource? = null
         var priorCacheWriter: CacheWriter? = null
-        var priorPlexSession: ActivePlexPrecacheSession? = null
         synchronized(this) {
             if (requestedKeys == precacheKeys && precacheTask?.isDone == false) return
             currentGeneration.incrementAndGet()
@@ -408,10 +391,8 @@ object LocalAudioCache {
             precacheTask = null
             priorDataSource = activePrecacheDataSource
             priorCacheWriter = activeCacheWriter
-            priorPlexSession = activePlexPrecacheSession
             activePrecacheDataSource = null
             activeCacheWriter = null
-            activePlexPrecacheSession = null
             precacheKeys = requestedKeys
             val simpleCache = cache
             if (safeItems.isNotEmpty() && simpleCache != null) {
@@ -455,9 +436,6 @@ object LocalAudioCache {
             }
         }
         priorCacheWriter?.cancel()
-        priorPlexSession?.let { session ->
-            stopPlexTranscodeSession(session.serverUri, session.token, session.sessionId)
-        }
         priorDataSource?.let { closing ->
             maintenanceExecutor.execute { runCatching { closing.close() } }
         }
@@ -470,10 +448,6 @@ object LocalAudioCache {
         val tempDir = tempDirectory ?: return
         if (tempDir.usableSpace < 30L * 1024L * 1024L) return
         val sessionId = "pc-${UUID.randomUUID()}"
-        val precacheUrl = item.url.withPlexTranscodeSession(sessionId)
-        val sessionEndpoint = parsePlexTranscodeEndpoint(item.url)
-        val serverUri = sessionEndpoint?.serverUri.orEmpty()
-        val token = sessionEndpoint?.token.orEmpty()
         val tempFile = File(tempDir, "${item.cacheKey.replace(':', '_')}.$sessionId.tmp")
         val dataSource = DefaultHttpDataSource.Factory()
             .setConnectTimeoutMs(15_000)
@@ -483,12 +457,9 @@ object LocalAudioCache {
         try {
             synchronized(this) {
                 activePrecacheDataSource = dataSource
-                if (serverUri.isNotBlank() && token.isNotBlank()) {
-                    activePlexPrecacheSession = ActivePlexPrecacheSession(serverUri, token, sessionId)
-                }
             }
             if (!PrecacheGate.awaitOpen { generationIsCurrent(generation) }) return
-            dataSource.open(DataSpec.Builder().setUri(precacheUrl).build())
+            dataSource.open(DataSpec.Builder().setUri(item.url).build())
             tempFile.outputStream().buffered().use { output ->
                 val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
                 while (generationIsCurrent(generation)) {
@@ -515,7 +486,7 @@ object LocalAudioCache {
                 null,
             )
             // Remove any legacy/incomplete spans before the one-span commit so staged bytes
-            // can never be combined with a prior Plex session.
+            // can never be combined with an earlier, different transcode response.
             simpleCache.removeResource(item.cacheKey)
             commitStarted = true
             if (!generationIsCurrent(generation)) return
@@ -559,33 +530,11 @@ object LocalAudioCache {
             runCatching { dataSource.close() }
             synchronized(this) {
                 if (activePrecacheDataSource === dataSource) activePrecacheDataSource = null
-                if (activePlexPrecacheSession?.sessionId == sessionId) activePlexPrecacheSession = null
             }
             tempFile.delete()
-            if (serverUri.isNotBlank() && token.isNotBlank()) {
-                stopPlexTranscodeSession(serverUri, token, sessionId)
-            }
         }
     }
 }
-
-internal data class PlexTranscodeEndpoint(val serverUri: String, val token: String)
-
-internal fun parsePlexTranscodeEndpoint(url: String): PlexTranscodeEndpoint? = runCatching {
-    val uri = URI(url)
-    val marker = "/music/:/transcode/universal/start"
-    if (!uri.path.contains(marker, ignoreCase = true)) return null
-    val serverUri = URI(uri.scheme, uri.rawAuthority, null, null, null).toString().trimEnd('/')
-    val token = uri.rawQuery.orEmpty().split('&')
-        .mapNotNull { parameter ->
-            val name = URLDecoder.decode(parameter.substringBefore('='), StandardCharsets.UTF_8.name())
-            if (!name.equals("X-Plex-Token", ignoreCase = true)) return@mapNotNull null
-            URLDecoder.decode(parameter.substringAfter('=', ""), StandardCharsets.UTF_8.name())
-        }
-        .firstOrNull()
-        .orEmpty()
-    if (serverUri.isBlank() || token.isBlank()) null else PlexTranscodeEndpoint(serverUri, token)
-}.getOrNull()
 
 internal enum class PlaybackDataSourceRoute { DIRECT_CACHE, TRANSCODE_CACHE, TRANSCODE_UPSTREAM, CACHED_ORIGINAL, OFFLINE_FILE }
 
@@ -642,28 +591,6 @@ internal class FailingDataSource : DataSource {
     override fun close() = Unit
 }
 
-internal data class TranscodeUpstreamRequest(val url: String, val cacheKey: String?)
-
-internal fun transcodeUpstreamRequest(
-    url: String,
-    cacheKey: String?,
-    sessionId: String,
-): TranscodeUpstreamRequest = TranscodeUpstreamRequest(
-    url = url.withPlexTranscodeSession(sessionId),
-    cacheKey = cacheKey,
-)
-
-internal fun transcodeUpstreamSpec(dataSpec: DataSpec, sessionId: String): DataSpec {
-    val request = transcodeUpstreamRequest(dataSpec.uri.toString(), dataSpec.key, sessionId)
-    return dataSpec.withUri(android.net.Uri.parse(request.url))
-}
-
-internal fun foregroundTranscodeSessionId(
-    position: Long,
-    activeSessionId: String?,
-    newSessionId: () -> String,
-): String = if (position > 0L && activeSessionId != null) activeSessionId else newSessionId()
-
 // Mark only failures from the live HTTP route, not reads of a completed transcode cache.
 // ProgressiveMediaPeriod otherwise treats an unknown-length Ogg stream as live and can
 // defer retry until its sample queue is empty, then silently reset playback to zero.
@@ -690,8 +617,6 @@ private class RoutingDataSource(
     private val isCachedOriginalKey: (String?) -> Boolean,
 ) : DataSource {
     private var delegate: DataSource? = null
-    private var activeSessionId: String? = null
-    private var activeSessionEndpoint: PlexTranscodeEndpoint? = null
     private val transferListeners = mutableListOf<TransferListener>()
 
     override fun addTransferListener(transferListener: TransferListener) {
@@ -702,15 +627,7 @@ private class RoutingDataSource(
     }
 
     override fun open(dataSpec: DataSpec): Long {
-        val priorSessionId = activeSessionId.takeIf { dataSpec.position > 0L }
-        val priorSessionEndpoint = activeSessionEndpoint.takeIf { priorSessionId != null }
-        if (priorSessionId != null) {
-            val closing = delegate
-            delegate = null
-            closing?.close()
-        } else {
-            close()
-        }
+        close()
         val cacheKey = dataSpec.key
         val url = dataSpec.uri.toString()
         val route = playbackDataSourceRoute(
@@ -737,29 +654,11 @@ private class RoutingDataSource(
             )
         }
 
-        val upstreamSpec = if (route == PlaybackDataSourceRoute.TRANSCODE_UPSTREAM) {
-            val endpoint = priorSessionEndpoint ?: parsePlexTranscodeEndpoint(dataSpec.uri.toString())
-            if (endpoint == null) {
-                // 032 实时转码没有会话概念（服务端随连接断开回收 ffmpeg），直接打开即可。
-                if (url.isPlexLiveTranscodeUrl()) {
-                    Log.w("RoutingDataSource", "Plex transcode endpoint is incomplete; opening without session injection")
-                }
-                dataSpec
-            } else {
-                val sessionId = foregroundTranscodeSessionId(dataSpec.position, priorSessionId) {
-                    "fg-${UUID.randomUUID()}"
-                }
-                activeSessionId = sessionId
-                activeSessionEndpoint = endpoint
-                transcodeUpstreamSpec(dataSpec, sessionId)
-            }
-        } else {
-            dataSpec
-        }
+        // 032 实时转码没有会话概念（服务端随连接断开回收 ffmpeg），直接打开即可。
         transferListeners.forEach(nextDelegate::addTransferListener)
         delegate = nextDelegate
         return try {
-            nextDelegate.open(upstreamSpec)
+            nextDelegate.open(dataSpec)
         } catch (error: Exception) {
             runCatching { close() }
             throw error
@@ -774,17 +673,7 @@ private class RoutingDataSource(
     override fun close() {
         val closing = delegate
         delegate = null
-        val sessionId = activeSessionId
-        val endpoint = activeSessionEndpoint
-        activeSessionId = null
-        activeSessionEndpoint = null
-        try {
-            closing?.close()
-        } finally {
-            if (sessionId?.startsWith("fg-") == true && endpoint != null) {
-                stopPlexTranscodeSession(endpoint.serverUri, endpoint.token, sessionId)
-            }
-        }
+        closing?.close()
     }
 }
 
@@ -863,8 +752,8 @@ internal fun isPrematureTranscodeEnd(
     durationMillis > 0L &&
     currentPositionMillis < durationMillis - 5_000L
 
-/** 实时转码流（Plex offset / 032 offsetMs）都能从指定位置重开。 */
-internal fun supportsPlexOffsetRetry(url: String?): Boolean =
+/** 实时转码流（032 offsetMs）都能从指定位置重开。 */
+internal fun supportsOffsetRetry(url: String?): Boolean =
     url?.isLiveTranscodeUrl() == true
 
 internal fun liveTranscodeRetryAction(
@@ -1138,7 +1027,7 @@ class LocalPlaybackEngine(
                 .build(),
             /* handleAudioFocus = */ true,
         )
-        // [Blocker-1] Raise the forward buffer window so the Plex live-transcode HTTP
+        // [Blocker-1] Raise the forward buffer window so the live-transcode HTTP
         // connection keeps being read instead of going idle once the default ~50s buffer
         // is full. An idle socket is what lets the server/proxy/NAT silently close the
         // connection (observed as EOF ~15-30s after the last read burst). Memory stays
@@ -1205,7 +1094,7 @@ class LocalPlaybackEngine(
     )
 
     /**
-     * MediaSession-facing wrapper. Plex restarts a live transcode at the requested source
+     * MediaSession-facing wrapper. The server restarts a live transcode at the requested source
      * offset, while ExoPlayer sees that new response as starting at zero. Expose the logical
      * source-track position to Android's notification/lock-screen controllers and route their
      * seek commands through the same transcode-aware path. Direct-file playback has a zero
@@ -1437,7 +1326,7 @@ class LocalPlaybackEngine(
                 error.errorCode == PlaybackException.ERROR_CODE_DECODING_FAILED &&
                 SystemClock.elapsedRealtime() - failedSeek.startedAtMillis <= CACHED_SEEK_FALLBACK_WINDOW_MILLIS
             ) {
-                val retryPosition = if (supportsPlexOffsetRetry(failedItem?.url)) failedSeek.targetMillis else 0L
+                val retryPosition = if (supportsOffsetRetry(failedItem?.url)) failedSeek.targetMillis else 0L
                 Log.w(
                     LOG_TAG,
                     "Cached Opus seek failed at ${failedSeek.targetMillis}ms; retrying at ${retryPosition}ms",
@@ -1577,7 +1466,7 @@ class LocalPlaybackEngine(
             failedIndex,
             positionMs = failedPositionMillis,
             durationMs = failedItem?.durationMillis,
-            resumableAtPosition = supportsPlexOffsetRetry(failedItem?.url),
+            resumableAtPosition = supportsOffsetRetry(failedItem?.url),
         )) {
             PlaybackRecoveryDecision.RetryCurrent -> {
                 when (liveTranscodeRetryAction(
@@ -1710,8 +1599,6 @@ class LocalPlaybackEngine(
     }
 
     val currentIndex: Int get() = player.currentMediaItemIndex
-    val currentLiveTranscodeUrl: String?
-        get() = queueItems.getOrNull(currentIndex)?.url?.takeIf(String::isLiveTranscodeUrl)
     val currentPositionMillis: Long
         get() = logicalPositionMillis(currentIndex, player.currentPosition)
     private val bufferedPositionMillis: Long
@@ -1893,7 +1780,7 @@ class LocalPlaybackEngine(
             failedIndex,
             positionMs = targetMillis,
             durationMs = stalledItem?.durationMillis,
-            resumableAtPosition = supportsPlexOffsetRetry(stalledItem?.url),
+            resumableAtPosition = supportsOffsetRetry(stalledItem?.url),
         )) {
             PlaybackRecoveryDecision.RetryCurrent -> {
                 Log.w(LOG_TAG, "Transcode buffering stalled; restarting index=$failedIndex at ${targetMillis}ms")
@@ -1906,7 +1793,7 @@ class LocalPlaybackEngine(
     }
 
     private fun bufferingStallException(): PlaybackException = PlaybackException(
-        "Plex transcode buffering stalled",
+        "Live transcode buffering stalled",
         null,
         PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
     )
@@ -1944,7 +1831,7 @@ class LocalPlaybackEngine(
         skipFailedMediaItem(
             failedIndex = index,
             error = PlaybackException(
-                "Plex transcode ended before the source track",
+                "Live transcode ended before the source track",
                 null,
                 PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
             ),
@@ -2158,9 +2045,9 @@ class LocalPlaybackEngine(
     }
 
     /**
-     * Seeks direct files natively. Plex live transcodes cannot satisfy byte/range seeks, so
-     * they are restarted with Plex's source-time `offset` and a logical position base.
-     * Returns the effective logical target (Plex offsets have whole-second precision).
+     * Seeks direct files natively. Live transcodes cannot satisfy byte/range seeks, so
+     * they are restarted with the source-time `offsetMs` and a logical position base.
+     * Returns the effective logical target.
      */
     fun seekTo(positionMillis: Long): Long = seekToInternal(positionMillis, source = "App")
 

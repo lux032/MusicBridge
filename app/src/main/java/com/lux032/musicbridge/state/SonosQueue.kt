@@ -1,7 +1,7 @@
 package com.lux032.musicbridge
 
-import com.lux032.musicbridge.plex.PlexTrackStream
-import com.lux032.musicbridge.plex.playbackUrlIdentity
+import com.lux032.musicbridge.music.MusicTrack
+import com.lux032.musicbridge.music.playbackUrlIdentity
 import com.lux032.musicbridge.music.Music032TranscodeUrls
 import com.lux032.musicbridge.sonos.SonosPlaybackStatus
 import com.lux032.musicbridge.sonos.SonosQueueBrowseEntry
@@ -24,14 +24,14 @@ internal data class SonosQueueSession(
     val entries: List<SonosQueueEntry>,
 ) {
     /** True while the app's track list still matches the speaker queue one-to-one. */
-    fun mirrors(tracks: List<PlexTrackStream>): Boolean =
+    fun mirrors(tracks: List<MusicTrack>): Boolean =
         entries.size == tracks.size && entries.indices.all { i ->
             entries[i].sourceId == tracks[i].sourceId && entries[i].ratingKey == tracks[i].ratingKey
         }
 }
 
 /** Queue mode is only used when every track is served by a 032 server (no phone proxy). */
-internal fun canUseSonosQueue(tracks: List<PlexTrackStream>, is032: (PlexTrackStream) -> Boolean): Boolean =
+internal fun canUseSonosQueue(tracks: List<MusicTrack>, is032: (MusicTrack) -> Boolean): Boolean =
     tracks.size in 1..SONOS_QUEUE_MAX_TRACKS && tracks.all(is032)
 
 internal const val SONOS_QUEUE_MAX_TRACKS = 2_000
@@ -76,7 +76,7 @@ private val music032MediaPath = Regex("^(https?://[^?#]*?)/api/v1/tracks/(\\d+)/
 
 /**
  * Maps every URL of a speaker queue to a 032 track, or null when any entry is foreign
- * (another service, Plex, unknown server) — such a queue is left alone. The server is
+ * (another service, unknown server) — such a queue is left alone. The server is
  * matched by media token first (the web panel pushes LAN addresses while the app may use
  * a domain), then by base URL, then the only configured 032 server.
  */
@@ -108,7 +108,7 @@ internal fun resolveAdoptableQueue(
 }
 
 /** Reuses [known] when it is exactly the speaker's list (the usual cold-start case). */
-internal fun reusableTracks(refs: List<AdoptedQueueRef>, known: List<PlexTrackStream>): Boolean =
+internal fun reusableTracks(refs: List<AdoptedQueueRef>, known: List<MusicTrack>): Boolean =
     refs.size == known.size && refs.indices.all { i ->
         refs[i].sourceId == known[i].sourceId && refs[i].ratingKey == known[i].ratingKey
     }

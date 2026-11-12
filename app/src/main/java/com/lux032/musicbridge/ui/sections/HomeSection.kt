@@ -43,7 +43,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.lux032.musicbridge.music.Music032DailyMix
-import com.lux032.musicbridge.plex.PlexAlbum
+import com.lux032.musicbridge.music.MusicAlbum
 import com.lux032.musicbridge.sonos.SonosRoom
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
@@ -51,11 +51,11 @@ import kotlinx.coroutines.Job
 @Composable
 internal fun HomeSection(
     connectionPreferences: MusicServerProfile,
-    allAlbums: List<PlexAlbum>,
-    recentPlayedAlbums: List<PlexAlbum>,
-    favoriteAlbums: List<PlexAlbum>,
-    recentAddedAlbums: List<PlexAlbum>,
-    selectedAlbum: PlexAlbum?,
+    allAlbums: List<MusicAlbum>,
+    recentPlayedAlbums: List<MusicAlbum>,
+    favoriteAlbums: List<MusicAlbum>,
+    recentAddedAlbums: List<MusicAlbum>,
+    selectedAlbum: MusicAlbum?,
     playbackTarget: PlaybackTarget,
     sonosRooms: List<SonosRoom>,
     isRoomScanning: Boolean,
@@ -67,9 +67,9 @@ internal fun HomeSection(
     onSelectTarget: (PlaybackTarget) -> Unit,
     onRefreshRooms: () -> Unit,
     onRefreshFavorites: () -> Unit,
-    onAlbumClick: (PlexAlbum) -> Unit,
-    onAlbumQueueAction: (PlexAlbum, QueuePlacement) -> Unit,
-    onPlayAlbum: (PlexAlbum) -> Unit = {},
+    onAlbumClick: (MusicAlbum) -> Unit,
+    onAlbumQueueAction: (MusicAlbum, QueuePlacement) -> Unit,
+    onPlayAlbum: (MusicAlbum) -> Unit = {},
     onOpenAllAlbums: () -> Unit,
     onOpenFavorites: () -> Unit,
     onOpenRecentAdded: () -> Unit,
@@ -236,11 +236,11 @@ internal fun HomeSection(
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun RecentPlayedShelfSection(
-    albums: List<PlexAlbum>,
-    selectedAlbum: PlexAlbum?,
-    onAlbumClick: (PlexAlbum) -> Unit,
-    onAlbumQueueAction: (PlexAlbum, QueuePlacement) -> Unit,
-    onPlayAlbum: ((PlexAlbum) -> Unit)? = null,
+    albums: List<MusicAlbum>,
+    selectedAlbum: MusicAlbum?,
+    onAlbumClick: (MusicAlbum) -> Unit,
+    onAlbumQueueAction: (MusicAlbum, QueuePlacement) -> Unit,
+    onPlayAlbum: ((MusicAlbum) -> Unit)? = null,
 ) {
     val layoutInfo = LocalAppLayoutInfo.current
     val nowPlaying = LocalNowPlaying.current
@@ -461,14 +461,14 @@ private fun HomeQuickKey(
 private fun androidx.compose.foundation.lazy.LazyListScope.albumPreviewGridItems(
     keyPrefix: String,
     title: String,
-    albums: List<PlexAlbum>,
+    albums: List<MusicAlbum>,
     columns: Int,
-    selectedAlbum: PlexAlbum?,
+    selectedAlbum: MusicAlbum?,
     actionLabel: String,
     onAction: () -> Unit,
-    onAlbumClick: (PlexAlbum) -> Unit,
-    onAlbumQueueAction: (PlexAlbum, QueuePlacement) -> Unit,
-    onPlayAlbum: ((PlexAlbum) -> Unit)? = null,
+    onAlbumClick: (MusicAlbum) -> Unit,
+    onAlbumQueueAction: (MusicAlbum, QueuePlacement) -> Unit,
+    onPlayAlbum: ((MusicAlbum) -> Unit)? = null,
 ) {
     item(key = "$keyPrefix-header", contentType = "grid-header") {
         SectionHeader(
@@ -513,14 +513,14 @@ private fun androidx.compose.foundation.lazy.LazyListScope.albumPreviewGridItems
 internal fun AlbumCollectionSection(
     title: String,
     subtitle: String,
-    albums: List<PlexAlbum>,
-    selectedAlbum: PlexAlbum?,
+    albums: List<MusicAlbum>,
+    selectedAlbum: MusicAlbum?,
     bottomContentPadding: androidx.compose.ui.unit.Dp,
     gridState: LazyGridState = rememberLazyGridState(),
     onBack: () -> Unit,
-    onAlbumClick: (PlexAlbum) -> Unit,
-    onAlbumQueueAction: (PlexAlbum, QueuePlacement) -> Unit,
-    onPlayAlbum: (PlexAlbum) -> Unit = {},
+    onAlbumClick: (MusicAlbum) -> Unit,
+    onAlbumQueueAction: (MusicAlbum, QueuePlacement) -> Unit,
+    onPlayAlbum: (MusicAlbum) -> Unit = {},
 ) {
     val layoutInfo = LocalAppLayoutInfo.current
     if (albums.isEmpty()) {
@@ -594,8 +594,8 @@ internal fun AlbumCollectionSection(
 
 @Composable
 internal fun AllAlbumsSection(
-    albums: List<PlexAlbum>,
-    selectedAlbum: PlexAlbum?,
+    albums: List<MusicAlbum>,
+    selectedAlbum: MusicAlbum?,
     searchQuery: String,
     isSearchLoading: Boolean,
     sortOption: AlbumSortOption,
@@ -605,9 +605,9 @@ internal fun AllAlbumsSection(
     gridState: androidx.compose.foundation.lazy.grid.LazyGridState = rememberLazyGridState(),
     onSearchQueryChange: (String) -> Unit,
     onBack: () -> Unit,
-    onAlbumClick: (PlexAlbum) -> Unit,
-    onAlbumQueueAction: (PlexAlbum, QueuePlacement) -> Unit,
-    onPlayAlbum: (PlexAlbum) -> Unit = {},
+    onAlbumClick: (MusicAlbum) -> Unit,
+    onAlbumQueueAction: (MusicAlbum, QueuePlacement) -> Unit,
+    onPlayAlbum: (MusicAlbum) -> Unit = {},
     onSortOptionChange: (AlbumSortOption) -> Unit,
     onFavoritesOnlyChange: (Boolean) -> Unit,
     onDecadeFilterChange: (AlbumDecadeFilter) -> Unit,

@@ -1,8 +1,8 @@
 package com.lux032.musicbridge
 
-import com.lux032.musicbridge.plex.PlexAlbum
-import com.lux032.musicbridge.plex.PlexSection
-import com.lux032.musicbridge.plex.PlexTrackStream
+import com.lux032.musicbridge.music.MusicAlbum
+import com.lux032.musicbridge.music.LibrarySection
+import com.lux032.musicbridge.music.MusicTrack
 import com.lux032.musicbridge.sonos.SonosRoom
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -21,7 +21,7 @@ class OfflinePlaybackRoutingTest {
         memberBaseUrls = listOf("http://192.168.1.20:1400"),
     )
 
-    private fun track(ratingKey: String) = PlexTrackStream(
+    private fun track(ratingKey: String) = MusicTrack(
         ratingKey = ratingKey,
         title = "Track $ratingKey",
         streamUrl = "http://server/library/parts/$ratingKey/file.flac",
@@ -124,7 +124,7 @@ class OfflinePlaybackRoutingTest {
     }
 
     private fun miniPlayerState(target: PlaybackTarget) = MiniPlayerState(
-        album = PlexAlbum(
+        album = MusicAlbum(
             ratingKey = "album1",
             title = "Album",
             artistName = "Artist",
@@ -133,7 +133,7 @@ class OfflinePlaybackRoutingTest {
             userRating = null,
             addedAtEpochSeconds = null,
             lastViewedAtEpochSeconds = null,
-            section = PlexSection("", "", ""),
+            section = LibrarySection("", "", ""),
             sourceId = "src1",
         ),
         tracks = listOf(track("a")),

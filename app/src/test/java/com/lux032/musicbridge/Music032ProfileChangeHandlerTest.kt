@@ -3,9 +3,9 @@ package com.lux032.musicbridge
 import com.lux032.musicbridge.music.Music032ReporterApi
 import com.lux032.musicbridge.music.ReporterEndReason
 import com.lux032.musicbridge.music.ReporterPlayState
-import com.lux032.musicbridge.plex.PlexAlbum
-import com.lux032.musicbridge.plex.PlexSection
-import com.lux032.musicbridge.plex.PlexTrackStream
+import com.lux032.musicbridge.music.MusicAlbum
+import com.lux032.musicbridge.music.LibrarySection
+import com.lux032.musicbridge.music.MusicTrack
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -67,9 +67,9 @@ class Music032ProfileChangeHandlerTest {
     )
 
     private fun player(trackKey: String, position: Long, paused: Boolean): MiniPlayerState = MiniPlayerState(
-        album = PlexAlbum("alb", "album", null, null, null, null, null, null, PlexSection("", "", ""), "src-1"),
+        album = MusicAlbum("alb", "album", null, null, null, null, null, null, LibrarySection("", "", ""), "src-1"),
         tracks = listOf(
-            PlexTrackStream(trackKey, "t", "http://x", "/p", 240_000L, null, sourceId = "src-1"),
+            MusicTrack(trackKey, "t", "http://x", "/p", 240_000L, null, sourceId = "src-1"),
         ),
         currentIndex = 0,
         target = PlaybackTarget.LocalDevice,

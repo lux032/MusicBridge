@@ -1,34 +1,34 @@
 package com.lux032.musicbridge.music
 
-import com.lux032.musicbridge.plex.PlexAlbum
-import com.lux032.musicbridge.plex.PlexAlbumTracksResult
-import com.lux032.musicbridge.plex.PlexAlbumsResult
-import com.lux032.musicbridge.plex.PlexArtist
-import com.lux032.musicbridge.plex.PlexArtistsResult
-import com.lux032.musicbridge.plex.PlexPlaylist
-import com.lux032.musicbridge.plex.PlexPlaylistTracksResult
-import com.lux032.musicbridge.plex.PlexPlaylistsResult
-import com.lux032.musicbridge.plex.PlexTrackStream
+import com.lux032.musicbridge.music.MusicAlbum
+import com.lux032.musicbridge.music.AlbumTracksResult
+import com.lux032.musicbridge.music.AlbumsResult
+import com.lux032.musicbridge.music.MusicArtist
+import com.lux032.musicbridge.music.ArtistsResult
+import com.lux032.musicbridge.music.MusicPlaylist
+import com.lux032.musicbridge.music.PlaylistTracksResult
+import com.lux032.musicbridge.music.PlaylistsResult
+import com.lux032.musicbridge.music.MusicTrack
 
 interface MusicSourceClient {
     val sourceId: String
 
-    suspend fun fetchAlbums(): PlexAlbumsResult
-    suspend fun fetchArtists(): PlexArtistsResult
-    suspend fun fetchFavoriteTracks(): List<PlexTrackStream>
-    suspend fun fetchAlbumTrackStreams(album: PlexAlbum): PlexAlbumTracksResult
+    suspend fun fetchAlbums(): AlbumsResult
+    suspend fun fetchArtists(): ArtistsResult
+    suspend fun fetchFavoriteTracks(): List<MusicTrack>
+    suspend fun fetchAlbumTrackStreams(album: MusicAlbum): AlbumTracksResult
     suspend fun fetchAllAlbumTracks(
-        albums: List<PlexAlbum>,
+        albums: List<MusicAlbum>,
         onProgress: (current: Int, total: Int) -> Unit = { _, _ -> },
-    ): Map<String, List<PlexTrackStream>>
-    suspend fun fetchPlaylists(): PlexPlaylistsResult
-    suspend fun fetchPlaylistTracks(playlist: PlexPlaylist): PlexPlaylistTracksResult
+    ): Map<String, List<MusicTrack>>
+    suspend fun fetchPlaylists(): PlaylistsResult
+    suspend fun fetchPlaylistTracks(playlist: MusicPlaylist): PlaylistTracksResult
     suspend fun setAlbumFavorite(ratingKey: String, isFavorite: Boolean)
     suspend fun setTrackFavorite(ratingKey: String, isFavorite: Boolean)
     suspend fun setArtistFavorite(ratingKey: String, isFavorite: Boolean)
-    suspend fun fetchTrackStream(ratingKey: String): PlexTrackStream? = null
-    suspend fun fetchArtistTracks(artist: PlexArtist): List<PlexTrackStream>
-    suspend fun fetchArtistAlbums(artistRatingKey: String): List<PlexAlbum> = emptyList()
+    suspend fun fetchTrackStream(ratingKey: String): MusicTrack? = null
+    suspend fun fetchArtistTracks(artist: MusicArtist): List<MusicTrack>
+    suspend fun fetchArtistAlbums(artistRatingKey: String): List<MusicAlbum> = emptyList()
     suspend fun reportTimeline(
         ratingKey: String,
         state: String,

@@ -7,10 +7,10 @@
 android
 
 ## Users
-Primary user is the author (lux032) and people like them: listeners who own a personal music library on Plex or 032 Music Server and play it on Sonos speakers or locally on the phone. The library observed in screenshots is largely Japanese / ACG / VTuber releases with dense, colorful illustrated covers. *(Inferred from repository and screenshots; usage-scene split between phone-as-remote and local listening not confirmed.)*
+Primary user is the author (lux032) and people like them: listeners who own a personal music library on 032 Music Server and play it on Sonos speakers or locally on the phone. The library observed in screenshots is largely Japanese / ACG / VTuber releases with dense, colorful illustrated covers. *(Inferred from repository and screenshots; usage-scene split between phone-as-remote and local listening not confirmed.)*
 
 ## Product Purpose
-MusicBridge bridges a personal music server (Plex or 032 Music Server) to Sonos speakers and to on-device playback: browse albums, artists, playlists and favorites, pick an output room, and control playback, while syncing favorites, progress and play counts back to the server.
+MusicBridge bridges a personal 032 Music Server to Sonos speakers and to on-device playback: browse albums, artists, playlists and favorites, pick an output room, and control playback, while syncing favorites, progress and play counts back to the server.
 
 ## Positioning
 A personal-library player that treats the Sonos room as a first-class output, with server-truthful play reporting (032 playback sessions) — closer in spirit to Plexamp and Roon than to streaming-service apps.

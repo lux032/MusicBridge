@@ -130,7 +130,7 @@ private suspend fun extractArtworkPalette(context: android.content.Context, imag
 }
 
 /**
- * Plexamp-style theming: the background keeps the cover's dominant colourful hue visible while
+ * Artwork theming: the background keeps the cover's dominant colourful hue visible while
  * the accent remains close enough to that hue to form a coherent page. Near-monochrome artwork
  * blends gradually into the neutral palette rather than crossing a hard colourfulness threshold.
  *

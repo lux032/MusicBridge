@@ -45,7 +45,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.lux032.musicbridge.sonos.SonosRoom
-import com.lux032.musicbridge.plex.PlexAlbum
+import com.lux032.musicbridge.music.MusicAlbum
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import androidx.compose.ui.platform.LocalDensity
@@ -382,7 +382,7 @@ internal fun EmptyStateCard(
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun AlbumCoverCard(
-    album: PlexAlbum,
+    album: MusicAlbum,
     selected: Boolean,
     onClick: () -> Unit,
     onQueueAction: ((QueuePlacement) -> Unit)? = null,
@@ -464,7 +464,7 @@ internal fun AlbumCoverCard(
 }
 
 @Composable
-private fun AlbumCoverArtwork(album: PlexAlbum, nowPlaying: NowPlayingMarker?) {
+private fun AlbumCoverArtwork(album: MusicAlbum, nowPlaying: NowPlayingMarker?) {
     val layoutInfo = LocalAppLayoutInfo.current
     Box(
         modifier = Modifier
@@ -492,7 +492,6 @@ internal fun QueueActionMenu(
     isDownloaded: Boolean = false,
     downloadLabel: String? = null,
     onDownloadAction: (() -> Unit)? = null,
-    onSonicRadio: (() -> Unit)? = null,
     onAddToPlaylist: (() -> Unit)? = null,
     onRemoveFromPlaylist: (() -> Unit)? = null,
     recommendationBlocked: Boolean = false,
@@ -526,20 +525,6 @@ internal fun QueueActionMenu(
                 onClick = {
                     onDismiss()
                     onDownloadAction()
-                },
-            )
-            HorizontalDivider(
-                color = KeyColors.Line,
-                modifier = Modifier.padding(vertical = 4.dp),
-            )
-        }
-        if (onSonicRadio != null) {
-            DropdownMenuItem(
-                text = { Text(Strings.sonicRadio) },
-                leadingIcon = { Icon(Icons.Filled.Radio, contentDescription = null) },
-                onClick = {
-                    onDismiss()
-                    onSonicRadio()
                 },
             )
             HorizontalDivider(
@@ -858,7 +843,6 @@ internal fun AsyncAlbumArtwork(
 }
 
 internal fun MusicServerProfile.hasCredentials(): Boolean = when (type) {
-    MusicServerType.Plex -> token.isNotBlank() || (username.isNotBlank() && password.isNotBlank())
     MusicServerType.Music032 -> baseUrl.isNotBlank() && token.isNotBlank()
 }
 

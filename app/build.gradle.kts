@@ -119,7 +119,7 @@ dependencies {
     // AOT-compiled scroll/animation hot paths instead of warming up through JIT.
     implementation(libs.androidx.profileinstaller)
     testImplementation(libs.junit)
-    // JVM implementation for Plex JSON parser unit tests (Android's local-test stub returns defaults).
+    // JVM implementation of org.json for JSON parser unit tests (Android's local-test stub returns defaults).
     testImplementation("org.json:json:20240303")
     testImplementation("org.robolectric:robolectric:4.14.1")
     androidTestImplementation(libs.androidx.junit)

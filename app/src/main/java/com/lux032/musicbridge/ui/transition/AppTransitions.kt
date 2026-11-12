@@ -32,7 +32,7 @@ import androidx.compose.runtime.setValue
 import kotlinx.coroutines.delay
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
-import com.lux032.musicbridge.plex.PlexTrackStream
+import com.lux032.musicbridge.music.MusicTrack
 
 /** Direction of the most recent navigation, recorded by AppState so the section
  *  transition can pick the right motion (P1 uses Push/Pop; P0 only needs player vs. not). */
@@ -53,7 +53,7 @@ object PlayerSharedKeys {
     // NOTE: the play/pause button is deliberately NOT a shared element — shared elements
     // render in the transition overlay while morphing, and hit-testing stays at the layout
     // position, so a flying button eats taps. Reliability beats the morph here.
-    fun artwork(track: PlexTrackStream): String = "playerArtwork-${track.sourceId}-${track.ratingKey}"
+    fun artwork(track: MusicTrack): String = "playerArtwork-${track.sourceId}-${track.ratingKey}"
 }
 
 object TransitionDurations {

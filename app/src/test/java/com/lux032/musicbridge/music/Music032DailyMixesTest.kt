@@ -12,7 +12,7 @@ import org.junit.Test
 class Music032DailyMixesTest {
     private val base = "https://example.org"
     private val mediaUrl: (String) -> String? = { Music032Json.mediaUrl(it, base, "token") }
-    private val parseTrack: (JSONObject) -> com.lux032.musicbridge.plex.PlexTrackStream =
+    private val parseTrack: (JSONObject) -> com.lux032.musicbridge.music.MusicTrack =
         { Music032Json.parseTrack(it, base, "token", "032") }
 
     private val mixJson = """

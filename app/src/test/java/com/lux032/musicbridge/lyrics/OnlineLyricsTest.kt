@@ -1,4 +1,4 @@
-package com.lux032.musicbridge.plex
+package com.lux032.musicbridge.lyrics
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull

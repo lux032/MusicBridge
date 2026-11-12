@@ -6,10 +6,9 @@ import com.lux032.musicbridge.LocalPrecacheCount
 import com.lux032.musicbridge.LocalStreamingLimit
 import com.lux032.musicbridge.local.buildLocalSeekPlan
 import com.lux032.musicbridge.local.isLiveTranscodeUrl
-import com.lux032.musicbridge.local.isPlexLiveTranscodeUrl
-import com.lux032.musicbridge.plex.PlexTrackStream
-import com.lux032.musicbridge.plex.willTranscodeLocally
-import com.lux032.musicbridge.plex.withLocalPlaybackPolicy
+import com.lux032.musicbridge.music.MusicTrack
+import com.lux032.musicbridge.music.willTranscodeLocally
+import com.lux032.musicbridge.music.withLocalPlaybackPolicy
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -20,7 +19,7 @@ import org.junit.Test
 class Music032LocalTranscodeTest {
     // 独立主机名，避免与其他测试共享进程级能力缓存。
     private val base = "https://local-transcode-test.example"
-    private val track = PlexTrackStream(
+    private val track = MusicTrack(
         ratingKey = "42",
         title = "Track",
         streamUrl = "$base/api/v1/tracks/42/stream?mediaToken=tok",
@@ -40,23 +39,22 @@ class Music032LocalTranscodeTest {
 
     @Test fun cellularLimitTranscodesToServerOpus() {
         val selected = policy(LocalStreamingLimit.KBPS_320)
-        val result = track.withLocalPlaybackPolicy(selected, "client")
+        val result = track.withLocalPlaybackPolicy(selected)
 
         assertTrue(track.willTranscodeLocally(selected))
         assertEquals("$base/api/v1/tracks/42/transcode.ogg?mediaToken=tok&bitrate=128", result.streamUrl)
         assertEquals("audio/ogg", result.playbackMimeType)
         assertTrue(result.streamUrl.isLiveTranscodeUrl())
-        assertFalse(result.streamUrl.isPlexLiveTranscodeUrl())
     }
 
     @Test fun maximumAndBelowLimitKeepOriginal() {
-        assertEquals(track.streamUrl, track.withLocalPlaybackPolicy(policy(LocalStreamingLimit.MAXIMUM), "client").streamUrl)
+        assertEquals(track.streamUrl, track.withLocalPlaybackPolicy(policy(LocalStreamingLimit.MAXIMUM)).streamUrl)
         val small = track.copy(sourceAudioCodec = "mp3", sourceAudioBitrateKbps = 256)
         assertFalse(small.willTranscodeLocally(policy(LocalStreamingLimit.KBPS_320)))
-        assertEquals(small.streamUrl, small.withLocalPlaybackPolicy(policy(LocalStreamingLimit.KBPS_320), "client").streamUrl)
+        assertEquals(small.streamUrl, small.withLocalPlaybackPolicy(policy(LocalStreamingLimit.KBPS_320)).streamUrl)
     }
 
-    @Test fun unknownBitrateFollowsPlexRules() {
+    @Test fun unknownBitrateTranscodesOnlyNonOpus() {
         val selected = policy(LocalStreamingLimit.KBPS_320)
         assertFalse(track.copy(sourceAudioCodec = "opus", sourceAudioBitrateKbps = null).willTranscodeLocally(selected))
         assertTrue(track.copy(sourceAudioBitrateKbps = null).willTranscodeLocally(selected))

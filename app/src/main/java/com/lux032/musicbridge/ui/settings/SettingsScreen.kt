@@ -27,7 +27,6 @@ import com.lux032.musicbridge.Strings
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import com.lux032.musicbridge.ui.settings.sections.AboutAndDiagnosticsSection
-import com.lux032.musicbridge.ui.settings.sections.AiSettingsSection
 import com.lux032.musicbridge.ui.settings.sections.AudioPlaybackSection
 import com.lux032.musicbridge.ui.settings.sections.ServerSection
 import com.lux032.musicbridge.ui.settings.sections.SonosAdvancedSection
@@ -143,16 +142,8 @@ fun SettingsScreen(
                 onSonosHiResTranscodeModeChange = actions.onSonosHiResTranscodeModeChange,
             )
 
-            // 5. AI Assistant
-            AiSettingsSection(
-                settings = state.aiSettings,
-                onSave = actions.onSaveAiSettings,
-            )
-
-            // 6. About & Diagnostics
-            AboutAndDiagnosticsSection(
-                onRunPlexOffsetProbe = actions.runPlexOffsetProbe,
-            )
+            // 5. About & Diagnostics
+            AboutAndDiagnosticsSection()
         }
     }
 }

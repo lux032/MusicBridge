@@ -83,7 +83,7 @@ class SonosDiscovery(private val context: Context) {
 
     private inline fun <T> withMulticastLock(block: () -> T): T {
         val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
-        val multicastLock = wifiManager?.createMulticastLock("plex-to-sonos-discovery")?.apply {
+        val multicastLock = wifiManager?.createMulticastLock("musicbridge-sonos-discovery")?.apply {
             setReferenceCounted(false)
             acquire()
         }

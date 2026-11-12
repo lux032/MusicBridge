@@ -10,7 +10,7 @@ import org.junit.Test
 
 /**
  * Pure routing/mapping helpers that decide how engine and Sonos observations map onto 032
- * playback session events. Plex paths never use these (they keep the legacy timeline
+ * playback session events. Non-032 sources never use these (they keep the legacy timeline
  * behavior), so the mapping honesty rules are 032-only by construction.
  */
 class PlaybackReporterRoutingTest {

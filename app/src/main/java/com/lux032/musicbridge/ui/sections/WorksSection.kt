@@ -27,7 +27,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.lux032.musicbridge.music.*
-import com.lux032.musicbridge.plex.*
 import kotlinx.coroutines.CancellationException
 
 @Composable
@@ -118,10 +117,10 @@ internal fun WorkDetailSection(
     loadSeries: suspend (String, Long) -> Music032WorkSeries?,
     onBack: () -> Unit,
     onOpen: (String, Long) -> Unit,
-    onAlbum: (PlexAlbum) -> Unit,
+    onAlbum: (MusicAlbum) -> Unit,
     onPlay: (Music032Work, Boolean, Boolean) -> Unit,
-    onQueue: (List<PlexTrackStream>, String) -> Unit,
-    onTrack: (Music032Work, List<PlexTrackStream>, Int) -> Unit,
+    onQueue: (List<MusicTrack>, String) -> Unit,
+    onTrack: (Music032Work, List<MusicTrack>, Int) -> Unit,
     safePadding: PaddingValues = PaddingValues(),
 ) {
     var detail by remember(sourceId, workId) { mutableStateOf<Music032WorkDetail?>(null) }

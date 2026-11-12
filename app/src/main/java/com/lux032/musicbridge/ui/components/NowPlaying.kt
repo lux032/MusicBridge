@@ -31,8 +31,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import com.lux032.musicbridge.plex.PlexAlbum
-import com.lux032.musicbridge.plex.PlexTrackStream
+import com.lux032.musicbridge.music.MusicAlbum
+import com.lux032.musicbridge.music.MusicTrack
 import com.lux032.musicbridge.storage.DownloadedAudioTrack
 import kotlin.math.sin
 
@@ -63,14 +63,14 @@ internal data class NowPlayingMarker(
     val isPlaying: Boolean,
     val isBuffering: Boolean,
 ) {
-    fun matches(track: PlexTrackStream): Boolean = matches(track.sourceId, track.ratingKey)
+    fun matches(track: MusicTrack): Boolean = matches(track.sourceId, track.ratingKey)
 
     fun matches(track: DownloadedAudioTrack): Boolean = matches(track.sourceId, track.ratingKey)
 
     fun matches(trackSourceId: String, trackRatingKey: String): Boolean =
         trackRatingKey == ratingKey && trackSourceId == sourceId
 
-    fun matchesAlbum(album: PlexAlbum): Boolean = matchesAlbum(album.sourceId, album.ratingKey)
+    fun matchesAlbum(album: MusicAlbum): Boolean = matchesAlbum(album.sourceId, album.ratingKey)
 
     fun matchesAlbum(albumSourceId: String, albumKey: String): Boolean =
         albumRatingKey != null && albumKey.isNotBlank() &&

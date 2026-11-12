@@ -1,8 +1,8 @@
 package com.lux032.musicbridge
 
-import com.lux032.musicbridge.plex.PlexAlbum
-import com.lux032.musicbridge.plex.PlexSection
-import com.lux032.musicbridge.plex.PlexTrackStream
+import com.lux032.musicbridge.music.MusicAlbum
+import com.lux032.musicbridge.music.LibrarySection
+import com.lux032.musicbridge.music.MusicTrack
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -10,25 +10,25 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class NowPlayingMarkerTest {
-    private val album = PlexAlbum(
+    private val album = MusicAlbum(
         ratingKey = "album-a", title = "Album", artistName = null,
         year = null, thumbUrl = null, userRating = null,
         addedAtEpochSeconds = null, lastViewedAtEpochSeconds = null,
-        section = PlexSection("1", "Music", "artist"), sourceId = "server-a",
+        section = LibrarySection("1", "Music", "artist"), sourceId = "server-a",
     )
 
     private fun track(key: String, albumKey: String? = "album-a", source: String = "server-a") =
-        PlexTrackStream(
+        MusicTrack(
             ratingKey = key, title = key, streamUrl = "", partKey = "",
             durationMillis = null, userRating = null, albumRatingKey = albumKey, sourceId = source,
         )
 
     private fun player(
-        tracks: List<PlexTrackStream>,
+        tracks: List<MusicTrack>,
         index: Int = 0,
         paused: Boolean = false,
         buffering: Boolean = false,
-        playerAlbum: PlexAlbum = album,
+        playerAlbum: MusicAlbum = album,
     ) = MiniPlayerState(
         album = playerAlbum,
         tracks = tracks,

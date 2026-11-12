@@ -4,7 +4,7 @@ import androidx.media3.common.Player
 import com.lux032.musicbridge.music.Music032ReporterApi
 import com.lux032.musicbridge.music.ReporterEndReason
 import com.lux032.musicbridge.music.ReporterPlayState
-import com.lux032.musicbridge.plex.PlexTrackStream
+import com.lux032.musicbridge.music.MusicTrack
 
 /**
  * 032 session-flow routing for the LOCAL playback coordinator, extracted so the real
@@ -23,17 +23,17 @@ import com.lux032.musicbridge.plex.PlexTrackStream
  */
 internal class Local032SessionDriver(
     private val reporterFor: (sourceId: String) -> Music032ReporterApi?,
-    private val is032Track: (PlexTrackStream) -> Boolean,
+    private val is032Track: (MusicTrack) -> Boolean,
 ) {
     /** 032 track the reporter currently has (or last had) a session for — end routing. */
-    var lastReportedTrack: PlexTrackStream? = null
+    var lastReportedTrack: MusicTrack? = null
         private set
 
     /** Latch: no ghost sessions after the queue ended until the next explicit play. */
     var playbackFinished: Boolean = false
         private set
 
-    private fun reporterForTrack(track: PlexTrackStream): Pair<Music032ReporterApi, Long>? {
+    private fun reporterForTrack(track: MusicTrack): Pair<Music032ReporterApi, Long>? {
         if (!is032Track(track)) return null
         val reporter = reporterFor(track.sourceId) ?: return null
         val trackId = track.ratingKey.toLongOrNull() ?: return null
@@ -42,7 +42,7 @@ internal class Local032SessionDriver(
 
     /** Explicit playback start (album/playlist/single tap, or renderer switch handover). */
     fun onExplicitStart(
-        track: PlexTrackStream,
+        track: MusicTrack,
         positionMillis: Long,
         durationMillis: Long,
         continueChain: Boolean,
@@ -76,7 +76,7 @@ internal class Local032SessionDriver(
      * Explicit re-selection of the CURRENT track (queue panel tap on the playing item):
      * a genuinely new play from 0 on a fresh chain — never a takeover (P2-A).
      */
-    fun onExplicitReplaySameTrack(track: PlexTrackStream, durationMillis: Long) {
+    fun onExplicitReplaySameTrack(track: MusicTrack, durationMillis: Long) {
         playbackFinished = false
         val (reporter, trackId) = reporterForTrack(track) ?: return
         reporter.requestEnd(ReporterEndReason.Stopped, expectedSessionId = reporter.ownedSessionId())
@@ -86,7 +86,7 @@ internal class Local032SessionDriver(
 
     /** Engine AUTO/SEEK/REPEAT transition: end the old play, open a genuinely new one. */
     fun onEngineTransition(
-        newTrack: PlexTrackStream,
+        newTrack: MusicTrack,
         reason: Int,
         positionMillis: Long,
         durationMillis: Long,
@@ -116,7 +116,7 @@ internal class Local032SessionDriver(
      * Queue end: natural STATE_ENDED reports completed; a failed last item reports error.
      * The final position is the reporter's own last observation in both cases.
      */
-    fun onQueueEnded(track: PlexTrackStream?, failed: Boolean) {
+    fun onQueueEnded(track: MusicTrack?, failed: Boolean) {
         playbackFinished = true
         track?.let { reporterForTrack(it) }?.let { (reporter, _) ->
             reporter.requestEnd(if (failed) ReporterEndReason.Error else ReporterEndReason.Completed)
@@ -125,7 +125,7 @@ internal class Local032SessionDriver(
     }
 
     /** Engine gave up on a track (skipped-failed or unrecovered error). */
-    fun onTrackFailed(track: PlexTrackStream) {
+    fun onTrackFailed(track: MusicTrack) {
         reporterForTrack(track)?.let { (reporter, _) ->
             reporter.requestEnd(ReporterEndReason.Error, expectedSessionId = reporter.openSessionId())
         }
@@ -135,7 +135,7 @@ internal class Local032SessionDriver(
     }
 
     /** User or MediaSession seek inside the current item. */
-    fun onSeek(track: PlexTrackStream, positionMillis: Long, durationMillis: Long) {
+    fun onSeek(track: MusicTrack, positionMillis: Long, durationMillis: Long) {
         reporterForTrack(track)?.let { (reporter, _) ->
             reporter.requestSeek(positionMillis.coerceAtLeast(0L), durationMillis)
         }
@@ -147,7 +147,7 @@ internal class Local032SessionDriver(
      * and a missing session is repaired — unless the playback-finished latch is set.
      */
     fun onPoll(
-        track: PlexTrackStream,
+        track: MusicTrack,
         enginePlaybackState: String,
         reporterState: ReporterPlayState,
         positionMillis: Long,

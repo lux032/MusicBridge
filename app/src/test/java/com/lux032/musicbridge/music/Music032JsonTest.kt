@@ -1,7 +1,7 @@
 package com.lux032.musicbridge.music
 
-import com.lux032.musicbridge.plex.ArtistRef
-import com.lux032.musicbridge.plex.PlexSection
+import com.lux032.musicbridge.music.ArtistRef
+import com.lux032.musicbridge.music.LibrarySection
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -11,7 +11,7 @@ import org.junit.Test
 
 class Music032JsonTest {
     private val base = "https://example.org"
-    private val section = PlexSection("032", "Music", "artist")
+    private val section = LibrarySection("032", "Music", "artist")
     private fun track(json: String) = Music032Json.parseTrack(JSONObject(json), base, "a b", "032")
     private fun album(type: String, extra: String = "") = Music032Json.parseAlbum(
         JSONObject("""{"id":1,"title":"Ordinary","trackCount":10,"formats":"FLAC,MP3","albumType":"$type"$extra}"""),

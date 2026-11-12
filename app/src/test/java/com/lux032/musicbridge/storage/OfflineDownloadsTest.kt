@@ -3,7 +3,7 @@ package com.lux032.musicbridge.storage
 import android.content.Context
 import com.lux032.musicbridge.local.PlaybackDataSourceRoute
 import com.lux032.musicbridge.local.playbackDataSourceRoute
-import com.lux032.musicbridge.plex.isFavorite
+import com.lux032.musicbridge.music.isFavorite
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull

@@ -1,8 +1,8 @@
 package com.lux032.musicbridge
 
-import com.lux032.musicbridge.plex.PlexAlbum
-import com.lux032.musicbridge.plex.PlexSection
-import com.lux032.musicbridge.plex.PlexTrackStream
+import com.lux032.musicbridge.music.MusicAlbum
+import com.lux032.musicbridge.music.LibrarySection
+import com.lux032.musicbridge.music.MusicTrack
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -12,16 +12,16 @@ import org.robolectric.RuntimeEnvironment
 @RunWith(RobolectricTestRunner::class)
 class RecentPlaybackHistoryTest {
     private val preferences = AppPreferences(RuntimeEnvironment.getApplication())
-    private val first = PlexAlbum(
+    private val first = MusicAlbum(
         ratingKey = "album-a", title = "Album A", artistName = null,
         year = null, thumbUrl = null, userRating = null,
         addedAtEpochSeconds = null, lastViewedAtEpochSeconds = null,
-        section = PlexSection("1", "Music", "artist"), sourceId = "server-a",
+        section = LibrarySection("1", "Music", "artist"), sourceId = "server-a",
     )
     private val second = first.copy(ratingKey = "album-b", title = "Album B")
 
-    private fun play(album: PlexAlbum, fallback: PlexAlbum = first): List<String> {
-        val track = PlexTrackStream(
+    private fun play(album: MusicAlbum, fallback: MusicAlbum = first): List<String> {
+        val track = MusicTrack(
             ratingKey = "track-${album.ratingKey}", title = "Track", streamUrl = "", partKey = "",
             durationMillis = null, userRating = null,
             albumRatingKey = album.ratingKey, sourceId = album.sourceId,

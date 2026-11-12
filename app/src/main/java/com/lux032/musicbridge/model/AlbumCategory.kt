@@ -1,6 +1,6 @@
 package com.lux032.musicbridge.model
 
-import com.lux032.musicbridge.plex.PlexAlbum
+import com.lux032.musicbridge.music.MusicAlbum
 import java.text.Normalizer
 import java.util.Locale
 
@@ -19,7 +19,7 @@ private val explicitLive = Regex("(?:^|[\\s(\\[{-])LIVE(?:$|[\\s)\\]}-])|\\bLIVE
 private val explicitCompilation = Regex("^(?:THE )?BEST$|^ベスト$|\\bBEST OF\\b|\\bGREATEST HITS\\b|\\bANTHOLOGY\\b|精选|精選|合集|合輯")
 private val explicitMiniAlbum = Regex("\\bMINI[ -]?ALBUM\\b|ミニアルバム")
 
-fun classifyArtistAlbum(album: PlexAlbum): ArtistAlbumClassification {
+fun classifyArtistAlbum(album: MusicAlbum): ArtistAlbumClassification {
     val subformats = album.subformat
         ?.split(',')
         ?.map(String::trim)

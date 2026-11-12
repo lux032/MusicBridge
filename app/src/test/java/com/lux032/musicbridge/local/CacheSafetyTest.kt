@@ -26,32 +26,6 @@ class CacheSafetyTest {
         assertFalse(transcodeCacheInvariantHolds(true, listOf(0L to 1200L), 1234L))
     }
 
-    @Test fun parsesAndDecodesPlexEndpoint() {
-        val endpoint = parsePlexTranscodeEndpoint(
-            "https://plex.example:32400/music/:/transcode/universal/start.ogg?X-Plex-Token=a%2Bb%20c",
-        )
-        assertEquals("https://plex.example:32400", endpoint?.serverUri)
-        assertEquals("a+b c", endpoint?.token)
-    }
-
-    @Test fun transcodeUpstreamRequestInjectsSessionAndPreservesCacheKey() {
-        val result = transcodeUpstreamRequest(transcodeUrl, "stable-cache-key", "fg-test-session")
-
-        assertTrue(result.url.contains("session=fg-test-session"))
-        assertTrue(result.url.contains("X-Plex-Session-Identifier=fg-test-session"))
-        assertEquals("stable-cache-key", result.cacheKey)
-    }
-
-    @Test fun foregroundSessionRotatesOnlyForNewLoads() {
-        var generated = 0
-        val newLoad = foregroundTranscodeSessionId(0L, "fg-old") { "fg-new-${++generated}" }
-        val resumedLoad = foregroundTranscodeSessionId(4096L, "fg-old") { "fg-new-${++generated}" }
-
-        assertEquals("fg-new-1", newLoad)
-        assertEquals("fg-old", resumedLoad)
-        assertEquals(1, generated)
-    }
-
     @Test fun transcodeSeekShortCircuitRequiresSameSecondAndLiveUpstream() {
         assertTrue(shouldShortCircuitTranscodeSeek(true, false, 1_900L, 1_000L))
         assertFalse(shouldShortCircuitTranscodeSeek(true, false, 2_000L, 1_000L))
@@ -77,7 +51,7 @@ class CacheSafetyTest {
             ),
         )
         assertFalse(isFatalZeroByteTranscodeLoad(transcodeUrl, 1L, EOFException()))
-        assertFalse(isFatalZeroByteTranscodeLoad("https://plex.example/library/parts/1/file.flac", 0L, EOFException()))
+        assertFalse(isFatalZeroByteTranscodeLoad("https://032.example/api/v1/tracks/1/stream?mediaToken=token", 0L, EOFException()))
     }
 
     @Test fun transcode4xxResponsesAreFatalCandidates() {
@@ -89,6 +63,6 @@ class CacheSafetyTest {
 
     private companion object {
         const val transcodeUrl =
-            "https://plex.example/music/:/transcode/universal/start.ogg?X-Plex-Token=token"
+            "https://032.example/api/v1/tracks/1/transcode.ogg?mediaToken=token&bitrate=128"
     }
 }

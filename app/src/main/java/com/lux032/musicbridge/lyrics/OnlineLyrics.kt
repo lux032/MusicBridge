@@ -1,6 +1,7 @@
-package com.lux032.musicbridge.plex
+package com.lux032.musicbridge.lyrics
 
 import android.util.Log
+import com.lux032.musicbridge.music.MusicTrack
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
@@ -73,9 +74,9 @@ private val onlineLyricCache = object : LinkedHashMap<String, String>(MAX_CACHED
 }
 
 /** Server / downloaded lyrics first; when none exist, fall back to internet providers. */
-internal suspend fun loadTrackLyrics(track: PlexTrackStream): PlexLyrics {
-    val local = runCatching { resolvePlexLyricUrl(track)?.let { fetchPlexLyrics(it) } }
-        .onFailure { Log.d("PlexLyrics", "Local lyrics unavailable for ${track.ratingKey}", it) }
+internal suspend fun loadTrackLyrics(track: MusicTrack): ParsedLyrics {
+    val local = runCatching { track.lyricUrl?.let { loadLyricsFromUrl(it) } }
+        .onFailure { Log.d(TAG, "Local lyrics unavailable for ${track.ratingKey}", it) }
         .getOrNull()
     currentCoroutineContext().ensureActive()
     if (local != null && local.lines.isNotEmpty()) return local
@@ -84,17 +85,17 @@ internal suspend fun loadTrackLyrics(track: PlexTrackStream): PlexLyrics {
         .onFailure { Log.d(TAG, "Online lyrics unavailable for ${track.ratingKey}", it) }
         .getOrNull()
     currentCoroutineContext().ensureActive()
-    return remote ?: PlexLyrics(emptyList(), isSynced = false)
+    return remote ?: ParsedLyrics(emptyList(), isSynced = false)
 }
 
-internal fun PlexTrackStream.toOnlineLyricQuery(): OnlineLyricQuery = OnlineLyricQuery(
+internal fun MusicTrack.toOnlineLyricQuery(): OnlineLyricQuery = OnlineLyricQuery(
     name = title.trim().ifBlank { null },
     artist = (artists.firstOrNull()?.name ?: artistName)?.trim()?.ifBlank { null },
     album = albumTitle?.trim()?.ifBlank { null } ?: title,
     durationSeconds = durationMillis?.let { it / 1000.0 },
 )
 
-internal suspend fun fetchOnlineLyrics(track: PlexTrackStream): PlexLyrics? {
+internal suspend fun fetchOnlineLyrics(track: MusicTrack): ParsedLyrics? {
     val cacheKey = "${track.sourceId}:${track.ratingKey}"
     synchronized(onlineLyricCache) { onlineLyricCache[cacheKey] }?.let { return parseLrcLyrics(it) }
 

@@ -3,10 +3,10 @@ package com.lux032.musicbridge.storage
 import android.content.Context
 import android.util.Log
 import com.lux032.musicbridge.PlaybackMode
-import com.lux032.musicbridge.plex.ArtistRef
-import com.lux032.musicbridge.plex.PlexAlbum
-import com.lux032.musicbridge.plex.PlexSection
-import com.lux032.musicbridge.plex.PlexTrackStream
+import com.lux032.musicbridge.music.ArtistRef
+import com.lux032.musicbridge.music.MusicAlbum
+import com.lux032.musicbridge.music.LibrarySection
+import com.lux032.musicbridge.music.MusicTrack
 import com.lux032.musicbridge.sonos.SonosRoom
 import org.json.JSONArray
 import org.json.JSONObject
@@ -15,8 +15,8 @@ import java.io.File
 /** The last playback session, as needed to put the player back after a process death. */
 data class SavedPlaybackSession(
     val queueId: Long,
-    val album: PlexAlbum,
-    val tracks: List<PlexTrackStream>,
+    val album: MusicAlbum,
+    val tracks: List<MusicTrack>,
     val currentIndex: Int,
     val positionMillis: Long,
     val durationMillis: Long?,
@@ -42,7 +42,7 @@ class PlaybackSessionStore(context: Context) {
     private val queueFile = File(dir, "queue.json")
     private val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
-    fun saveQueue(queueId: Long, album: PlexAlbum, tracks: List<PlexTrackStream>) {
+    fun saveQueue(queueId: Long, album: MusicAlbum, tracks: List<MusicTrack>) {
         runCatching {
             val json = JSONObject()
                 .put("version", FORMAT_VERSION)
@@ -146,7 +146,7 @@ private fun JSONObject.optArtistRefs(key: String): List<ArtistRef> {
     }
 }
 
-private fun PlexAlbum.toJson(): JSONObject = JSONObject()
+private fun MusicAlbum.toJson(): JSONObject = JSONObject()
     .put("ratingKey", ratingKey)
     .put("title", title)
     .put("artistName", artistName)
@@ -164,9 +164,9 @@ private fun PlexAlbum.toJson(): JSONObject = JSONObject()
     .put("releaseDate", releaseDate)
     .put("artists", artists.toJson())
 
-private fun JSONObject.toAlbum(): PlexAlbum {
+private fun JSONObject.toAlbum(): MusicAlbum {
     val section = getJSONObject("section")
-    return PlexAlbum(
+    return MusicAlbum(
         ratingKey = getString("ratingKey"),
         title = getString("title"),
         artistName = optStringOrNull("artistName"),
@@ -175,7 +175,7 @@ private fun JSONObject.toAlbum(): PlexAlbum {
         userRating = optFloatOrNull("userRating"),
         addedAtEpochSeconds = optLongOrNull("addedAt"),
         lastViewedAtEpochSeconds = optLongOrNull("lastViewedAt"),
-        section = PlexSection(section.getString("key"), section.getString("title"), section.getString("type")),
+        section = LibrarySection(section.getString("key"), section.getString("title"), section.getString("type")),
         sourceId = optString("sourceId"),
         leafCount = optIntOrNull("leafCount"),
         musicAnalysisVersion = optStringOrNull("musicAnalysisVersion"),
@@ -186,7 +186,7 @@ private fun JSONObject.toAlbum(): PlexAlbum {
     )
 }
 
-private fun PlexTrackStream.toJson(): JSONObject = JSONObject()
+private fun MusicTrack.toJson(): JSONObject = JSONObject()
     .put("ratingKey", ratingKey)
     .put("title", title)
     .put("streamUrl", streamUrl)
@@ -212,7 +212,7 @@ private fun PlexTrackStream.toJson(): JSONObject = JSONObject()
     .put("trackNumber", trackNumber)
     .put("artists", artists.toJson())
 
-private fun JSONObject.toTrack(): PlexTrackStream = PlexTrackStream(
+private fun JSONObject.toTrack(): MusicTrack = MusicTrack(
     ratingKey = getString("ratingKey"),
     title = getString("title"),
     streamUrl = getString("streamUrl"),

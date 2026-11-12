@@ -4,17 +4,17 @@ import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
-import com.lux032.musicbridge.plex.ArtistRef
-import com.lux032.musicbridge.plex.PlexAlbum
-import com.lux032.musicbridge.plex.PlexArtist
-import com.lux032.musicbridge.plex.PlexPlaylist
-import com.lux032.musicbridge.plex.PlexSection
-import com.lux032.musicbridge.plex.PlexTrackStream
+import com.lux032.musicbridge.music.ArtistRef
+import com.lux032.musicbridge.music.MusicAlbum
+import com.lux032.musicbridge.music.MusicArtist
+import com.lux032.musicbridge.music.MusicPlaylist
+import com.lux032.musicbridge.music.LibrarySection
+import com.lux032.musicbridge.music.MusicTrack
 import org.json.JSONArray
 import org.json.JSONObject
 
 /** One release on a 032 artist page; [isAppearance] = the artist only sings some tracks. */
-data class ArtistRelease(val album: PlexAlbum, val isAppearance: Boolean)
+data class ArtistRelease(val album: MusicAlbum, val isAppearance: Boolean)
 
 data class DownloadedAudioTrack(
     val sourceId: String,
@@ -38,7 +38,7 @@ data class DownloadedAudioTrack(
     val trackNumber: Int? = null,
     val userRating: Float? = null,
 ) {
-    fun toTrackStream(): PlexTrackStream = PlexTrackStream(
+    fun toTrackStream(): MusicTrack = MusicTrack(
         ratingKey = ratingKey,
         title = title,
         streamUrl = "file://$localAudioPath",
@@ -248,7 +248,7 @@ class AlbumLocalStore(context: Context) {
             if (cursor.moveToFirst()) cursor.getLong(0) else 0L
         }
 
-    fun getAllPlaylists(sourceId: String): List<PlexPlaylist> =
+    fun getAllPlaylists(sourceId: String): List<MusicPlaylist> =
         helper.readableDatabase.query(
             AlbumDatabaseHelper.TABLE_PLAYLISTS,
             null,
@@ -263,10 +263,10 @@ class AlbumLocalStore(context: Context) {
             }
         }
 
-    fun replaceAllPlaylists(sourceId: String, playlists: List<PlexPlaylist>) {
+    fun replaceAllPlaylists(sourceId: String, playlists: List<MusicPlaylist>) {
         val persistedPlaylists = playlists.asSequence()
             .filter { it.ratingKey.isNotBlank() && it.isPersistable() }
-            .distinctBy(PlexPlaylist::ratingKey)
+            .distinctBy(MusicPlaylist::ratingKey)
             .toList()
         val database = helper.writableDatabase
         database.beginTransaction()
@@ -291,7 +291,7 @@ class AlbumLocalStore(context: Context) {
                 database.delete(
                     AlbumDatabaseHelper.TABLE_PLAYLIST_TRACKS,
                     "${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ? AND ${AlbumDatabaseHelper.COLUMN_PLAYLIST_RATING_KEY} NOT IN ($placeholders)",
-                    arrayOf(sourceId, *persistedPlaylists.map(PlexPlaylist::ratingKey).toTypedArray()),
+                    arrayOf(sourceId, *persistedPlaylists.map(MusicPlaylist::ratingKey).toTypedArray()),
                 )
             }
             database.setTransactionSuccessful()
@@ -300,7 +300,7 @@ class AlbumLocalStore(context: Context) {
         }
     }
 
-    fun getPlaylistTracks(sourceId: String, playlistRatingKey: String): List<PlexTrackStream> =
+    fun getPlaylistTracks(sourceId: String, playlistRatingKey: String): List<MusicTrack> =
         helper.readableDatabase.query(
             AlbumDatabaseHelper.TABLE_PLAYLIST_TRACKS,
             null,
@@ -315,7 +315,7 @@ class AlbumLocalStore(context: Context) {
             }
         }
 
-    fun savePlaylistTracks(sourceId: String, playlistRatingKey: String, tracks: List<PlexTrackStream>) {
+    fun savePlaylistTracks(sourceId: String, playlistRatingKey: String, tracks: List<MusicTrack>) {
         if (sourceId.isBlank() || playlistRatingKey.isBlank() || !isPersistablePlaylistKey(playlistRatingKey)) return
         val database = helper.writableDatabase
         database.beginTransaction()
@@ -359,7 +359,7 @@ class AlbumLocalStore(context: Context) {
     fun isTrackAvailableLocally(sourceId: String, ratingKey: String): Boolean =
         getDownloadedTrack(sourceId, ratingKey)?.let { java.io.File(it.localAudioPath).exists() } == true
 
-    fun getFavoriteTracks(sourceId: String): List<PlexTrackStream> =
+    fun getFavoriteTracks(sourceId: String): List<MusicTrack> =
         helper.readableDatabase.query(
             AlbumDatabaseHelper.TABLE_TRACKS,
             null,
@@ -407,7 +407,7 @@ class AlbumLocalStore(context: Context) {
             }
         }
 
-    fun getAlbumsByArtist(sourceId: String, artistName: String): List<PlexAlbum> {
+    fun getAlbumsByArtist(sourceId: String, artistName: String): List<MusicAlbum> {
         val normalizedArtist = artistName.trim().ifBlank { "未知艺人" }
         val artistSelection = if (normalizedArtist == "未知艺人") {
             "(t1.${AlbumDatabaseHelper.COLUMN_ARTIST_NAME} IS NULL OR TRIM(t1.${AlbumDatabaseHelper.COLUMN_ARTIST_NAME}) = '')"
@@ -442,7 +442,7 @@ class AlbumLocalStore(context: Context) {
         }
     }
 
-    fun getAllAlbums(sourceId: String): List<PlexAlbum> =
+    fun getAllAlbums(sourceId: String): List<MusicAlbum> =
         helper.readableDatabase.query(
             AlbumDatabaseHelper.TABLE_ALBUMS,
             null,
@@ -459,7 +459,7 @@ class AlbumLocalStore(context: Context) {
             }
         }
 
-    fun searchAlbums(sourceId: String, query: String, limit: Int = DEFAULT_SEARCH_LIMIT): List<PlexAlbum> {
+    fun searchAlbums(sourceId: String, query: String, limit: Int = DEFAULT_SEARCH_LIMIT): List<MusicAlbum> {
         val normalizedQuery = query.trim()
         if (normalizedQuery.isEmpty()) {
             return getAllAlbums(sourceId)
@@ -494,7 +494,7 @@ class AlbumLocalStore(context: Context) {
         }
     }
 
-    fun replaceAllAlbums(sourceId: String, albums: List<PlexAlbum>) {
+    fun replaceAllAlbums(sourceId: String, albums: List<MusicAlbum>) {
         val database = helper.writableDatabase
         database.beginTransaction()
         try {
@@ -519,7 +519,7 @@ class AlbumLocalStore(context: Context) {
         }
     }
 
-    fun upsertAlbum(album: PlexAlbum) {
+    fun upsertAlbum(album: MusicAlbum) {
         val database = helper.writableDatabase
         database.beginTransaction()
         try {
@@ -545,7 +545,7 @@ class AlbumLocalStore(context: Context) {
 
     // ---- 032 artist sync model -------------------------------------------------------------
 
-    fun replaceAllArtists(sourceId: String, artists: List<PlexArtist>) {
+    fun replaceAllArtists(sourceId: String, artists: List<MusicArtist>) {
         val database = helper.writableDatabase
         database.beginTransaction()
         try {
@@ -564,7 +564,7 @@ class AlbumLocalStore(context: Context) {
         }
     }
 
-    fun upsertArtist(sourceId: String, artist: PlexArtist) {
+    fun upsertArtist(sourceId: String, artist: MusicArtist) {
         helper.writableDatabase.insertWithOnConflict(
             AlbumDatabaseHelper.TABLE_ARTISTS,
             null,
@@ -573,7 +573,7 @@ class AlbumLocalStore(context: Context) {
         )
     }
 
-    fun getArtists(sourceId: String): List<PlexArtist> =
+    fun getArtists(sourceId: String): List<MusicArtist> =
         helper.readableDatabase.query(
             AlbumDatabaseHelper.TABLE_ARTISTS,
             null,
@@ -584,7 +584,7 @@ class AlbumLocalStore(context: Context) {
             "${AlbumDatabaseHelper.COLUMN_ALBUM_COUNT} DESC, ${AlbumDatabaseHelper.COLUMN_ARTIST_NAME} COLLATE NOCASE ASC",
         ).use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.toArtist()) } }
 
-    fun getArtist(sourceId: String, artistId: String): PlexArtist? =
+    fun getArtist(sourceId: String, artistId: String): MusicArtist? =
         helper.readableDatabase.query(
             AlbumDatabaseHelper.TABLE_ARTISTS,
             null,
@@ -596,7 +596,7 @@ class AlbumLocalStore(context: Context) {
         ).use { cursor -> if (cursor.moveToFirst()) cursor.toArtist() else null }
 
     /** Exact (case-insensitive, trimmed) display-name match for text-only links. */
-    fun findArtistsByName(sourceId: String, name: String): List<PlexArtist> =
+    fun findArtistsByName(sourceId: String, name: String): List<MusicArtist> =
         helper.readableDatabase.query(
             AlbumDatabaseHelper.TABLE_ARTISTS,
             null,
@@ -670,7 +670,7 @@ class AlbumLocalStore(context: Context) {
     }
 
     /** Performed tracks (own primary credits ∪ tracks of credited albums), for offline play. */
-    fun getArtistTracks(sourceId: String, artistId: String): List<PlexTrackStream> {
+    fun getArtistTracks(sourceId: String, artistId: String): List<MusicTrack> {
         val source = AlbumDatabaseHelper.COLUMN_SOURCE_ID
         val artistKey = AlbumDatabaseHelper.COLUMN_LINK_ARTIST_RATING_KEY
         return helper.readableDatabase.rawQuery(
@@ -706,7 +706,7 @@ class AlbumLocalStore(context: Context) {
                 "${AlbumDatabaseHelper.COLUMN_LINK_ALBUM_RATING_KEY}, ${AlbumDatabaseHelper.COLUMN_LINK_ARTIST_RATING_KEY}) VALUES (?, ?, ?, ?)"
         )
 
-        fun album(album: PlexAlbum) {
+        fun album(album: MusicAlbum) {
             album.artists.forEachIndexed { index, ref ->
                 albumLink.bindString(1, album.sourceId)
                 albumLink.bindString(2, album.ratingKey)
@@ -716,7 +716,7 @@ class AlbumLocalStore(context: Context) {
             }
         }
 
-        fun track(track: PlexTrackStream) {
+        fun track(track: MusicTrack) {
             val albumKey = track.albumRatingKey ?: return
             track.artists.forEach { ref ->
                 trackLink.bindString(1, track.sourceId)
@@ -733,7 +733,7 @@ class AlbumLocalStore(context: Context) {
         }
     }
 
-    fun updateAlbumsMetadata(sourceId: String, albums: List<PlexAlbum>) {
+    fun updateAlbumsMetadata(sourceId: String, albums: List<MusicAlbum>) {
         if (sourceId.isBlank() || albums.isEmpty()) return
         val database = helper.writableDatabase
         database.beginTransaction()
@@ -779,7 +779,7 @@ class AlbumLocalStore(context: Context) {
         }
     }
 
-    fun replaceAllFavoriteTracks(sourceId: String, tracks: List<PlexTrackStream>) {
+    fun replaceAllFavoriteTracks(sourceId: String, tracks: List<MusicTrack>) {
         val database = helper.writableDatabase
         database.beginTransaction()
         try {
@@ -797,7 +797,7 @@ class AlbumLocalStore(context: Context) {
         }
     }
 
-    fun upsertFavoriteTrack(track: PlexTrackStream) {
+    fun upsertFavoriteTrack(track: MusicTrack) {
         helper.writableDatabase.insertWithOnConflict(
             AlbumDatabaseHelper.TABLE_TRACKS,
             null,
@@ -814,7 +814,7 @@ class AlbumLocalStore(context: Context) {
         )
     }
 
-    fun getAlbumTracks(sourceId: String, albumRatingKey: String): List<PlexTrackStream> =
+    fun getAlbumTracks(sourceId: String, albumRatingKey: String): List<MusicTrack> =
         helper.readableDatabase.query(
             AlbumDatabaseHelper.TABLE_ALBUM_TRACKS,
             null,
@@ -831,7 +831,7 @@ class AlbumLocalStore(context: Context) {
             }
         }
 
-    fun replaceAllAlbumTracks(sourceId: String, albumTracks: Map<String, List<PlexTrackStream>>) {
+    fun replaceAllAlbumTracks(sourceId: String, albumTracks: Map<String, List<MusicTrack>>) {
         val database = helper.writableDatabase
         database.beginTransaction()
         try {
@@ -859,7 +859,7 @@ class AlbumLocalStore(context: Context) {
         }
     }
 
-    fun saveAlbumTracks(sourceId: String, albumRatingKey: String, tracks: List<PlexTrackStream>) {
+    fun saveAlbumTracks(sourceId: String, albumRatingKey: String, tracks: List<MusicTrack>) {
         val database = helper.writableDatabase
         database.beginTransaction()
         try {
@@ -945,7 +945,7 @@ class AlbumLocalStore(context: Context) {
         )
     }
 
-    private fun android.database.Cursor.toAlbum(): PlexAlbum {
+    private fun android.database.Cursor.toAlbum(): MusicAlbum {
         fun string(name: String): String = getString(getColumnIndexOrThrow(name))
         fun nullableString(name: String): String? = getString(getColumnIndexOrThrow(name))
         fun nullableInt(name: String): Int? =
@@ -955,7 +955,7 @@ class AlbumLocalStore(context: Context) {
         fun nullableFloat(name: String): Float? =
             if (isNull(getColumnIndexOrThrow(name))) null else getFloat(getColumnIndexOrThrow(name))
 
-        return PlexAlbum(
+        return MusicAlbum(
             ratingKey = string(AlbumDatabaseHelper.COLUMN_RATING_KEY),
             title = string(AlbumDatabaseHelper.COLUMN_TITLE),
             artistName = nullableString(AlbumDatabaseHelper.COLUMN_ARTIST_NAME),
@@ -964,7 +964,7 @@ class AlbumLocalStore(context: Context) {
             userRating = nullableFloat(AlbumDatabaseHelper.COLUMN_USER_RATING),
             addedAtEpochSeconds = nullableLong(AlbumDatabaseHelper.COLUMN_ADDED_AT_EPOCH_SECONDS),
             lastViewedAtEpochSeconds = nullableLong(AlbumDatabaseHelper.COLUMN_LAST_VIEWED_AT_EPOCH_SECONDS),
-            section = PlexSection(
+            section = LibrarySection(
                 key = string(AlbumDatabaseHelper.COLUMN_SECTION_KEY),
                 title = string(AlbumDatabaseHelper.COLUMN_SECTION_TITLE),
                 type = string(AlbumDatabaseHelper.COLUMN_SECTION_TYPE),
@@ -989,10 +989,10 @@ class AlbumLocalStore(context: Context) {
             ?.let { decodeArtistRefs(getString(it)) }
             .orEmpty()
 
-    private fun android.database.Cursor.toArtist(): PlexArtist {
+    private fun android.database.Cursor.toArtist(): MusicArtist {
         fun nullableInt(name: String): Int? =
             getColumnIndexOrThrow(name).let { if (isNull(it)) null else getInt(it) }
-        return PlexArtist(
+        return MusicArtist(
             ratingKey = getString(getColumnIndexOrThrow(AlbumDatabaseHelper.COLUMN_RATING_KEY)),
             title = getString(getColumnIndexOrThrow(AlbumDatabaseHelper.COLUMN_ARTIST_NAME)),
             thumbUrl = getString(getColumnIndexOrThrow(AlbumDatabaseHelper.COLUMN_THUMB_URL)),
@@ -1005,7 +1005,7 @@ class AlbumLocalStore(context: Context) {
         )
     }
 
-    private fun PlexArtist.toContentValues(sourceId: String): ContentValues = ContentValues().apply {
+    private fun MusicArtist.toContentValues(sourceId: String): ContentValues = ContentValues().apply {
         put(AlbumDatabaseHelper.COLUMN_SOURCE_ID, sourceId)
         put(AlbumDatabaseHelper.COLUMN_RATING_KEY, ratingKey)
         put(AlbumDatabaseHelper.COLUMN_ARTIST_NAME, title)
@@ -1016,7 +1016,7 @@ class AlbumLocalStore(context: Context) {
         put(AlbumDatabaseHelper.COLUMN_TRACK_COUNT, trackCount)
     }
 
-    private fun android.database.Cursor.toPlaylist(): PlexPlaylist = PlexPlaylist(
+    private fun android.database.Cursor.toPlaylist(): MusicPlaylist = MusicPlaylist(
         ratingKey = getString(getColumnIndexOrThrow(AlbumDatabaseHelper.COLUMN_RATING_KEY)),
         title = getString(getColumnIndexOrThrow(AlbumDatabaseHelper.COLUMN_TITLE)),
         thumbUrl = getString(getColumnIndexOrThrow(AlbumDatabaseHelper.COLUMN_THUMB_URL)),
@@ -1024,7 +1024,7 @@ class AlbumLocalStore(context: Context) {
         sourceId = getString(getColumnIndexOrThrow(AlbumDatabaseHelper.COLUMN_SOURCE_ID)),
     )
 
-    private fun android.database.Cursor.toTrack(): PlexTrackStream {
+    private fun android.database.Cursor.toTrack(): MusicTrack {
         fun string(name: String): String = getString(getColumnIndexOrThrow(name))
         fun nullableString(name: String): String? = getString(getColumnIndexOrThrow(name))
         fun nullableLong(name: String): Long? =
@@ -1034,7 +1034,7 @@ class AlbumLocalStore(context: Context) {
         fun nullableInt(name: String): Int? =
             if (isNull(getColumnIndexOrThrow(name))) null else getInt(getColumnIndexOrThrow(name))
 
-        return PlexTrackStream(
+        return MusicTrack(
             ratingKey = string(AlbumDatabaseHelper.COLUMN_TRACK_RATING_KEY),
             title = string(AlbumDatabaseHelper.COLUMN_TRACK_TITLE),
             streamUrl = string(AlbumDatabaseHelper.COLUMN_TRACK_STREAM_URL),
@@ -1121,7 +1121,7 @@ class AlbumLocalStore(context: Context) {
         }
 
 
-    private fun PlexAlbum.toContentValues(): ContentValues =
+    private fun MusicAlbum.toContentValues(): ContentValues =
         ContentValues().apply {
             put(AlbumDatabaseHelper.COLUMN_SOURCE_ID, sourceId)
             put(AlbumDatabaseHelper.COLUMN_RATING_KEY, ratingKey)
@@ -1142,7 +1142,7 @@ class AlbumLocalStore(context: Context) {
             put(AlbumDatabaseHelper.COLUMN_ARTIST_REFS, encodeArtistRefs(artists))
         }
 
-    private fun PlexPlaylist.toContentValues(sourceId: String, sortOrder: Int): ContentValues = ContentValues().apply {
+    private fun MusicPlaylist.toContentValues(sourceId: String, sortOrder: Int): ContentValues = ContentValues().apply {
         put(AlbumDatabaseHelper.COLUMN_SOURCE_ID, sourceId)
         put(AlbumDatabaseHelper.COLUMN_RATING_KEY, ratingKey)
         put(AlbumDatabaseHelper.COLUMN_TITLE, title)
@@ -1151,13 +1151,13 @@ class AlbumLocalStore(context: Context) {
         put(AlbumDatabaseHelper.COLUMN_SORT_ORDER, sortOrder)
     }
 
-    private fun PlexPlaylist.isPersistable(): Boolean = isPersistablePlaylistKey(ratingKey)
+    private fun MusicPlaylist.isPersistable(): Boolean = isPersistablePlaylistKey(ratingKey)
 
     private fun isPersistablePlaylistKey(ratingKey: String): Boolean =
         !ratingKey.startsWith("ai:") && ratingKey != "favorites" &&
             !ratingKey.startsWith("artist:") && !ratingKey.startsWith("downloaded:")
 
-    private fun PlexTrackStream.toContentValues(): ContentValues =
+    private fun MusicTrack.toContentValues(): ContentValues =
         ContentValues().apply {
             put(AlbumDatabaseHelper.COLUMN_SOURCE_ID, sourceId)
             put(AlbumDatabaseHelper.COLUMN_TRACK_RATING_KEY, ratingKey)
@@ -1387,7 +1387,7 @@ private class AlbumDatabaseHelper(context: Context) :
         }
         if (oldVersion >= 5 && oldVersion < 6) {
             // Existing rows do not contain codec metadata, so keeping them would let cached
-            // Opus tracks bypass the new Plex transcode path until the next full refresh.
+            // Opus tracks bypass the Opus transcode path until the next full refresh.
             db.execSQL("DROP TABLE IF EXISTS $TABLE_TRACKS")
             db.execSQL("DROP TABLE IF EXISTS $TABLE_ALBUM_TRACKS")
             createTracksTable(db)
@@ -1414,6 +1414,7 @@ private class AlbumDatabaseHelper(context: Context) :
     }
 
     companion object {
+        // Historical file name, kept so existing installs keep their library cache.
         private const val DATABASE_NAME = "plex_album_cache.db"
         private const val DATABASE_VERSION = 18
 
