@@ -257,6 +257,7 @@ internal class AppStateLibraryCoordinator(
             artistResolveGeneration++
             state.isResolvingArtist = false
             if (state.remoteArtist?.ratingKey != key) state.remoteArtist = null
+            state.artistCredits.reset()
         }
         if (state.activeSection != AppSection.ArtistAlbums) state.navigateTo(AppSection.ArtistAlbums)
     }
@@ -294,6 +295,7 @@ internal class AppStateLibraryCoordinator(
                 // A merged (stale) id resolves to the canonical artist; follow it.
                 state.selectedArtistName = canonical.title
                 state.selectedArtistKey = canonical.ratingKey
+                state.artistCredits.open(sourceId, canonical.ratingKey)
             } catch (cancel: CancellationException) {
                 throw cancel
             } catch (error: Exception) {

@@ -6,6 +6,8 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -598,6 +600,11 @@ internal fun ArtistAlbumsSection(
     onQueueTrack: (MusicTrack, QueuePlacement) -> Unit,
     isResolving: Boolean = false,
     nowPlaying: NowPlayingMarker? = LocalNowPlaying.current,
+    credits: ArtistCredits = ArtistCredits(),
+    onCreditRoleChange: (String?) -> Unit = {},
+    onLoadMoreCredits: () -> Unit = {},
+    onRetryCredits: () -> Unit = {},
+    onPlayCreditTrack: (ArtistSummary, Int) -> Unit = { _, _ -> },
 ) {
     val layoutInfo = LocalAppLayoutInfo.current
     val currentArtist = artist
@@ -742,7 +749,10 @@ internal fun ArtistAlbumsSection(
                             overflow = TextOverflow.Ellipsis,
                         )
                         Text(
-                            text = Strings.albumsCount(currentArtist.albumCount),
+                            // Backstage-only people have no releases; say what they did instead.
+                            text = if (currentArtist.albumCount == 0 && credits.allTotal > 0) {
+                                Strings.artistCreditsCount(credits.allTotal)
+                            } else Strings.albumsCount(currentArtist.albumCount),
                             color = AppColors.TextSecondary,
                             style = MaterialTheme.typography.bodyMedium,
                         )
@@ -753,12 +763,15 @@ internal fun ArtistAlbumsSection(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    val playAllEnabled = artistTracks.isNotEmpty() && !isPlaybackLoading
+                    // Without performed tracks the main key plays the loaded credits.
+                    val playsCredits = artistTracks.isEmpty() && tracksTotal == 0 && credits.tracks.isNotEmpty()
+                    val playAllEnabled = (artistTracks.isNotEmpty() || playsCredits) && !isPlaybackLoading
                     val shuffleEnabled = currentArtist.albums.isNotEmpty() && !isPlaybackLoading
                     SplitPlayKey(
                         label = Strings.playOn(outputTargetName),
                         onPlay = {
-                            artistTracks.firstOrNull()?.let { onPlayTrack(currentArtist, it, 0) }
+                            if (playsCredits) onPlayCreditTrack(currentArtist, 0)
+                            else artistTracks.firstOrNull()?.let { onPlayTrack(currentArtist, it, 0) }
                         },
                         onShuffle = { onShuffleArtist(currentArtist) },
                         enabled = playAllEnabled,
@@ -846,7 +859,7 @@ internal fun ArtistAlbumsSection(
             }
         }
 
-        if (topTracks.isEmpty()) {
+        if (topTracks.isEmpty() && !(tracksTotal == 0 && credits.allTotal > 0)) {
             item(key = "all-tracks-entry") {
                 SectionHeader(
                     title = "",
@@ -855,6 +868,14 @@ internal fun ArtistAlbumsSection(
                 )
             }
         }
+
+        artistCreditsItems(
+            artist = currentArtist, credits = credits, isPlaybackLoading = isPlaybackLoading,
+            downloadedTrackKeys = downloadedTrackKeys, downloadProgress = downloadProgress,
+            onDownloadTrack = onDownloadTrack, onDeleteDownloadedTrack = onDeleteDownloadedTrack,
+            onRoleChange = onCreditRoleChange, onLoadMore = onLoadMoreCredits, onRetry = onRetryCredits,
+            onPlay = onPlayCreditTrack, onQueueTrack = onQueueTrack, nowPlaying = nowPlaying,
+        )
         }
 
         if (showingAllTracks) {
@@ -1044,6 +1065,7 @@ private fun ArtistTrackRow(
     onQueueTrack: (MusicTrack, QueuePlacement) -> Unit,
     showPlayCount: Boolean = false,
     nowPlaying: NowPlayingMarker? = null,
+    subtitle: String? = null,
 ) {
     var showQueueMenu by remember { mutableStateOf(false) }
     val isDownloaded = remember(track.sourceId, track.ratingKey, downloadedTrackKeys) {
@@ -1098,7 +1120,7 @@ private fun ArtistTrackRow(
                     }
                 }
                 Text(
-                    if (showPlayCount) {
+                    subtitle ?: if (showPlayCount) {
                         Strings.trackPlayCount(track.viewCount ?: 0)
                     } else track.albumTitle ?: track.artistName.orEmpty(),
                     color = AppColors.TextTertiary, style = MaterialTheme.typography.bodySmall,
@@ -1158,5 +1180,79 @@ internal fun ArtistPresentationToggle(
             bareWhenOff = true,
             iconSize = 20.dp,
         )
+    }
+}
+
+/**
+ * 幕后作品: tracks the artist wrote, composed, arranged or produced (032). Role keys filter the
+ * list when there is more than one role; pages load on demand. Absent when there are none.
+ */
+private fun androidx.compose.foundation.lazy.LazyListScope.artistCreditsItems(
+    artist: ArtistSummary,
+    credits: ArtistCredits,
+    isPlaybackLoading: Boolean,
+    downloadedTrackKeys: Set<String>,
+    downloadProgress: Map<String, Float>,
+    onDownloadTrack: (MusicTrack) -> Unit,
+    onDeleteDownloadedTrack: (MusicTrack) -> Unit,
+    onRoleChange: (String?) -> Unit,
+    onLoadMore: () -> Unit,
+    onRetry: () -> Unit,
+    onPlay: (ArtistSummary, Int) -> Unit,
+    onQueueTrack: (MusicTrack, QueuePlacement) -> Unit,
+    nowPlaying: NowPlayingMarker?,
+) {
+    if (credits.allTotal == 0 && credits.error == null) return
+    item(key = "credits-header", contentType = "tracks-header") {
+        SectionHeader(title = Strings.artistCredits, modifier = Modifier.padding(top = 12.dp))
+    }
+    if (credits.roles.size > 1) item(key = "credits-roles", contentType = "credits-roles") {
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            LabelKey("${Strings.creditsAll} ${credits.allTotal}", { onRoleChange(null) },
+                style = if (credits.role == null) KeyStyle.Hi else KeyStyle.Tonal, height = 40.dp)
+            credits.roles.forEach { (role, count) ->
+                LabelKey("${Strings.creditRole(role)} $count", { onRoleChange(role) },
+                    style = if (credits.role == role) KeyStyle.Hi else KeyStyle.Tonal, height = 40.dp)
+            }
+        }
+    }
+    itemsIndexed(
+        credits.tracks,
+        key = { index, entry -> "credit-${entry.track.ratingKey}-$index" },
+        contentType = { _, _ -> "track" },
+    ) { index, entry ->
+        val track = entry.track
+        ArtistTrackRow(
+            artist = artist, track = track, index = index,
+            isPlaybackLoading = isPlaybackLoading,
+            downloadedTrackKeys = downloadedTrackKeys, downloadProgress = downloadProgress,
+            onDownloadTrack = onDownloadTrack, onDeleteDownloadedTrack = onDeleteDownloadedTrack,
+            onPlayTrack = { current, _, position -> onPlay(current, position) }, onQueueTrack = onQueueTrack,
+            nowPlaying = nowPlaying?.takeIf { it.matches(track) },
+            subtitle = listOfNotNull(
+                entry.roles.joinToString(" / ", transform = Strings::creditRole).ifBlank { null },
+                track.artistName, track.albumTitle,
+            ).joinToString(" · "),
+        )
+    }
+    when {
+        credits.isLoading -> item(key = "credits-loading", contentType = "tracks-loading") {
+            Box(Modifier.fillMaxWidth().padding(vertical = 12.dp), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = LocalArtworkPalette.current.accent,
+                    modifier = Modifier.size(28.dp), strokeWidth = 3.dp)
+            }
+        }
+        credits.error != null -> item(key = "credits-error") {
+            Column {
+                Text(credits.error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
+                TextButton(onClick = onRetry) { Text(Strings.retry) }
+            }
+        }
+        credits.hasMore -> item(key = "credits-more") {
+            LabelKey(Strings.loadMore, onLoadMore, modifier = Modifier.padding(top = 4.dp), height = 40.dp)
+        }
     }
 }

@@ -41,6 +41,19 @@ object Strings {
     fun workStats(albums: Int, tracks: Int) = if (isZhCN) "$albums 张专辑 · $tracks 首" else "$albums albums · $tracks tracks"
     fun workAssociations(count: Int) = if (isZhCN) "关联作品 · $count 部" else "Related works · $count"
     val close get() = if (isZhCN) "关闭" else "Close"
+    val trackCredits get() = if (isZhCN) "幕后人员" else "Credits"
+    val artistCredits get() = if (isZhCN) "幕后作品" else "Credits"
+    fun artistCreditsCount(count: Int) = if (isZhCN) "幕后作品 $count 首" else "$count credited tracks"
+    val creditsAll get() = if (isZhCN) "全部" else "All"
+    val loadMore get() = if (isZhCN) "加载更多" else "Load more"
+    val creditsLoadFailed get() = if (isZhCN) "幕后作品加载失败" else "Couldn't load credits"
+    fun creditRole(role: String): String = when (role) {
+        "lyricist" -> if (isZhCN) "作词" else "Lyricist"
+        "composer" -> if (isZhCN) "作曲" else "Composer"
+        "arranger" -> if (isZhCN) "编曲" else "Arranger"
+        "producer" -> if (isZhCN) "制作人" else "Producer"
+        else -> role
+    }
     fun workOrigin(count: Int) = if (isZhCN) "出自 $count 部作品" else "From $count works"
     fun workPosition(position: Int) = if (isZhCN) "当前 · 第 $position 部" else "Current · Part $position"
     fun workType(type: String) = when (type) {

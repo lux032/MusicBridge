@@ -15,9 +15,11 @@ import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
+import com.lux032.musicbridge.music.ArtistRef
 import com.lux032.musicbridge.music.Music032TrackWork
 import com.lux032.musicbridge.music.Music032Work
 import com.lux032.musicbridge.music.MusicTrack
+import com.lux032.musicbridge.music.TrackCredit
 import com.lux032.musicbridge.ui.theme.MusicBridgeTheme
 import kotlinx.coroutines.awaitCancellation
 import org.junit.Assert.*
@@ -74,6 +76,45 @@ class WorksUiRegressionTest {
         compose.runOnIdle { assertEquals(1, calls) }
         compose.onNodeWithText(Strings.workAssociations(0)).assertDoesNotExist()
         compose.onNodeWithText(Strings.addToPlaylist).assertDoesNotExist()
+        compose.onNodeWithText(Strings.trackDetails).assertExists()
+    }
+
+    @Test fun creditsListRolesAndOnlyNamesWithAnArtistIdOpenTheArtist() {
+        val opened = mutableListOf<ArtistRef>()
+        val credits = mutableStateOf(listOf(
+            TrackCredit("lyricist", listOf(ArtistRef("7", "Singer"), ArtistRef("", "Writer"))),
+            TrackCredit("composer", listOf(ArtistRef("", "Melody Maker"))),
+        ))
+        compose.setContent {
+            MusicBridgeTheme {
+                PlaybackMoreContent(
+                    track, null, "Artist · Album", "FLAC",
+                    loadWorks = { emptyList() }, loadWorkInfo = { _, _ -> null },
+                    onOpenWork = { _, _ -> }, onAddToPlaylist = {}, onDismiss = {},
+                    loadCredits = { credits.value }, onOpenArtist = { opened += it },
+                )
+            }
+        }
+        compose.onNodeWithText(Strings.trackCredits).assertIsDisplayed()
+        compose.onNodeWithText(Strings.creditRole("lyricist")).assertIsDisplayed()
+        compose.onNodeWithText(Strings.creditRole("composer")).assertIsDisplayed()
+        compose.onNodeWithText("Writer").assertHasNoClickAction()
+        compose.onNodeWithText("Melody Maker").assertHasNoClickAction()
+        compose.onNodeWithText("Singer").assertHasClickAction().performClick()
+        compose.runOnIdle { assertEquals(listOf(ArtistRef("7", "Singer")), opened) }
+    }
+
+    @Test fun creditsGroupIsHiddenWithoutData() {
+        compose.setContent {
+            MusicBridgeTheme {
+                PlaybackMoreContent(
+                    track, null, "Artist · Album", "FLAC",
+                    loadWorks = { emptyList() }, loadWorkInfo = { _, _ -> null },
+                    onOpenWork = { _, _ -> }, onAddToPlaylist = {}, onDismiss = {},
+                )
+            }
+        }
+        compose.onNodeWithText(Strings.trackCredits).assertDoesNotExist()
         compose.onNodeWithText(Strings.trackDetails).assertExists()
     }
 

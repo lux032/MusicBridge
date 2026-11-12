@@ -127,6 +127,7 @@ internal fun PlaybackDetailSection(
     loadTrackWorks: suspend (MusicTrack) -> List<com.lux032.musicbridge.music.Music032TrackWork> = { emptyList() },
     onOpenWork: (String, Long) -> Unit = { _, _ -> },
     loadWorkInfo: suspend (String, Long) -> com.lux032.musicbridge.music.Music032Work? = { _, _ -> null },
+    loadTrackCredits: suspend (MusicTrack) -> List<com.lux032.musicbridge.music.TrackCredit> = { emptyList() },
     sonosVolume: Float = 0f,
     hasLoadedSonosVolume: Boolean = false,
     onVolumeChange: ((Float) -> Unit)? = null,
@@ -878,6 +879,7 @@ internal fun PlaybackDetailSection(
                     positionMillis = currentState.currentPositionMillis,
                     listState = lyricsListState,
                     palette = palette,
+                    loadCredits = loadTrackCredits,
                     onSeekLine = { line -> onSeek(currentState, line.timeMillis) },
                     modifier = Modifier.fillMaxWidth().weight(1f),
                 )
@@ -974,7 +976,9 @@ internal fun PlaybackDetailSection(
             palette = palette,
             loadWorks = loadTrackWorks,
             loadWorkInfo = loadWorkInfo,
+            loadCredits = loadTrackCredits,
             onOpenWork = onOpenWork,
+            onOpenArtist = { ref -> onArtistClick(ref.name, listOf(ref)) },
             onAddToPlaylist = addTrackToPlaylistAction(currentTrack),
             onDismiss = { isMoreSheetVisible = false },
         )

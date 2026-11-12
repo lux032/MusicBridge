@@ -8,6 +8,8 @@ import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -43,6 +45,7 @@ import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -51,9 +54,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import com.lux032.musicbridge.music.LyricsTranslationMode
 import com.lux032.musicbridge.music.LyricsTranslationSettings
@@ -63,6 +69,7 @@ import com.lux032.musicbridge.music.Music032TrackLyrics
 import com.lux032.musicbridge.lyrics.LyricLine
 import com.lux032.musicbridge.lyrics.ParsedLyrics
 import com.lux032.musicbridge.music.MusicTrack
+import com.lux032.musicbridge.music.TrackCredit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.filter
@@ -140,6 +147,7 @@ internal fun LyricsPanel(
     palette: ArtworkPalette,
     onSeekLine: (LyricLine) -> Unit,
     modifier: Modifier = Modifier,
+    loadCredits: suspend (MusicTrack) -> List<TrackCredit> = { emptyList() },
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -149,6 +157,11 @@ internal fun LyricsPanel(
     val translatable = data.canTranslate(settings.targetLanguage)
     val hasOptions = data.canSearch || data.server != null
     val translationFailed = settings.enabled && state.translationFailed
+    // Who wrote the song, above the first line; the full list lives in the More sheet.
+    val credits by produceState(emptyList<TrackCredit>(), track.sourceId, track.ratingKey) {
+        value = emptyList()
+        value = loadCredits(track).filter { it.role in LyricsCreditRoles }
+    }
 
     Column(modifier = modifier) {
         Row(
@@ -182,8 +195,9 @@ internal fun LyricsPanel(
                 }
             }
         }
+        val lines = state.shownLyrics(settings).lines
         LyricsView(
-            lines = state.shownLyrics(settings).lines,
+            lines = lines,
             isSynced = data.lyrics.isSynced,
             translationOnly = settings.enabled && settings.mode == LyricsTranslationMode.TranslationOnly,
             positionMillis = positionMillis,
@@ -192,6 +206,7 @@ internal fun LyricsPanel(
             palette = palette,
             onSeekLine = onSeekLine,
             modifier = Modifier.fillMaxWidth().weight(1f),
+            credits = if (lyricsCarryCredits(lines)) emptyList() else credits,
         )
     }
 
@@ -437,6 +452,7 @@ internal fun LyricsView(
     palette: ArtworkPalette,
     onSeekLine: (LyricLine) -> Unit,
     modifier: Modifier = Modifier,
+    credits: List<TrackCredit> = emptyList(),
 ) {
     val isUserDragging by listState.interactionSource.collectIsDraggedAsState()
     var autoFollowSuspended by remember { mutableStateOf(false) }
@@ -464,7 +480,11 @@ internal fun LyricsView(
     LazyColumn(
         state = listState,
         modifier = modifier,
-        contentPadding = PaddingValues(vertical = 160.dp),
+        // The credits sit in the lead-in space, so the first line keeps roughly its place.
+        contentPadding = PaddingValues(
+            top = if (credits.isEmpty() || lines.isEmpty()) 160.dp else 96.dp,
+            bottom = 160.dp,
+        ),
         verticalArrangement = Arrangement.spacedBy(20.dp),
     ) {
         if (lines.isEmpty()) {
@@ -486,6 +506,9 @@ internal fun LyricsView(
             // Translation-only replaces the line; lines without a translation keep the original.
             val primary = if (translationOnly && translation != null) translation else line.text
             val secondary = translation.takeIf { !translationOnly }
+            // Part of the first line's item (line indices stay scroll targets) but outside its
+            // tap-to-seek area: the credits scroll away with the lyrics and are not links here.
+            if (index == 0 && credits.isNotEmpty()) LyricsCredits(credits)
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -517,6 +540,38 @@ internal fun LyricsView(
                     )
                 }
             }
+        }
+    }
+}
+
+/** Roles shown above the lyrics; the producer only appears in the More sheet. */
+private val LyricsCreditRoles = setOf("lyricist", "composer", "arranger")
+
+private val LyricsCreditLine = Regex("""^\s*(作词|作詞|作曲|编曲|編曲)\s*[:：]""")
+
+/** Online lyrics (NetEase) often open with their own "作词 : …" lines; don't say it twice. */
+internal fun lyricsCarryCredits(lines: List<LyricLine>): Boolean =
+    lines.take(6).any { LyricsCreditLine.containsMatchIn(it.text) }
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun LyricsCredits(credits: List<TrackCredit>) {
+    FlowRow(
+        modifier = Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, bottom = 24.dp),
+        horizontalArrangement = Arrangement.spacedBy(14.dp, Alignment.CenterHorizontally),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        credits.forEach { credit ->
+            Text(
+                text = buildAnnotatedString {
+                    withStyle(SpanStyle(color = AppColors.TextTertiary)) { append(Strings.creditRole(credit.role)) }
+                    append("  ")
+                    append(credit.artists.joinToString(" · ") { it.name })
+                },
+                color = AppColors.TextSecondary,
+                style = MaterialTheme.typography.bodySmall,
+                textAlign = TextAlign.Center,
+            )
         }
     }
 }

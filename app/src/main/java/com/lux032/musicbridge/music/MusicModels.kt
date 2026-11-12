@@ -7,6 +7,10 @@ data class LibrarySection(val key: String, val title: String, val type: String)
  *  (old caches) leave refs empty and keep navigating by name. */
 data class ArtistRef(val id: String, val name: String)
 
+/** Backstage credit of a track: one role (`lyricist`, `composer`, `arranger`, `producer`) and
+ *  its people. A blank [ArtistRef.id] is a name with no artist page to open. */
+data class TrackCredit(val role: String, val artists: List<ArtistRef>)
+
 data class MusicAlbum(
     val ratingKey: String,
     val title: String,

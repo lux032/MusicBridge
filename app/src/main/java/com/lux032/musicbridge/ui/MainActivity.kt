@@ -598,6 +598,7 @@ fun MusicBridgeApp(
                             onArtistClick = state::openArtistLink,
                             loadTrackWorks = state::fetchTrackWorks,
                             loadWorkInfo = state::fetchWorkInfo,
+                            loadTrackCredits = state::fetchTrackCredits,
                             onOpenWork = state::openWork,
                             onToggleTrackFavorite = state::toggleTrackFavorite,
                             onSelectTrack = { index -> state.playQueueIndex(index) },
@@ -693,6 +694,13 @@ fun MusicBridgeApp(
                             onQueueTrack = state::enqueueTrack,
                             onPlayTrack = { artist, _, index ->
                                 playArtistQueue(artist, state.artistTracks, index)
+                            },
+                            credits = state.artistCredits.state,
+                            onCreditRoleChange = state.artistCredits::selectRole,
+                            onLoadMoreCredits = state.artistCredits::loadMore,
+                            onRetryCredits = state.artistCredits::retry,
+                            onPlayCreditTrack = { artist, index ->
+                                playArtistQueue(artist, state.artistCredits.state.tracks.map { it.track }, index)
                             },
                         )
                     }

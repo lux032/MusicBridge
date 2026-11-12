@@ -120,6 +120,11 @@ class AppState(
 
     /** Lyrics come from the 032 server (or the in-app lookup); see [TrackLyricsRepository]. */
     internal val lyricsRepository = TrackLyricsRepository { sourceId -> runCatching { clientFor(sourceId) }.getOrNull() }
+    private val creditsRepository = TrackCreditsRepository { sourceId -> runCatching { clientFor(sourceId) }.getOrNull() }
+    /** Backstage tracks of the open artist page (032). */
+    internal val artistCredits = ArtistCreditsController(scope) { sourceId ->
+        runCatching { clientFor(sourceId) as? com.lux032.musicbridge.music.Music032Client }.getOrNull()
+    }
     internal var lyricsTranslationSettings by mutableStateOf(
         appPreferences.loadLyricsTranslationSettings(Strings.defaultLyricsLanguage),
     )
@@ -435,6 +440,7 @@ class AppState(
     fun openWork(sourceId: String, workId: Long) = worksCoordinator.open(sourceId, workId)
     suspend fun fetchTrackWorks(track: MusicTrack) = worksCoordinator.trackWorks(track)
     suspend fun fetchWorkInfo(sourceId: String, workId: Long) = worksCoordinator.info(sourceId, workId)
+    suspend fun fetchTrackCredits(track: MusicTrack) = creditsRepository.load(track)
     suspend fun fetchWork(sourceId: String, workId: Long) = worksCoordinator.detail(sourceId, workId)
     suspend fun fetchWorkSeries(sourceId: String, seriesId: Long) = worksCoordinator.series(sourceId, seriesId)
     fun playWork(sourceId: String, work: com.lux032.musicbridge.music.Music032Work, shuffle: Boolean = false, series: Boolean = false) =

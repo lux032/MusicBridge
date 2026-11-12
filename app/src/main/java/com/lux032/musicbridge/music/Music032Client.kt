@@ -137,6 +137,29 @@ class Music032Client(
         return Music032WorksJson.trackWorks(JSONObject(cancellableGet("/api/v1/tracks/$id/works")), ::mediaUrl)
     }
 
+    /** Backstage credits (lyricist, composer, arranger, producer) from the track detail. */
+    suspend fun fetchTrackCredits(id: String): List<TrackCredit> {
+        require(id.toLongOrNull() != null)
+        return Music032Json.parseTrackCredits(JSONObject(cancellableGet("/api/v1/tracks/$id")))
+    }
+
+    /** Tracks the artist wrote, composed, arranged or produced, optionally one [role] only. */
+    suspend fun fetchArtistCredits(id: String, role: String? = null, limit: Int = 30, offset: Int = 0): Music032ArtistCreditsPage {
+        require(id.toLongOrNull() != null && limit in 1..500 && offset >= 0)
+        val roleQuery = role?.let { "&role=" + URLEncoder.encode(it, StandardCharsets.UTF_8.name()) }.orEmpty()
+        val root = JSONObject(cancellableGet("/api/v1/artists/$id/credits?limit=$limit&offset=$offset$roleQuery"))
+        val items = root.optJSONArray("items").toObjects().map { item ->
+            val roles = Music032Json.parseTrackCredits(item)
+                .filter { credit -> credit.artists.any { it.id == id } }
+                .map(TrackCredit::role)
+            Music032CreditTrack(parseTrack(item), roles)
+        }
+        val roles = root.optJSONArray("roles").toObjects()
+            .mapNotNull { it.optString("role").ifBlank { null }?.let { name -> name to it.optInt("count") } }
+            .filter { it.second > 0 }
+        return Music032ArtistCreditsPage(items, root.optInt("total"), roles)
+    }
+
     suspend fun fetchWorkInfo(id: Long): Music032Work {
         require(id > 0)
         return Music032WorksJson.work(JSONObject(cancellableGet("/api/v1/works/$id")), ::mediaUrl, detail = true)
@@ -680,6 +703,14 @@ data class Music032ArtistDetail(
     val topTracks: List<MusicTrack>,
     val topTracksArePopular: Boolean = false,
     val tracksTotal: Int,
+)
+
+/** A track from an artist's credits page and the roles this artist had on it. */
+data class Music032CreditTrack(val track: MusicTrack, val roles: List<String>)
+
+/** One page of `/api/v1/artists/{id}/credits`; [roles] counts every role, whatever the filter. */
+data class Music032ArtistCreditsPage(
+    val items: List<Music032CreditTrack>, val total: Int, val roles: List<Pair<String, Int>>,
 )
 
 data class Music032ArtistTracksPage(

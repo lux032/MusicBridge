@@ -91,6 +91,31 @@ internal object Music032Json {
         }.distinctBy(ArtistRef::id)
     }
 
+    private val creditRoleOrder = listOf("lyricist", "composer", "arranger", "producer")
+
+    /**
+     * Backstage credits of a track object: `credits: [{role, artists: [{id, name}]}]`. Roles the
+     * server only has as tag text (`lyricist` / `composer` / `arranger`) become name-only entries.
+     */
+    fun parseTrackCredits(value: JSONObject): List<TrackCredit> {
+        val byRole = LinkedHashMap<String, List<ArtistRef>>()
+        val array = value.optJSONArray("credits")
+        for (index in 0 until (array?.length() ?: 0)) {
+            val item = array?.optJSONObject(index) ?: continue
+            val role = item.optString("role").trim()
+            val artists = parseArtistRefs(item.optJSONArray("artists"))
+            if (role.isNotEmpty() && artists.isNotEmpty()) {
+                byRole[role] = (byRole[role].orEmpty() + artists).distinctBy(ArtistRef::id)
+            }
+        }
+        for (role in creditRoleOrder) {
+            val text = value.optString(role).trim()
+            if (role !in byRole && text.isNotEmpty()) byRole[role] = listOf(ArtistRef("", text))
+        }
+        return byRole.map { (role, artists) -> TrackCredit(role, artists) }
+            .sortedBy { credit -> creditRoleOrder.indexOf(credit.role).takeIf { it >= 0 } ?: creditRoleOrder.size }
+    }
+
     /** One row of `/api/v1/sync/artists` (or the `artist` object of the detail endpoint). */
     fun parseArtist(value: JSONObject, baseUrl: String, mediaToken: String, sourceId: String): MusicArtist? {
         val id = value.optLong("id").takeIf { it > 0L } ?: return null

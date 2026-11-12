@@ -19,11 +19,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.lux032.musicbridge.music.ArtistRef
 import com.lux032.musicbridge.music.Music032TrackWork
 import com.lux032.musicbridge.music.Music032Work
 import com.lux032.musicbridge.music.MusicTrack
+import com.lux032.musicbridge.music.TrackCredit
 import kotlinx.coroutines.CancellationException
 
 /** Option A: the works are direct destinations in More, never a second sheet or a badge. */
@@ -37,7 +40,9 @@ internal fun PlaybackMoreSheet(
     palette: ArtworkPalette,
     loadWorks: suspend (MusicTrack) -> List<Music032TrackWork>,
     loadWorkInfo: suspend (String, Long) -> Music032Work?,
+    loadCredits: suspend (MusicTrack) -> List<TrackCredit>,
     onOpenWork: (String, Long) -> Unit,
+    onOpenArtist: (ArtistRef) -> Unit,
     onAddToPlaylist: (() -> Unit)?,
     onDismiss: () -> Unit,
 ) {
@@ -48,6 +53,8 @@ internal fun PlaybackMoreSheet(
                 onOpenWork = { source, id -> onDismiss(); onOpenWork(source, id) },
                 onAddToPlaylist = onAddToPlaylist?.let { action -> { onDismiss(); action() } },
                 onDismiss = onDismiss,
+                loadCredits = loadCredits,
+                onOpenArtist = { ref -> onDismiss(); onOpenArtist(ref) },
             )
         }
     }
@@ -64,6 +71,8 @@ internal fun PlaybackMoreContent(
     onOpenWork: (String, Long) -> Unit,
     onAddToPlaylist: (() -> Unit)?,
     onDismiss: () -> Unit,
+    loadCredits: suspend (MusicTrack) -> List<TrackCredit> = { emptyList() },
+    onOpenArtist: (ArtistRef) -> Unit = {},
 ) {
     // Mounted only when More is open, and restarted on track/source changes. Position ticks
     // do not fetch again; a cancelled result cannot become another song's association.
@@ -80,6 +89,9 @@ internal fun PlaybackMoreContent(
         catch (failure: Exception) { error = Strings.workLoadFailed(failure.message) }
         finally { loading = false }
     }
+    // Credits load beside the works and never show a spinner or an error: no data, no group.
+    var credits by remember(track.sourceId, track.ratingKey) { mutableStateOf(emptyList<TrackCredit>()) }
+    LaunchedEffect(track.sourceId, track.ratingKey) { credits = loadCredits(track) }
     LazyColumn(
         modifier = Modifier.fillMaxWidth(),
         contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 24.dp),
@@ -134,8 +146,15 @@ internal fun PlaybackMoreContent(
                 Icon(Icons.Filled.ChevronRight, null, tint = AppColors.TextSecondary, modifier = Modifier.size(20.dp))
             }
         } }
+        if (credits.isNotEmpty()) item("credits") {
+            // Works and the header already end on a hairline; only the playlist row needs one.
+            if (onAddToPlaylist != null) Hairline(Modifier.padding(top = 4.dp))
+            Text(Strings.trackCredits, style = MaterialTheme.typography.labelMedium,
+                color = AppColors.TextSecondary, modifier = Modifier.padding(top = 16.dp, bottom = 4.dp))
+            credits.forEach { credit -> PlaybackCreditRow(credit, onOpenArtist) }
+        }
         item("details") {
-            Hairline(Modifier.padding(top = 16.dp))
+            Hairline(Modifier.padding(top = if (credits.isEmpty()) 16.dp else 8.dp))
             Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable { showDetails = !showDetails },
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Icon(Icons.Filled.Info, null, tint = AppColors.TextSecondary, modifier = Modifier.size(16.dp))
@@ -175,5 +194,33 @@ private fun PlaybackWorkRow(
                 color = AppColors.TextSecondary, modifier = Modifier.padding(top = 3.dp))
         }
         Icon(Icons.Filled.ChevronRight, null, tint = AppColors.TextSecondary, modifier = Modifier.size(20.dp))
+    }
+}
+
+/** One role and its people. Names with an artist id are accent links; the rest are plain text. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun PlaybackCreditRow(credit: TrackCredit, onOpenArtist: (ArtistRef) -> Unit) {
+    val nameHeight = Modifier.heightIn(min = 40.dp).wrapContentHeight(Alignment.CenterVertically)
+    Row(Modifier.fillMaxWidth()) {
+        Text(Strings.creditRole(credit.role), style = MaterialTheme.typography.bodySmall,
+            color = AppColors.TextTertiary, modifier = Modifier.width(64.dp).then(nameHeight))
+        FlowRow(Modifier.weight(1f)) {
+            credit.artists.forEachIndexed { index, artist ->
+                Row {
+                    if (index > 0) Text(" · ", style = MaterialTheme.typography.bodyLarge,
+                        color = AppColors.TextTertiary, modifier = nameHeight)
+                    if (artist.id.isBlank()) {
+                        Text(artist.name, style = MaterialTheme.typography.bodyLarge,
+                            color = AppColors.TextPrimary, modifier = nameHeight)
+                    } else {
+                        Text(artist.name, style = MaterialTheme.typography.bodyLarge,
+                            color = LocalArtworkPalette.current.accent, fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.clip(RoundedCornerShape(8.dp))
+                                .clickable { onOpenArtist(artist) }.then(nameHeight))
+                    }
+                }
+            }
+        }
     }
 }
