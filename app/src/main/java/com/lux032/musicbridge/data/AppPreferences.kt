@@ -410,6 +410,37 @@ class AppPreferences(context: Context) {
         sharedPreferences.edit { putBoolean(KEY_ARTIST_FAVORITES_ONLY, enabled) }
     }
 
+    fun loadHomeLayout(): List<HomeModuleConfig> {
+        val raw = sharedPreferences.getString(KEY_HOME_LAYOUT, null) ?: return defaultHomeLayout()
+        val parsed = runCatching {
+            val array = JSONArray(raw)
+            buildList {
+                for (index in 0 until array.length()) {
+                    val value = array.optJSONObject(index) ?: continue
+                    val module = HomeModule.fromId(value.optString("id")) ?: continue
+                    val visible = value.optBoolean("visible", true)
+                    add(HomeModuleConfig(module = module, visible = visible))
+                }
+            }
+        }.getOrDefault(emptyList())
+        return normalizeHomeLayout(parsed)
+    }
+
+    fun saveHomeLayout(layout: List<HomeModuleConfig>) {
+        val normalized = normalizeHomeLayout(layout)
+        val array = JSONArray()
+        normalized.forEach { item ->
+            array.put(
+                JSONObject()
+                    .put("id", item.module.id)
+                    .put("visible", item.visible)
+            )
+        }
+        sharedPreferences.edit {
+            putString(KEY_HOME_LAYOUT, array.toString())
+        }
+    }
+
     private fun recentKey(sourceId: String) = "${KEY_RECENT_PLAYED_ALBUM_KEYS}_$sourceId"
     private fun syncKey(sourceId: String) = "${KEY_LAST_ALBUM_SYNC_EPOCH_MILLIS}_$sourceId"
     private fun lastSessionKey(sourceId: String) = "${KEY_MUSIC032_LAST_SESSION}_$sourceId"
@@ -450,6 +481,7 @@ class AppPreferences(context: Context) {
         private const val KEY_ALBUM_DECADE_FILTER = "album_decade_filter_v1"
         private const val KEY_ARTIST_PRESENTATION = "artist_presentation_v1"
         private const val KEY_ARTIST_FAVORITES_ONLY = "artist_favorites_only_v1"
+        private const val KEY_HOME_LAYOUT = "home_layout_v1"
         private const val RECENT_PLAYED_SEPARATOR = "|"
         private const val MAX_RECENT_PLAYED = 100
 

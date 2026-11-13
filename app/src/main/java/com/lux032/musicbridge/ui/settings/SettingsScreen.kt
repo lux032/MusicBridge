@@ -28,6 +28,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import com.lux032.musicbridge.ui.settings.sections.AboutAndDiagnosticsSection
 import com.lux032.musicbridge.ui.settings.sections.AudioPlaybackSection
+import com.lux032.musicbridge.ui.settings.sections.HomeLayoutSection
 import com.lux032.musicbridge.ui.settings.sections.ServerSection
 import com.lux032.musicbridge.ui.settings.sections.SonosAdvancedSection
 import com.lux032.musicbridge.ui.settings.sections.StorageSection
@@ -102,7 +103,14 @@ fun SettingsScreen(
                 onRefreshHome = actions.onRefreshHome,
             )
 
-            // 2. Audio Quality & Local Playback
+            // 2. Home Layout
+            HomeLayoutSection(
+                homeLayout = state.homeLayout,
+                onHomeLayoutChange = actions.onHomeLayoutChange,
+                onResetHomeLayout = actions.onResetHomeLayout,
+            )
+
+            // 3. Audio Quality & Local Playback
             AudioPlaybackSection(
                 wifiQuality = state.wifiQuality,
                 cellularQuality = state.cellularQuality,

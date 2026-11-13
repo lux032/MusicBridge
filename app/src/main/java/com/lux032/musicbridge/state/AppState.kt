@@ -108,6 +108,8 @@ class AppState(
         private set
     var localCacheSize by mutableStateOf(appPreferences.loadLocalCacheSize())
         private set
+    var homeLayout by mutableStateOf(appPreferences.loadHomeLayout())
+        private set
     var cachedOriginalTrackKeys by mutableStateOf<Set<String>>(emptySet())
         internal set
 
@@ -537,6 +539,16 @@ class AppState(
         appPreferences.saveLocalCacheSize(size)
         LocalAudioCache.setMaxBytes(size.bytes)
         actionMessage = "本机缓存上限已设为 ${size.megabytesLabel}"
+    }
+
+    fun updateHomeLayout(layout: List<HomeModuleConfig>) {
+        val normalized = normalizeHomeLayout(layout)
+        homeLayout = normalized
+        appPreferences.saveHomeLayout(normalized)
+    }
+
+    fun resetHomeLayout() {
+        updateHomeLayout(defaultHomeLayout())
     }
 
     fun clearLocalAudioCache() {

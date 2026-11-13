@@ -1,5 +1,6 @@
 package com.lux032.musicbridge.ui.settings
 
+import com.lux032.musicbridge.HomeModuleConfig
 import com.lux032.musicbridge.LocalCacheSize
 import com.lux032.musicbridge.LocalOpusBitrate
 import com.lux032.musicbridge.LocalPrecacheCount
@@ -7,6 +8,7 @@ import com.lux032.musicbridge.LocalStreamingLimit
 import com.lux032.musicbridge.MusicServerProfile
 import com.lux032.musicbridge.OpusTranscodeMode
 import com.lux032.musicbridge.SonosHiResTranscodeMode
+import com.lux032.musicbridge.defaultHomeLayout
 
 /**
  * Encapsulates the UI state required by SettingsScreen.
@@ -22,6 +24,7 @@ data class SettingsViewState(
     val wifiPrecacheCount: LocalPrecacheCount,
     val cellularPrecacheCount: LocalPrecacheCount,
     val localCacheSize: LocalCacheSize,
+    val homeLayout: List<HomeModuleConfig> = defaultHomeLayout(),
 )
 
 /**
@@ -44,4 +47,6 @@ data class SettingsActions(
     val onRefreshHome: () -> Unit,
     val loadLocalCacheUsedBytes: suspend () -> Long,
     val loadOfflineDownloadedBytes: suspend () -> Long,
+    val onHomeLayoutChange: (List<HomeModuleConfig>) -> Unit = {},
+    val onResetHomeLayout: () -> Unit = {},
 )

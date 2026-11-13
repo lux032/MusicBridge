@@ -329,3 +329,50 @@ enum class NavIcon {
     Covers,
     List,
 }
+
+enum class HomeModule(val id: String) {
+    DailyMixes("daily_mixes"),
+    QuickKeys("quick_keys"),
+    RecentPlayed("recent_played"),
+    Works("works"),
+    FavoriteAlbums("favorite_albums"),
+    RecentAdded("recent_added");
+
+    val title: String
+        get() = when (this) {
+            DailyMixes -> Strings.dailyMixes
+            QuickKeys -> Strings.homeQuickKeysTitle
+            RecentPlayed -> Strings.recentPlayed
+            Works -> Strings.browseWorks
+            FavoriteAlbums -> Strings.favoriteAlbums
+            RecentAdded -> Strings.recentAdded
+        }
+
+    companion object {
+        fun fromId(id: String?): HomeModule? = entries.firstOrNull { it.id == id }
+    }
+}
+
+data class HomeModuleConfig(
+    val module: HomeModule,
+    val visible: Boolean = true,
+)
+
+fun defaultHomeLayout(): List<HomeModuleConfig> =
+    HomeModule.entries.map { HomeModuleConfig(module = it, visible = true) }
+
+fun normalizeHomeLayout(items: List<HomeModuleConfig>): List<HomeModuleConfig> {
+    val seen = mutableSetOf<HomeModule>()
+    val result = mutableListOf<HomeModuleConfig>()
+    items.forEach { item ->
+        if (seen.add(item.module)) {
+            result.add(item)
+        }
+    }
+    HomeModule.entries.forEach { module ->
+        if (seen.add(module)) {
+            result.add(HomeModuleConfig(module = module, visible = true))
+        }
+    }
+    return result
+}

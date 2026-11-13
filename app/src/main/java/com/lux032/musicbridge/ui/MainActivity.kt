@@ -894,6 +894,7 @@ fun MusicBridgeApp(
                         playingMixKey = state.miniPlayerState?.album?.ratingKey?.takeIf { it.startsWith("mix:") },
                         onOpenDailyMix = state::openDailyMixDetail,
                         onPlayDailyMix = { mix, shuffle -> state.playDailyMix(mix, shuffle) },
+                        homeLayout = state.homeLayout,
                     )
                     LaunchedEffect(state.connectionPreferences) {
                         state.loadDailyMixes()
@@ -920,6 +921,7 @@ fun MusicBridgeApp(
                             wifiPrecacheCount = state.wifiPrecacheCount,
                             cellularPrecacheCount = state.cellularPrecacheCount,
                             localCacheSize = state.localCacheSize,
+                            homeLayout = state.homeLayout,
                         ),
                         actions = SettingsActions(
                             onOpusTranscodeModeChange = state::updateOpusTranscodeMode,
@@ -938,6 +940,8 @@ fun MusicBridgeApp(
                             onRefreshHome = { scope.launch { state.refreshAlbums() } },
                             loadLocalCacheUsedBytes = { state.localCacheUsedBytes() },
                             loadOfflineDownloadedBytes = { state.totalDownloadedBytes() },
+                            onHomeLayoutChange = state::updateHomeLayout,
+                            onResetHomeLayout = state::resetHomeLayout,
                         ),
                         scrollState = scrollState,
                         bottomContentPadding = contentBottomPadding,

@@ -84,6 +84,7 @@ internal fun HomeSection(
     playingMixKey: String? = null,
     onOpenDailyMix: (Music032DailyMix) -> Unit = {},
     onPlayDailyMix: (Music032DailyMix, Boolean) -> Unit = { _, _ -> },
+    homeLayout: List<HomeModuleConfig> = defaultHomeLayout(),
 ) {
     val layoutInfo = LocalAppLayoutInfo.current
     val needsConnection = !connectionPreferences.hasCredentials() && allAlbums.isEmpty()
@@ -143,7 +144,10 @@ internal fun HomeSection(
                 )
             }
         } else {
-            if (!isLoading && favoriteAlbums.isEmpty() && errorMessage == null) {
+            val isFavoriteSectionVisible = homeLayout.any {
+                it.module == HomeModule.FavoriteAlbums && it.visible
+            }
+            if (!isLoading && favoriteAlbums.isEmpty() && errorMessage == null && isFavoriteSectionVisible) {
                 item(key = "home-no-favorites", contentType = "empty") {
                     EmptyStateCard(
                         title = Strings.noFavoritesTitle,
@@ -153,69 +157,83 @@ internal fun HomeSection(
                     )
                 }
             }
-            if (dailyMixes.isVisible) {
-                item(key = "home-daily-mixes", contentType = "daily-mixes") {
-                    DailyMixBanner(
-                        state = dailyMixes,
-                        playingMixKey = playingMixKey,
-                        onOpen = onOpenDailyMix,
-                        onPlay = onPlayDailyMix,
+            val visibleModules = homeLayout.filter { it.visible }
+            if (visibleModules.isEmpty() && !isLoading) {
+                item(key = "home-all-hidden", contentType = "message") {
+                    MessageCard(
+                        label = Strings.homeAllModulesHiddenTitle,
+                        message = Strings.homeAllModulesHiddenBody,
+                        tone = MessageTone.Info,
                     )
                 }
             }
-            if (allAlbums.isNotEmpty()) {
-                item(key = "home-quick-keys", contentType = "entry") {
-                    HomeQuickKeys(
-                        albumCount = allAlbums.size,
-                        onOpenAllAlbums = onOpenAllAlbums,
-                        onOpenFavorites = onOpenFavorites,
-                        onOpenRecentAdded = onOpenRecentAdded,
-                    )
+            visibleModules.forEach { config ->
+                when (config.module) {
+                    HomeModule.DailyMixes -> if (dailyMixes.isVisible) {
+                        item(key = "home-daily-mixes", contentType = "daily-mixes") {
+                            DailyMixBanner(
+                                state = dailyMixes,
+                                playingMixKey = playingMixKey,
+                                onOpen = onOpenDailyMix,
+                                onPlay = onPlayDailyMix,
+                            )
+                        }
+                    }
+                    HomeModule.QuickKeys -> if (allAlbums.isNotEmpty()) {
+                        item(key = "home-quick-keys", contentType = "entry") {
+                            HomeQuickKeys(
+                                albumCount = allAlbums.size,
+                                onOpenAllAlbums = onOpenAllAlbums,
+                                onOpenFavorites = onOpenFavorites,
+                                onOpenRecentAdded = onOpenRecentAdded,
+                            )
+                        }
+                    }
+                    HomeModule.RecentPlayed -> if (recentPlayedAlbums.isNotEmpty()) {
+                        item(key = "home-recent-played", contentType = "album-shelf") {
+                            RecentPlayedShelfSection(
+                                albums = recentPlayedAlbums.take(20),
+                                selectedAlbum = selectedAlbum,
+                                onAlbumClick = onAlbumClick,
+                                onAlbumQueueAction = onAlbumQueueAction,
+                                onPlayAlbum = onPlayAlbum,
+                            )
+                        }
+                    }
+                    HomeModule.Works -> if (homeWorks.items.isNotEmpty() || isWorksLoading || worksError != null) {
+                        item(key = "home-works", contentType = "work-shelf") {
+                            WorksHomeShelf(homeWorks, isWorksLoading, worksError, onRotateWorks, onRetryWorks, onOpenWork, onPlayWork)
+                        }
+                    }
+                    HomeModule.FavoriteAlbums -> if (favoriteAlbums.isNotEmpty()) {
+                        albumPreviewGridItems(
+                            keyPrefix = "home-favorites",
+                            title = Strings.favoriteAlbums,
+                            albums = favoriteAlbums.take(layoutInfo.homePreviewItemCount),
+                            columns = layoutInfo.homePreviewColumns,
+                            selectedAlbum = selectedAlbum,
+                            actionLabel = Strings.viewAll,
+                            onAction = onOpenFavorites,
+                            onAlbumClick = onAlbumClick,
+                            onAlbumQueueAction = onAlbumQueueAction,
+                            onPlayAlbum = onPlayAlbum,
+                        )
+                    }
+                    HomeModule.RecentAdded -> if (recentAddedAlbums.isNotEmpty()) {
+                        albumPreviewGridItems(
+                            keyPrefix = "home-recent-added",
+                            title = Strings.recentAdded,
+                            albums = recentAddedAlbums.take(layoutInfo.homePreviewItemCount),
+                            columns = layoutInfo.homePreviewColumns,
+                            selectedAlbum = selectedAlbum,
+                            actionLabel = Strings.viewTop100,
+                            onAction = onOpenRecentAdded,
+                            onAlbumClick = onAlbumClick,
+                            onAlbumQueueAction = onAlbumQueueAction,
+                            onPlayAlbum = onPlayAlbum,
+                        )
+                    }
                 }
-            }
-            if (recentPlayedAlbums.isNotEmpty()) {
-                item(key = "home-recent-played", contentType = "album-shelf") {
-                    RecentPlayedShelfSection(
-                        albums = recentPlayedAlbums.take(20),
-                        selectedAlbum = selectedAlbum,
-                        onAlbumClick = onAlbumClick,
-                        onAlbumQueueAction = onAlbumQueueAction,
-                        onPlayAlbum = onPlayAlbum,
-                    )
-                }
-            }
-            if (homeWorks.items.isNotEmpty() || isWorksLoading || worksError != null) {
-                item(key = "home-works", contentType = "work-shelf") {
-                    WorksHomeShelf(homeWorks, isWorksLoading, worksError, onRotateWorks, onRetryWorks, onOpenWork, onPlayWork)
-                }
-            }
-            if (favoriteAlbums.isNotEmpty()) {
-                albumPreviewGridItems(
-                    keyPrefix = "home-favorites",
-                    title = Strings.favoriteAlbums,
-                    albums = favoriteAlbums.take(layoutInfo.homePreviewItemCount),
-                    columns = layoutInfo.homePreviewColumns,
-                    selectedAlbum = selectedAlbum,
-                    actionLabel = Strings.viewAll,
-                    onAction = onOpenFavorites,
-                    onAlbumClick = onAlbumClick,
-                    onAlbumQueueAction = onAlbumQueueAction,
-                    onPlayAlbum = onPlayAlbum,
-                )
-            }
-            if (recentAddedAlbums.isNotEmpty()) {
-                albumPreviewGridItems(
-                    keyPrefix = "home-recent-added",
-                    title = Strings.recentAdded,
-                    albums = recentAddedAlbums.take(layoutInfo.homePreviewItemCount),
-                    columns = layoutInfo.homePreviewColumns,
-                    selectedAlbum = selectedAlbum,
-                    actionLabel = Strings.viewTop100,
-                    onAction = onOpenRecentAdded,
-                    onAlbumClick = onAlbumClick,
-                    onAlbumQueueAction = onAlbumQueueAction,
-                    onPlayAlbum = onPlayAlbum,
-                )
             }
         }
     }
