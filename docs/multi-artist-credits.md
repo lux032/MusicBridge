@@ -25,4 +25,6 @@
 - 已跑多人解析、身份元数据刷新、幕后署名、播放上报路由与 Sonos 队列相关纯 JVM 测试。
 - 下载记录与迁移的 Robolectric 测试已补断言，但当前 aarch64 Linux 容器的 Robolectric Conscrypt/SQLite 原生库不支持该架构，数据库测试不能在此环境验证通过，需 x86_64 CI 或真机验证。
 
-用户已授权提交、推送及正式构建，版本为 v1.1.1（versionCode 6）。正式签名 APK 由 v1.1.1 标签触发 GitHub Actions 生成，发布结果以 Release 页面为准。
+v1.1.1 正式构建被数据库迁移测试阻止，未发布 APK：部分旧库没有 downloaded_tracks 表，v19 加列缺少表存在性保护；另有完整列名断言遗漏 artist_refs。已补保护、缺表/重复执行/行保留回归及列名断言。
+
+修复版为 v1.1.2（versionCode 7），不移动旧标签；正式签名 APK 由新标签触发 GitHub Actions 生成，完整数据库测试和发布结果以 CI 为准。

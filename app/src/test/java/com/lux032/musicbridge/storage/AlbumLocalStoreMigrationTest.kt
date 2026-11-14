@@ -22,6 +22,25 @@ import org.robolectric.annotation.Config
 @Config(sdk = [34])
 class AlbumLocalStoreMigrationTest {
     @Test
+    fun version19SkipsAbsentDownloadsAndPreservesExistingRows() {
+        SQLiteDatabase.create(null).use { db ->
+            ensureVersion19Columns(db)
+            ensureVersion19Columns(db)
+            db.execSQL("CREATE TABLE downloaded_tracks (source_id TEXT, rating_key TEXT, local_audio_path TEXT)")
+            db.execSQL("INSERT INTO downloaded_tracks VALUES ('source', 'track', '/music/song.flac')")
+            ensureVersion19Columns(db)
+            ensureVersion19Columns(db)
+            assertEquals(setOf("source_id", "rating_key", "local_audio_path", "artist_refs"), db.columnNames("downloaded_tracks"))
+            assertEquals(1, db.rowCount("downloaded_tracks"))
+            db.rawQuery("SELECT local_audio_path, artist_refs FROM downloaded_tracks", null).use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals("/music/song.flac", cursor.getString(0))
+                assertTrue(cursor.isNull(1))
+            }
+        }
+    }
+
+    @Test
     fun version5To8AddsMissingColumnsAndPreservesRows() = verifyMigration(fromVersion = 5)
 
     @Test
@@ -244,6 +263,7 @@ class AlbumLocalStoreMigrationTest {
                 "disc_number",
                 "track_number",
                 "user_rating",
+                "artist_refs",
             )
             val actualColumns = db.columnNames("downloaded_tracks")
             assertEquals(expectedColumns, actualColumns)

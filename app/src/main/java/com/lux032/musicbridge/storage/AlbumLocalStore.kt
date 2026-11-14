@@ -1294,6 +1294,12 @@ internal fun ensureVersion17Columns(db: SQLiteDatabase) {
 
 /** v19 keeps performer identities when the downloaded audio is played offline. */
 internal fun ensureVersion19Columns(db: SQLiteDatabase) {
+    val downloadsExist = db.rawQuery(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        arrayOf("downloaded_tracks"),
+    ).use { it.moveToFirst() }
+    // Partial legacy caches may have no downloads table, just like albums in v17.
+    if (!downloadsExist) return
     addColumnIfNotExists(db, "downloaded_tracks", "artist_refs", "TEXT")
 }
 
