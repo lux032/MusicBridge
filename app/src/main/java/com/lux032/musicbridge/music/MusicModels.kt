@@ -67,6 +67,12 @@ data class MusicTrack(
     val playbackContext: Music032PlaybackContext? = null,
 )
 
+/** Replace only artist metadata; stream URLs, offline files and session context stay intact. */
+internal fun MusicTrack.withArtistMetadataFrom(fresh: MusicTrack): MusicTrack =
+    if (sourceId == fresh.sourceId && ratingKey == fresh.ratingKey) {
+        copy(artistName = fresh.artistName, artists = fresh.artists)
+    } else this
+
 val MusicTrack.isFavorite: Boolean
     get() = (userRating ?: 0f) > 0f
 

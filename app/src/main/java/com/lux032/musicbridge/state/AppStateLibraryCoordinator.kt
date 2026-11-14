@@ -10,6 +10,7 @@ import com.lux032.musicbridge.music.PlaylistTracksResult
 import com.lux032.musicbridge.music.LibrarySection
 import com.lux032.musicbridge.music.MusicTrack
 import com.lux032.musicbridge.music.isFavorite
+import com.lux032.musicbridge.music.withArtistMetadataFrom
 import com.lux032.musicbridge.storage.ArtistRelease
 import com.lux032.musicbridge.storage.DownloadedAlbumGroup
 import kotlinx.coroutines.CancellationException
@@ -19,6 +20,8 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 internal class AppStateLibraryCoordinator(
     private val state: AppState,
@@ -66,7 +69,13 @@ internal class AppStateLibraryCoordinator(
         state.isAlbumSearchLoading = false
     }
 
-    suspend fun refreshAlbums(showLoading: Boolean) {
+    private val libraryRefreshMutex = Mutex()
+
+    suspend fun refreshAlbums(showLoading: Boolean) = libraryRefreshMutex.withLock {
+        refreshAlbumsLocked(showLoading)
+    }
+
+    private suspend fun refreshAlbumsLocked(showLoading: Boolean) {
         val profile = state.connectionPreferences
         val sourceId = profile.id
         if (!profile.hasCredentials()) {
@@ -83,6 +92,7 @@ internal class AppStateLibraryCoordinator(
         try {
             val client = state.client(profile)
             val fetched = client.fetchAlbums()
+            if (state.connectionPreferences.id != sourceId) return
             withContext(Dispatchers.IO) {
                 state.albumLocalStore.replaceAllAlbums(sourceId, fetched.albums)
             }
@@ -119,12 +129,26 @@ internal class AppStateLibraryCoordinator(
                 if (allTracks.isEmpty() && fetched.albums.isNotEmpty()) {
                     error("曲目同步未返回数据，已保留本地曲目缓存。")
                 }
+                if (state.connectionPreferences.id != sourceId) return
                 withContext(Dispatchers.IO) {
                     state.albumLocalStore.replaceAllAlbumTracks(sourceId, allTracks)
                 }
                 allTracks
             }.onSuccess { allTracks ->
                 if (state.connectionPreferences.id != sourceId) return
+                // Refresh only identities in existing queues; never rebuild playback.
+                val freshById = allTracks.values.flatten().associateBy { it.ratingKey }
+                fun refresh(track: MusicTrack): MusicTrack =
+                    freshById[track.ratingKey]?.let(track::withArtistMetadataFrom) ?: track
+                state.miniPlayerState = state.miniPlayerState?.let { player ->
+                    player.copy(tracks = player.tracks.map(::refresh))
+                }
+                state.trackResult = state.trackResult?.let { it.copy(tracks = it.tracks.map(::refresh)) }
+                state.playlistTrackResult = state.playlistTrackResult?.let { it.copy(tracks = it.tracks.map(::refresh)) }
+                state.favoriteTracks = state.favoriteTracks.map(::refresh)
+                state.artistTracks = state.artistTracks.map(::refresh)
+                state.artistTopTracks = state.artistTopTracks.map(::refresh)
+                state.offlineDownloadManager.refreshMetadataSnapshot()
                 // Track artist links feed artist discographies (参与作品).
                 state.artistAlbumsRevision++
                 val totalTrackCount = allTracks.values.sumOf { tracks -> tracks.size }

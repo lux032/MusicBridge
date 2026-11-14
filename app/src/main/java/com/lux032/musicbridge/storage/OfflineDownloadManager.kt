@@ -96,6 +96,8 @@ class OfflineDownloadManager(
         }
     }
 
+    suspend fun refreshMetadataSnapshot() = refreshDownloadedKeys()
+
     private suspend fun refreshDownloadedKeys() {
         val validTracks = withContext(Dispatchers.IO) {
             // Verify physical files and filter out orphan records
@@ -349,6 +351,7 @@ class OfflineDownloadManager(
             discNumber = track.discNumber,
             trackNumber = track.trackNumber,
             userRating = track.userRating,
+            artists = track.artists,
         )
         albumLocalStore.insertDownloadedTrack(downloadedRecord)
         true

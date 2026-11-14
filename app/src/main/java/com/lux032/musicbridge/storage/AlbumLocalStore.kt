@@ -37,6 +37,7 @@ data class DownloadedAudioTrack(
     val discNumber: Int? = null,
     val trackNumber: Int? = null,
     val userRating: Float? = null,
+    val artists: List<ArtistRef> = emptyList(),
 ) {
     fun toTrackStream(): MusicTrack = MusicTrack(
         ratingKey = ratingKey,
@@ -58,6 +59,7 @@ data class DownloadedAudioTrack(
         sourceId = sourceId,
         discNumber = discNumber,
         trackNumber = trackNumber,
+        artists = artists,
     )
 }
 
@@ -853,6 +855,7 @@ class AlbumLocalStore(context: Context) {
             } finally {
                 links.close()
             }
+            refreshArtistMetadata(sourceId, albumTracks.values.flatten())
             database.setTransactionSuccessful()
         } finally {
             database.endTransaction()
@@ -887,10 +890,32 @@ class AlbumLocalStore(context: Context) {
             } finally {
                 links.close()
             }
+            refreshArtistMetadata(sourceId, tracks)
             database.setTransactionSuccessful()
         } finally {
             database.endTransaction()
         }
+    }
+
+    /** Refresh identity metadata in cached copies without touching audio paths or ratings. */
+    fun refreshArtistMetadata(sourceId: String, tracks: List<MusicTrack>) {
+        val database = helper.writableDatabase
+        database.beginTransaction()
+        try {
+            tracks.filter { it.sourceId == sourceId }.forEach { track ->
+                val values = ContentValues().apply {
+                    put(AlbumDatabaseHelper.COLUMN_TRACK_ARTIST_NAME, track.artistName)
+                    put(AlbumDatabaseHelper.COLUMN_ARTIST_REFS, encodeArtistRefs(track.artists))
+                }
+                listOf(AlbumDatabaseHelper.TABLE_TRACKS, AlbumDatabaseHelper.TABLE_ALBUM_TRACKS,
+                    AlbumDatabaseHelper.TABLE_PLAYLIST_TRACKS, AlbumDatabaseHelper.TABLE_DOWNLOADED_TRACKS).forEach { table ->
+                    database.update(table, values,
+                        "${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ? AND ${AlbumDatabaseHelper.COLUMN_TRACK_RATING_KEY} = ?",
+                        arrayOf(sourceId, track.ratingKey))
+                }
+            }
+            database.setTransactionSuccessful()
+        } finally { database.endTransaction() }
     }
 
     fun recordTrackPlayback(
@@ -1093,11 +1118,13 @@ class AlbumLocalStore(context: Context) {
             discNumber = nullableInt(AlbumDatabaseHelper.COLUMN_TRACK_DISC_NUMBER),
             trackNumber = nullableInt(AlbumDatabaseHelper.COLUMN_TRACK_NUMBER),
             userRating = nullableFloat(AlbumDatabaseHelper.COLUMN_TRACK_USER_RATING),
+            artists = artistRefsColumn(),
         )
     }
 
     private fun DownloadedAudioTrack.toContentValues(): ContentValues =
         ContentValues().apply {
+            put(AlbumDatabaseHelper.COLUMN_ARTIST_REFS, encodeArtistRefs(artists))
             put(AlbumDatabaseHelper.COLUMN_SOURCE_ID, sourceId)
             put(AlbumDatabaseHelper.COLUMN_TRACK_RATING_KEY, ratingKey)
             put(AlbumDatabaseHelper.COLUMN_TRACK_PART_KEY, partKey)
@@ -1265,6 +1292,11 @@ internal fun ensureVersion17Columns(db: SQLiteDatabase) {
     addColumnIfNotExists(db, AlbumDatabaseHelper.TABLE_ALBUMS, AlbumDatabaseHelper.COLUMN_RELEASE_DATE, "TEXT")
 }
 
+/** v19 keeps performer identities when the downloaded audio is played offline. */
+internal fun ensureVersion19Columns(db: SQLiteDatabase) {
+    addColumnIfNotExists(db, "downloaded_tracks", "artist_refs", "TEXT")
+}
+
 /**
  * v18: 032 artist sync model. Albums/tracks keep their artist refs (JSON) for navigation, the
  * link tables make discography queries indexable, and `artists` holds the synced performers.
@@ -1365,6 +1397,7 @@ private class AlbumDatabaseHelper(context: Context) :
         createDownloadedTracksTable(db)
         createPlaylistTables(db)
         ensureVersion18Schema(db)
+        ensureVersion19Columns(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -1411,12 +1444,13 @@ private class AlbumDatabaseHelper(context: Context) :
         }
         if (oldVersion < 17) ensureVersion17Columns(db)
         if (oldVersion < 18) ensureVersion18Schema(db)
+        if (oldVersion < 19) ensureVersion19Columns(db)
     }
 
     companion object {
         // Historical file name, kept so existing installs keep their library cache.
         private const val DATABASE_NAME = "plex_album_cache.db"
-        private const val DATABASE_VERSION = 18
+        private const val DATABASE_VERSION = 19
 
         const val TABLE_ALBUMS = "albums"
         const val TABLE_TRACKS = "tracks"

@@ -45,6 +45,8 @@ class OfflineDownloadsTest {
             discNumber = 1,
             trackNumber = 3,
             userRating = 10f,
+            artists = listOf(com.lux032.musicbridge.music.ArtistRef("101", "A"),
+                com.lux032.musicbridge.music.ArtistRef("102", "B")),
         )
 
         store.insertDownloadedTrack(track)
@@ -64,7 +66,14 @@ class OfflineDownloadsTest {
         assertEquals("file:///data/user/0/com.lux032.musicbridge/files/audio_downloads/song.flac", stream?.streamUrl)
         assertEquals("file:///data/user/0/com.lux032.musicbridge/files/audio_downloads/covers/cover.jpg", stream?.thumbUrl)
         assertEquals("file:///data/user/0/com.lux032.musicbridge/files/audio_downloads/lyrics/lyric.lrc", stream?.lyricUrl)
-        assertEquals(10f, stream?.userRating)
+        assertEquals(track.artists, stream?.artists)
+        store.refreshArtistMetadata("server1", listOf(stream!!.copy(
+            artistName = "Corrected", artists = listOf(com.lux032.musicbridge.music.ArtistRef("103", "Corrected")))))
+        val refreshed = store.getDownloadedTrack("server1", "track101")!!
+        assertEquals("103", refreshed.artists.single().id)
+        assertEquals(track.localAudioPath, refreshed.localAudioPath)
+        assertEquals(track.fileSize, refreshed.fileSize)
+        assertEquals(10f, stream.userRating)
         assertTrue(stream?.isFavorite == true)
 
         store.deleteDownloadedTrack("server1", "track101")
