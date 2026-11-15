@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -154,13 +155,14 @@ private fun DailyMixCard(
                 .padding(12.dp),
             horizontalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            Box(
-                modifier = Modifier
-                    .size(MixCardMosaic)
-                    .clip(RoundedCornerShape(12.dp)),
-            ) {
-                DailyMixMosaic(urls = mix.coverUrls, title = mix.title, size = MixCardMosaic)
-                if (isPlaying) NowPlayingCoverBadge(nowPlaying)
+            Box(modifier = Modifier.size(MixCardMosaic)) {
+                DailyMixMosaic(
+                    urls = mix.coverUrls,
+                    title = mix.title,
+                    size = MixCardMosaic,
+                    shape = RoundedCornerShape(12.dp),
+                    overlay = { if (isPlaying) NowPlayingCoverBadge(nowPlaying) },
+                )
             }
             Column(
                 modifier = Modifier
@@ -307,35 +309,49 @@ private fun PagerDots(count: Int, current: Int) {
     }
 }
 
-/** 2×2 mosaic of the mix's first four albums; one full cover when there are fewer. */
+/** 2×2 mosaic of the mix's first four albums; one full cover when there are fewer.
+ *  Tiles stay cropped. A single cover uses Contain and is centered in the slot. */
 @Composable
-internal fun DailyMixMosaic(urls: List<String>, title: String, size: Dp, modifier: Modifier = Modifier) {
+internal fun DailyMixMosaic(
+    urls: List<String>,
+    title: String,
+    size: Dp,
+    modifier: Modifier = Modifier,
+    shape: androidx.compose.ui.graphics.Shape = RoundedCornerShape(12.dp),
+    overlay: @Composable BoxScope.() -> Unit = {},
+) {
     if (urls.size < 4) {
         AsyncAlbumArtwork(
             imageUrl = urls.firstOrNull(),
             title = title,
             modifier = modifier.fillMaxSize(),
-            contentScale = ContentScale.Crop,
             thumbnailSize = size,
+            fit = ArtworkFit.Contain,
+            alignment = Alignment.Center,
+            shape = shape,
+            overlay = overlay,
         )
         return
     }
-    Column(modifier = modifier.fillMaxSize()) {
-        repeat(2) { row ->
-            Row(modifier = Modifier.weight(1f)) {
-                repeat(2) { column ->
-                    AsyncAlbumArtwork(
-                        imageUrl = urls[row * 2 + column],
-                        title = title,
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxHeight(),
-                        contentScale = ContentScale.Crop,
-                        thumbnailSize = size / 2,
-                    )
+    Box(modifier.clip(shape)) {
+        Column(Modifier.fillMaxSize()) {
+            repeat(2) { row ->
+                Row(modifier = Modifier.weight(1f)) {
+                    repeat(2) { column ->
+                        AsyncAlbumArtwork(
+                            imageUrl = urls[row * 2 + column],
+                            title = title,
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight(),
+                            contentScale = ContentScale.Crop,
+                            thumbnailSize = size / 2,
+                        )
+                    }
                 }
             }
         }
+        overlay()
     }
 }
 

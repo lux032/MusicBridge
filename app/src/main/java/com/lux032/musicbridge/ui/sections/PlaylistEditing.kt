@@ -208,8 +208,11 @@ internal fun AddToPlaylistSheet(
                                     AsyncAlbumArtwork(
                                         imageUrl = playlist.thumbUrl,
                                         title = playlist.title,
-                                        modifier = Modifier.size(52.dp).clip(RoundedCornerShape(10.dp)),
+                                        modifier = Modifier.size(52.dp),
                                         thumbnailSize = 52.dp,
+                                        fit = ArtworkFit.Contain,
+                                        alignment = Alignment.Center,
+                                        shape = RoundedCornerShape(10.dp),
                                     )
                                 },
                             )
@@ -250,8 +253,11 @@ private fun AdditionSummary(addition: PlaylistAddition, modifier: Modifier = Mod
         AsyncAlbumArtwork(
             imageUrl = thumb,
             title = title,
-            modifier = Modifier.size(44.dp).clip(RoundedCornerShape(8.dp)),
+            modifier = Modifier.size(44.dp),
             thumbnailSize = 44.dp,
+            fit = ArtworkFit.Contain,
+            alignment = Alignment.Center,
+            shape = RoundedCornerShape(8.dp),
         )
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(title, color = AppColors.TextPrimary, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)

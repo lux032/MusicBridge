@@ -38,8 +38,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.lux032.musicbridge.music.Music032DailyMix
@@ -280,6 +281,8 @@ private fun RecentPlayedShelfSection(
                 contentType = { "recent-album" },
             ) { album ->
                 var showQueueMenu by remember { mutableStateOf(false) }
+                var centerCaption by remember(album.thumbUrl) { mutableStateOf(false) }
+                val recentShape = RoundedCornerShape(12.dp)
                 Box(modifier = Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)) {
                 Column(
                     modifier = Modifier
@@ -290,39 +293,38 @@ private fun RecentPlayedShelfSection(
                         ),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Surface(
+                    AsyncAlbumArtwork(
+                        imageUrl = album.thumbUrl,
+                        title = album.title,
                         modifier = Modifier
                             .fillMaxWidth()
                             .aspectRatio(1f),
-                        shape = RoundedCornerShape(12.dp),
-                        color = AppColors.CardSurface,
-                        shadowElevation = 6.dp,
-                    ) {
-                        Box {
-                            AsyncAlbumArtwork(
-                                imageUrl = album.thumbUrl,
-                                title = album.title,
-                                modifier = Modifier.fillMaxSize(),
-                                contentScale = ContentScale.Crop,
-                                thumbnailSize = layoutInfo.recentAlbumCardWidth,
-                            )
-                            NowPlayingCoverBadge(nowPlaying?.takeIf { it.matchesAlbum(album) })
-                        }
-                    }
+                        thumbnailSize = layoutInfo.recentAlbumCardWidth,
+                        fit = ArtworkFit.Contain,
+                        alignment = Alignment.BottomCenter,
+                        shape = recentShape,
+                        imageModifier = Modifier.shadow(6.dp, recentShape, clip = false),
+                        onCenterCaption = { centerCaption = it },
+                        overlay = { NowPlayingCoverBadge(nowPlaying?.takeIf { it.matchesAlbum(album) }) },
+                    )
                     Text(
                         text = album.title,
+                        modifier = Modifier.fillMaxWidth(),
                         color = AppColors.TextPrimary,
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.SemiBold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
+                        textAlign = if (centerCaption) TextAlign.Center else TextAlign.Start,
                     )
                     Text(
                         text = album.artistName ?: Strings.unknownArtist,
+                        modifier = Modifier.fillMaxWidth(),
                         color = AppColors.TextSecondary,
                         style = MaterialTheme.typography.bodySmall,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
+                        textAlign = if (centerCaption) TextAlign.Center else TextAlign.Start,
                     )
                 }
                     QueueActionMenu(

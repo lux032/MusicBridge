@@ -104,8 +104,15 @@ internal fun PlaybackMoreContent(
             }
             Row(Modifier.fillMaxWidth().padding(bottom = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.CenterVertically) {
-                AsyncAlbumArtwork(artworkUrl, track.albumTitle ?: track.title,
-                    Modifier.size(44.dp).clip(RoundedCornerShape(9.dp)), ContentScale.Crop, thumbnailSize = 64.dp)
+                AsyncAlbumArtwork(
+                    imageUrl = artworkUrl,
+                    title = track.albumTitle ?: track.title,
+                    modifier = Modifier.size(44.dp),
+                    thumbnailSize = 64.dp,
+                    fit = ArtworkFit.Contain,
+                    alignment = Alignment.Center,
+                    shape = RoundedCornerShape(9.dp),
+                )
                 Column(Modifier.weight(1f)) {
                     Text(track.title, style = MaterialTheme.typography.titleMedium, color = AppColors.TextPrimary,
                         maxLines = 2, overflow = TextOverflow.Ellipsis)

@@ -1082,15 +1082,16 @@ private fun ArtistTrackRow(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(modifier = Modifier.size(44.dp).clip(RoundedCornerShape(6.dp))) {
-                AsyncAlbumArtwork(
-                    imageUrl = track.thumbUrl,
-                    title = track.title,
-                    modifier = Modifier.matchParentSize(),
-                    thumbnailSize = 48.dp,
-                )
-                NowPlayingArtworkScrim(nowPlaying)
-            }
+            AsyncAlbumArtwork(
+                imageUrl = track.thumbUrl,
+                title = track.title,
+                modifier = Modifier.size(44.dp),
+                thumbnailSize = 48.dp,
+                fit = ArtworkFit.Contain,
+                alignment = Alignment.Center,
+                shape = RoundedCornerShape(6.dp),
+                overlay = { NowPlayingArtworkScrim(nowPlaying) },
+            )
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,

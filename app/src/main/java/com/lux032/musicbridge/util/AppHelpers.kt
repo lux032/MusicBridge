@@ -115,9 +115,26 @@ internal fun music032ThumbnailUrl(url: String, px: Int): String? {
     val query = withoutFragment.substring(queryIndex + 1).split('&')
     if (query.none { it.startsWith("mediaToken=") }) return null
     if (px <= 0) return url
-    val bucket = Music032ArtworkSizes.firstOrNull { it >= px } ?: Music032ArtworkSizes.last()
+    // Match Rust `server_size`: an exact bucket is used as-is (no resample
+    // headroom). Otherwise the smallest bucket at least 1.25× the long side.
+    // Above 1536 the original is requested by dropping `size`.
+    val bucket = music032ServerSize(px)
     val preserved = query.filterNot { it == "size" || it.startsWith("size=") }
-    return withoutFragment.substring(0, queryIndex + 1) + (preserved + "size=$bucket").joinToString("&") + fragment
+    val params = if (bucket == null) preserved else preserved + "size=$bucket"
+    val head = withoutFragment.substring(0, queryIndex)
+    val queryPart = if (params.isEmpty()) "" else "?" + params.joinToString("&")
+    return head + queryPart + fragment
+}
+
+/**
+ * Server thumbnail edge for a box whose long side is [px], or null when the
+ * original (no `size`) should be requested. Mirrors `images::server_size`.
+ */
+internal fun music032ServerSize(px: Int): Int? {
+    if (px in Music032ArtworkSizes) return px
+    // px + ceil(px / 4), saturating via Long so a huge px cannot wrap negative.
+    val want = px.toLong() + (px.toLong() + 3) / 4
+    return Music032ArtworkSizes.firstOrNull { it.toLong() >= want }
 }
 
 fun indexLabelForText(text: String?): String {

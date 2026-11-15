@@ -36,6 +36,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -46,11 +47,14 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.lux032.musicbridge.sonos.SonosRoom
 import com.lux032.musicbridge.music.MusicAlbum
+import androidx.compose.foundation.Image
 import coil3.compose.AsyncImage
+import coil3.compose.rememberAsyncImagePainter
 import coil3.request.ImageRequest
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.graphics.painter.ColorPainter
+import kotlin.math.roundToInt
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -413,32 +417,39 @@ internal fun AlbumCoverCard(
         if (compact) {
             AlbumCoverArtwork(album, playingFromAlbum)
         } else {
+            var centerCaption by remember(album.thumbUrl) { mutableStateOf(false) }
             Column(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                AlbumCoverArtwork(album, playingFromAlbum)
-                Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                AlbumCoverArtwork(album, playingFromAlbum, onCenterCaption = { centerCaption = it })
+                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                     Text(
                         text = album.title,
+                        modifier = Modifier.fillMaxWidth(),
                         color = AppColors.TextPrimary,
                         fontWeight = FontWeight.Bold,
                         style = MaterialTheme.typography.bodyMedium,
                         maxLines = if (layoutInfo.isWide) 1 else 2,
                         overflow = TextOverflow.Ellipsis,
+                        textAlign = if (centerCaption) TextAlign.Center else TextAlign.Start,
                     )
                     Text(
                         text = subtitleOverride ?: album.artistName ?: Strings.unknownArtist,
+                        modifier = Modifier.fillMaxWidth(),
                         color = AppColors.TextSecondary,
                         style = MaterialTheme.typography.bodySmall,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
+                        textAlign = if (centerCaption) TextAlign.Center else TextAlign.Start,
                     )
                     if (selected) {
                         Text(
                             text = Strings.currentViewing,
+                            modifier = Modifier.fillMaxWidth(),
                             color = AppColors.TextTertiary,
                             style = MaterialTheme.typography.bodySmall,
                             fontWeight = FontWeight.Medium,
+                            textAlign = if (centerCaption) TextAlign.Center else TextAlign.Start,
                         )
                     }
                 }
@@ -464,23 +475,27 @@ internal fun AlbumCoverCard(
 }
 
 @Composable
-private fun AlbumCoverArtwork(album: MusicAlbum, nowPlaying: NowPlayingMarker?) {
+private fun AlbumCoverArtwork(
+    album: MusicAlbum,
+    nowPlaying: NowPlayingMarker?,
+    onCenterCaption: ((Boolean) -> Unit)? = null,
+) {
     val layoutInfo = LocalAppLayoutInfo.current
-    Box(
+    // The square slot stays put so the grid doesn't reflow. The cover itself
+    // shrinks to its aspect and sits on the bottom edge, just above the title.
+    AsyncAlbumArtwork(
+        imageUrl = album.thumbUrl,
+        title = album.title,
         modifier = Modifier
             .fillMaxWidth()
-            .aspectRatio(1f)
-            .clip(RoundedCornerShape(12.dp)),
-    ) {
-        AsyncAlbumArtwork(
-            imageUrl = album.thumbUrl,
-            title = album.title,
-            modifier = Modifier.matchParentSize(),
-            contentScale = ContentScale.Crop,
-            thumbnailSize = layoutInfo.albumGridMinimumWidth * 1.1f,
-        )
-        NowPlayingCoverBadge(nowPlaying)
-    }
+            .aspectRatio(1f),
+        thumbnailSize = layoutInfo.albumGridMinimumWidth * 1.1f,
+        fit = ArtworkFit.Contain,
+        alignment = Alignment.BottomCenter,
+        shape = RoundedCornerShape(12.dp),
+        onCenterCaption = onCenterCaption,
+        overlay = { NowPlayingCoverBadge(nowPlaying) },
+    )
 }
 
 @Composable
@@ -791,7 +806,30 @@ internal fun AsyncAlbumArtwork(
     contentScale: ContentScale = ContentScale.Fit,
     thumbnailSize: Dp? = null,
     placeholderThumbnailSize: Dp? = null,
+    fit: ArtworkFit = ArtworkFit.Cover,
+    alignment: Alignment = Alignment.Center,
+    shape: Shape = RectangleShape,
+    imageModifier: Modifier = Modifier,
+    artworkModifier: Modifier = Modifier,
+    onCenterCaption: ((Boolean) -> Unit)? = null,
+    overlay: @Composable BoxScope.() -> Unit = {},
 ) {
+    if (fit == ArtworkFit.Contain) {
+        ContainAlbumArtwork(
+            imageUrl = imageUrl,
+            title = title,
+            modifier = modifier,
+            thumbnailSize = thumbnailSize,
+            placeholderThumbnailSize = placeholderThumbnailSize,
+            alignment = alignment,
+            shape = shape,
+            imageModifier = imageModifier,
+            artworkModifier = artworkModifier,
+            onCenterCaption = onCenterCaption,
+            overlay = overlay,
+        )
+        return
+    }
     val context = LocalContext.current
     val imageLoader = remember(context) { AlbumArtworkImageLoader.get(context) }
 
@@ -838,6 +876,146 @@ internal fun AsyncAlbumArtwork(
                 tint = AppColors.TextSecondary,
                 modifier = Modifier.size(48.dp),
             )
+        }
+    }
+}
+
+/**
+ * [ArtworkFit.Contain] inside a fixed slot. [modifier] is the reserved box
+ * (it does not change size when the image arrives). The decoded bitmap's
+ * intrinsic size drives [fittedSize]; the image is then center-cropped into
+ * that box so clamped extremes and near-square snaps match the Rust path.
+ * The muted placeholder is only shown until a bitmap with a real aspect exists.
+ */
+@Composable
+private fun ContainAlbumArtwork(
+    imageUrl: String?,
+    title: String,
+    modifier: Modifier,
+    thumbnailSize: Dp?,
+    placeholderThumbnailSize: Dp?,
+    alignment: Alignment,
+    shape: Shape,
+    imageModifier: Modifier,
+    artworkModifier: Modifier,
+    onCenterCaption: ((Boolean) -> Unit)?,
+    overlay: @Composable BoxScope.() -> Unit,
+) {
+    if (imageUrl == null) {
+        SideEffect { onCenterCaption?.invoke(false) }
+        Box(modifier) {
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .then(imageModifier)
+                    .clip(shape)
+                    .background(AppColors.SurfaceMuted),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Album,
+                    contentDescription = null,
+                    tint = AppColors.TextSecondary,
+                    modifier = Modifier.size(48.dp),
+                )
+                overlay()
+            }
+        }
+        return
+    }
+
+    val context = LocalContext.current
+    val imageLoader = remember(context) { AlbumArtworkImageLoader.get(context) }
+    val density = LocalDensity.current
+    val requestUrl = remember(imageUrl, thumbnailSize, density) {
+        if (thumbnailSize != null) {
+            thumbnailUrl(imageUrl, with(density) { thumbnailSize.roundToPx() })
+        } else {
+            imageUrl
+        }
+    }
+    val placeholderCacheKey = remember(imageUrl, placeholderThumbnailSize, density) {
+        placeholderThumbnailSize?.let {
+            thumbnailUrl(imageUrl, with(density) { it.roundToPx() })
+        }
+    }
+    val imageRequest = remember(requestUrl, placeholderCacheKey, context) {
+        ImageRequest.Builder(context)
+            .data(requestUrl)
+            .apply { placeholderCacheKey?.let { placeholderMemoryCacheKey(it) } }
+            .build()
+    }
+    // rememberAsyncImagePainter decodes at the file's own size (Coil falls
+    // back to SizeResolver.ORIGINAL), so intrinsicSize is the real aspect
+    // rather than the slot we happen to draw into.
+    val painter = rememberAsyncImagePainter(
+        model = imageRequest,
+        imageLoader = imageLoader,
+        contentScale = ContentScale.Crop,
+    )
+    val source = painter.intrinsicSize
+    val hasAspect = source.width.isFinite() && source.height.isFinite() &&
+        source.width > 0f && source.height > 0f
+
+    BoxWithConstraints(modifier) {
+        val slotW = constraints.maxWidth
+        val slotH = constraints.maxHeight
+        val bounded = constraints.hasBoundedWidth && constraints.hasBoundedHeight &&
+            slotW > 0 && slotH > 0 && slotW != androidx.compose.ui.unit.Constraints.Infinity &&
+            slotH != androidx.compose.ui.unit.Constraints.Infinity
+        val (boxW, boxH) = if (bounded && hasAspect) {
+            fittedSize(
+                source.width.roundToInt().coerceAtLeast(1),
+                source.height.roundToInt().coerceAtLeast(1),
+                slotW,
+                slotH,
+            )
+        } else if (bounded) {
+            slotW to slotH
+        } else {
+            0 to 0
+        }
+        val narrower = bounded && hasAspect && boxW < slotW - 1
+        SideEffect { onCenterCaption?.invoke(narrower) }
+        Box(Modifier.fillMaxSize()) {
+            if (!bounded) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .then(imageModifier)
+                        .clip(shape)
+                        .background(if (hasAspect) Color.Transparent else AppColors.SurfaceMuted),
+                ) {
+                    if (hasAspect) {
+                        Image(
+                            painter = painter,
+                            contentDescription = title,
+                            modifier = Modifier.fillMaxSize().then(artworkModifier),
+                            contentScale = ContentScale.Crop,
+                        )
+                    }
+                    overlay()
+                }
+            } else {
+                Box(
+                    modifier = Modifier
+                        .align(alignment)
+                        .size(with(density) { boxW.toDp() }, with(density) { boxH.toDp() })
+                        .then(imageModifier)
+                        .clip(shape)
+                        .then(if (hasAspect) Modifier else Modifier.background(AppColors.SurfaceMuted)),
+                ) {
+                    if (hasAspect) {
+                        Image(
+                            painter = painter,
+                            contentDescription = title,
+                            modifier = Modifier.fillMaxSize().then(artworkModifier),
+                            contentScale = ContentScale.Crop,
+                        )
+                    }
+                    overlay()
+                }
+            }
         }
     }
 }

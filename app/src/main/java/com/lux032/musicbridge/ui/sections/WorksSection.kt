@@ -23,6 +23,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -236,15 +237,41 @@ internal fun WorkDetailSection(
                     item("albums") {
                         LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                             items(data.albums, key = { it.album.ratingKey }) { entry ->
-                                Column(Modifier.width(124.dp).clickable { onAlbum(entry.album) },
-                                    verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    AsyncAlbumArtwork(entry.album.thumbUrl, entry.album.title,
-                                        Modifier.size(124.dp).clip(RoundedCornerShape(14.dp)), ContentScale.Crop, thumbnailSize = 160.dp)
-                                    Text(entry.album.title, style = MaterialTheme.typography.titleSmall, color = AppColors.TextPrimary,
-                                        maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 4.dp))
-                                    Text((listOf(entry.albumRole).filter { it.isNotBlank() } + entry.trackRoles).distinct()
-                                        .joinToString(" · ") { Strings.workRole(it) }, style = MaterialTheme.typography.bodySmall,
-                                        color = AppColors.TextSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                var centerCaption by remember(entry.album.thumbUrl) { mutableStateOf(false) }
+                                Column(
+                                    Modifier.width(124.dp).clickable { onAlbum(entry.album) },
+                                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                                    horizontalAlignment = if (centerCaption) Alignment.CenterHorizontally else Alignment.Start,
+                                ) {
+                                    AsyncAlbumArtwork(
+                                        imageUrl = entry.album.thumbUrl,
+                                        title = entry.album.title,
+                                        modifier = Modifier.fillMaxWidth().aspectRatio(1f),
+                                        thumbnailSize = 160.dp,
+                                        fit = ArtworkFit.Contain,
+                                        alignment = Alignment.BottomCenter,
+                                        shape = RoundedCornerShape(14.dp),
+                                        onCenterCaption = { centerCaption = it },
+                                    )
+                                    Text(
+                                        entry.album.title,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        color = AppColors.TextPrimary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        textAlign = if (centerCaption) TextAlign.Center else TextAlign.Start,
+                                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                                    )
+                                    Text(
+                                        (listOf(entry.albumRole).filter { it.isNotBlank() } + entry.trackRoles).distinct()
+                                            .joinToString(" · ") { Strings.workRole(it) },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = AppColors.TextSecondary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        textAlign = if (centerCaption) TextAlign.Center else TextAlign.Start,
+                                        modifier = Modifier.fillMaxWidth(),
+                                    )
                                 }
                             }
                         }
