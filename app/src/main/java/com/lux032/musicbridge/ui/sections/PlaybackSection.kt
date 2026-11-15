@@ -245,12 +245,14 @@ internal fun PlaybackDetailSection(
         isLocalOnlyHintVisible = false
     }
     val artworkContent: @Composable (androidx.compose.ui.unit.Dp) -> Unit = { maximumSize ->
-        // Same Contain fit as the mini player, on the fitted box itself, so the
-        // shared-element morph scales one aspect instead of a square crop.
-        AsyncAlbumArtwork(
-            imageUrl = displayAlbum.thumbUrl,
-            title = displayAlbum.title,
+        // The slot stays the full square it was before non-square covers. The cover is
+        // contained and centered inside it, and the shared element stays on that fitted
+        // box so the mini-player morph still scales one aspect. The spectrum is a sibling
+        // of the slot, so a tall or wide cover does not shrink the bars.
+        Box(
             modifier = Modifier
+                // Before any clip: the light spills past the square, at the slot's size.
+                .spectrumGlow(spectrumState, { visualizerProgress }, palette.accent)
                 .widthIn(max = maximumSize)
                 .fillMaxWidth()
                 .aspectRatio(1f)
@@ -269,59 +271,66 @@ internal fun PlaybackDetailSection(
                         localOnlyHintNonce++
                     }
                 },
-            thumbnailSize = maximumSize,
-            // The morph's first frame comes from the mini player's 52dp cache entry.
-            placeholderThumbnailSize = 52.dp,
-            fit = ArtworkFit.Contain,
-            alignment = Alignment.Center,
-            shape = artworkShape,
-            imageModifier = Modifier
-                // Before the shared element and the clip: the light spills past the cover.
-                .spectrumGlow(spectrumState, { visualizerProgress }, palette.accent)
-                .playerSharedElement(PlayerSharedKeys.artwork(currentTrack))
-                .graphicsLayer {
-                    // The bars stand on the colour field itself, not inside a floating card.
-                    shadowElevation = 16.dp.toPx() * artworkShadowFactor
-                    shape = artworkShape
-                    clip = true
+        ) {
+            AsyncAlbumArtwork(
+                imageUrl = displayAlbum.thumbUrl,
+                title = displayAlbum.title,
+                modifier = Modifier.fillMaxSize(),
+                thumbnailSize = maximumSize,
+                // The morph's first frame comes from the mini player's 52dp cache entry.
+                placeholderThumbnailSize = 52.dp,
+                fit = ArtworkFit.Contain,
+                alignment = Alignment.Center,
+                shape = artworkShape,
+                imageModifier = Modifier
+                    .playerSharedElement(PlayerSharedKeys.artwork(currentTrack))
+                    .graphicsLayer {
+                        // Shadow follows the cover. Dropped while the bars are up so a
+                        // fading card does not leave an empty frame.
+                        shadowElevation = 16.dp.toPx() * artworkShadowFactor
+                        shape = artworkShape
+                        clip = true
+                    },
+                artworkModifier = Modifier.graphicsLayer {
+                    alpha = 1f - visualizerProgress
+                    val scale = 1f - 0.03f * visualizerProgress
+                    scaleX = scale
+                    scaleY = scale
                 },
-            artworkModifier = Modifier.graphicsLayer {
-                alpha = 1f - visualizerProgress
-                val scale = 1f - 0.03f * visualizerProgress
-                scaleX = scale
-                scaleY = scale
-            },
-            overlay = {
-                if (visualizerProgress > 0f) {
-                    SpectrumVisualizer(
-                        state = spectrumState,
-                        isPlaying = !currentState.isPaused && !currentState.isBuffering,
-                        accent = palette.accent,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .graphicsLayer { alpha = visualizerProgress },
-                    )
-                }
-                androidx.compose.animation.AnimatedVisibility(
-                    visible = isLocalOnlyHintVisible,
-                    enter = fadeIn(tween(160)),
-                    exit = fadeOut(tween(220)),
+            )
+            if (visualizerProgress > 0f) {
+                SpectrumVisualizer(
+                    state = spectrumState,
+                    isPlaying = !currentState.isPaused && !currentState.isBuffering,
+                    accent = palette.accent,
                     modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(12.dp),
-                ) {
-                    Text(
-                        text = Strings.visualizerLocalOnly,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = AppColors.TextPrimary,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier
-                            .background(Color.Black.copy(alpha = 0.62f), RoundedCornerShape(12.dp))
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                    )
-                }
-            },
-        )
+                        .fillMaxSize()
+                        .graphicsLayer {
+                            alpha = visualizerProgress
+                            shape = artworkShape
+                            clip = true
+                        },
+                )
+            }
+            androidx.compose.animation.AnimatedVisibility(
+                visible = isLocalOnlyHintVisible,
+                enter = fadeIn(tween(160)),
+                exit = fadeOut(tween(220)),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(12.dp),
+            ) {
+                Text(
+                    text = Strings.visualizerLocalOnly,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AppColors.TextPrimary,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier
+                        .background(Color.Black.copy(alpha = 0.62f), RoundedCornerShape(12.dp))
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                )
+            }
+        }
     }
 
     // ── Group 1: track meta (title + favourite key, artist · album, signal path) ──
