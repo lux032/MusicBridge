@@ -52,7 +52,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -267,17 +266,17 @@ private fun DownloadedAlbumCard(
                 horizontalArrangement = Arrangement.spacedBy(14.dp),
             ) {
                 // Cover
-                Box(modifier = Modifier.size(60.dp).clip(RoundedCornerShape(10.dp))) {
-                    AsyncAlbumArtwork(
-                        imageUrl = group.thumbPath?.let { "file://$it" },
-                        title = group.albumTitle,
-                        modifier = Modifier.matchParentSize(),
-                        contentScale = ContentScale.Crop,
-                        thumbnailSize = 72.dp,
-                        placeholderThumbnailSize = null,
-                    )
-                    NowPlayingArtworkScrim(nowPlaying)
-                }
+                AsyncAlbumArtwork(
+                    imageUrl = group.thumbPath?.let { "file://$it" },
+                    title = group.albumTitle,
+                    modifier = Modifier.size(60.dp),
+                    thumbnailSize = 72.dp,
+                    placeholderThumbnailSize = null,
+                    fit = ArtworkFit.Contain,
+                    alignment = Alignment.Center,
+                    shape = RoundedCornerShape(10.dp),
+                    overlay = { NowPlayingArtworkScrim(nowPlaying) },
+                )
 
                 // Info
                 Column(

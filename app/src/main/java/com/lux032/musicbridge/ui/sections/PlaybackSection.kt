@@ -58,7 +58,6 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -246,22 +245,19 @@ internal fun PlaybackDetailSection(
         isLocalOnlyHintVisible = false
     }
     val artworkContent: @Composable (androidx.compose.ui.unit.Dp) -> Unit = { maximumSize ->
-        Box(
+        // Same Contain fit as the mini player, on the fitted box itself, so the
+        // shared-element morph scales one aspect instead of a square crop.
+        AsyncAlbumArtwork(
+            imageUrl = displayAlbum.thumbUrl,
+            title = displayAlbum.title,
             modifier = Modifier
-                // Before the shared element and the clip: the light spills past the cover.
-                .spectrumGlow(spectrumState, { visualizerProgress }, palette.accent)
-                .playerSharedElement(PlayerSharedKeys.artwork(currentTrack))
                 .widthIn(max = maximumSize)
                 .fillMaxWidth()
                 .aspectRatio(1f)
-                .graphicsLayer {
-                    // The bars stand on the colour field itself, not inside a floating card.
-                    shadowElevation = 16.dp.toPx() * artworkShadowFactor
-                    shape = artworkShape
-                    clip = true
-                }
                 .clickable(
-                    // The crossfade itself is the feedback; a ripple over the cover is noise.
+                    // The whole reserved square stays the hit target, including the
+                    // letterbox around a non-square cover. The crossfade itself is
+                    // the feedback; a ripple over the cover is noise.
                     interactionSource = null,
                     indication = null,
                     role = Role.Button,
@@ -273,52 +269,59 @@ internal fun PlaybackDetailSection(
                         localOnlyHintNonce++
                     }
                 },
-        ) {
-            AsyncAlbumArtwork(
-                imageUrl = displayAlbum.thumbUrl,
-                title = displayAlbum.title,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .graphicsLayer {
-                        alpha = 1f - visualizerProgress
-                        val scale = 1f - 0.03f * visualizerProgress
-                        scaleX = scale
-                        scaleY = scale
-                    },
-                contentScale = ContentScale.Crop,
-                thumbnailSize = maximumSize,
-                // The morph's first frame comes from the mini player's 52dp cache entry.
-                placeholderThumbnailSize = 52.dp,
-            )
-            if (visualizerProgress > 0f) {
-                SpectrumVisualizer(
-                    state = spectrumState,
-                    isPlaying = !currentState.isPaused && !currentState.isBuffering,
-                    accent = palette.accent,
+            thumbnailSize = maximumSize,
+            // The morph's first frame comes from the mini player's 52dp cache entry.
+            placeholderThumbnailSize = 52.dp,
+            fit = ArtworkFit.Contain,
+            alignment = Alignment.Center,
+            shape = artworkShape,
+            imageModifier = Modifier
+                // Before the shared element and the clip: the light spills past the cover.
+                .spectrumGlow(spectrumState, { visualizerProgress }, palette.accent)
+                .playerSharedElement(PlayerSharedKeys.artwork(currentTrack))
+                .graphicsLayer {
+                    // The bars stand on the colour field itself, not inside a floating card.
+                    shadowElevation = 16.dp.toPx() * artworkShadowFactor
+                    shape = artworkShape
+                    clip = true
+                },
+            artworkModifier = Modifier.graphicsLayer {
+                alpha = 1f - visualizerProgress
+                val scale = 1f - 0.03f * visualizerProgress
+                scaleX = scale
+                scaleY = scale
+            },
+            overlay = {
+                if (visualizerProgress > 0f) {
+                    SpectrumVisualizer(
+                        state = spectrumState,
+                        isPlaying = !currentState.isPaused && !currentState.isBuffering,
+                        accent = palette.accent,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .graphicsLayer { alpha = visualizerProgress },
+                    )
+                }
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = isLocalOnlyHintVisible,
+                    enter = fadeIn(tween(160)),
+                    exit = fadeOut(tween(220)),
                     modifier = Modifier
-                        .fillMaxSize()
-                        .graphicsLayer { alpha = visualizerProgress },
-                )
-            }
-            androidx.compose.animation.AnimatedVisibility(
-                visible = isLocalOnlyHintVisible,
-                enter = fadeIn(tween(160)),
-                exit = fadeOut(tween(220)),
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(12.dp),
-            ) {
-                Text(
-                    text = Strings.visualizerLocalOnly,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = AppColors.TextPrimary,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier
-                        .background(Color.Black.copy(alpha = 0.62f), RoundedCornerShape(12.dp))
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                )
-            }
-        }
+                        .align(Alignment.BottomCenter)
+                        .padding(12.dp),
+                ) {
+                    Text(
+                        text = Strings.visualizerLocalOnly,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AppColors.TextPrimary,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier
+                            .background(Color.Black.copy(alpha = 0.62f), RoundedCornerShape(12.dp))
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                    )
+                }
+            },
+        )
     }
 
     // ── Group 1: track meta (title + favourite key, artist · album, signal path) ──
@@ -1033,6 +1036,15 @@ internal fun PlaybackDetailSection(
                             nowPlaying = if (isCurrent) nowPlayingMarker else null,
                             modifier = Modifier.width(24.dp),
                         )
+                        AsyncAlbumArtwork(
+                            imageUrl = track.thumbUrl,
+                            title = track.title,
+                            modifier = Modifier.size(40.dp),
+                            thumbnailSize = 48.dp,
+                            fit = ArtworkFit.Contain,
+                            alignment = Alignment.Center,
+                            shape = RoundedCornerShape(4.dp),
+                        )
                         Column(
                             modifier = Modifier.weight(1f),
                             verticalArrangement = Arrangement.spacedBy(2.dp),
@@ -1596,23 +1608,27 @@ private fun AlbumDetailHeroWide(
         modifier = Modifier.fillMaxWidth(),
         contentAlignment = Alignment.Center,
     ) {
+        val heroShape = RoundedCornerShape(14.dp)
         AsyncAlbumArtwork(
             imageUrl = album.thumbUrl,
             title = album.title,
             modifier = Modifier
                 .widthIn(max = 300.dp)
                 .fillMaxWidth()
-                .aspectRatio(1f)
-                .shadow(14.dp, RoundedCornerShape(14.dp), clip = false)
-                .clip(RoundedCornerShape(14.dp))
+                .aspectRatio(1f),
+            thumbnailSize = 300.dp,
+            placeholderThumbnailSize = layoutInfo.albumGridMinimumWidth * 1.1f,
+            fit = ArtworkFit.Contain,
+            alignment = Alignment.Center,
+            shape = heroShape,
+            imageModifier = Modifier
+                .shadow(14.dp, heroShape, clip = false)
+                .clip(heroShape)
                 .semantics { contentDescription = "${album.title}. ${Strings.longPressQueueHint}" }
                 .combinedClickable(
                     onClick = {},
                     onLongClick = { onShowAlbumQueueMenuChange(true) },
                 ),
-            contentScale = ContentScale.Crop,
-            thumbnailSize = 300.dp,
-            placeholderThumbnailSize = layoutInfo.albumGridMinimumWidth * 1.1f,
         )
         QueueActionMenu(
             expanded = showAlbumQueueMenu,
@@ -1842,7 +1858,13 @@ private fun AlbumDetailHeroCompact(
                 title = album.title,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .aspectRatio(1f)
+                    .aspectRatio(1f),
+                thumbnailSize = 320.dp,
+                placeholderThumbnailSize = null,
+                fit = ArtworkFit.Contain,
+                alignment = Alignment.Center,
+                shape = coverShape,
+                imageModifier = Modifier
                     .shadow(14.dp, coverShape, clip = false)
                     .clip(coverShape)
                     .semantics { contentDescription = "${album.title}. ${Strings.longPressQueueHint}" }
@@ -1850,9 +1872,6 @@ private fun AlbumDetailHeroCompact(
                         onClick = {},
                         onLongClick = { onShowAlbumQueueMenuChange(true) },
                     ),
-                contentScale = ContentScale.Crop,
-                thumbnailSize = 320.dp,
-                placeholderThumbnailSize = null,
             )
             QueueActionMenu(
                 expanded = showAlbumQueueMenu,
@@ -2274,18 +2293,19 @@ internal fun BottomMiniPlayer(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(
-                modifier = Modifier
-                    .miniSharedElement(PlayerSharedKeys.artwork(currentTrack), visible = !isPlayerOpen)
-                    .clip(RoundedCornerShape(8.dp)),
-            ) {
-                AsyncAlbumArtwork(
-                    imageUrl = displayAlbum.thumbUrl,
-                    title = displayAlbum.title,
-                    modifier = Modifier.size(44.dp),
-                    thumbnailSize = 52.dp,
-                )
-            }
+            AsyncAlbumArtwork(
+                imageUrl = displayAlbum.thumbUrl,
+                title = displayAlbum.title,
+                modifier = Modifier.size(44.dp),
+                thumbnailSize = 52.dp,
+                fit = ArtworkFit.Contain,
+                alignment = Alignment.Center,
+                shape = RoundedCornerShape(8.dp),
+                imageModifier = Modifier.miniSharedElement(
+                    PlayerSharedKeys.artwork(currentTrack),
+                    visible = !isPlayerOpen,
+                ),
+            )
             Column(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(3.dp),

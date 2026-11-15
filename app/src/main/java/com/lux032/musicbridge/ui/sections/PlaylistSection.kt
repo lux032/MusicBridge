@@ -234,10 +234,11 @@ private fun PlaylistCard(
             AsyncAlbumArtwork(
                 imageUrl = playlist.thumbUrl,
                 title = playlist.title,
-                modifier = Modifier
-                    .size(60.dp)
-                    .clip(RoundedCornerShape(10.dp)),
+                modifier = Modifier.size(60.dp),
                 thumbnailSize = 60.dp,
+                fit = ArtworkFit.Contain,
+                alignment = Alignment.Center,
+                shape = RoundedCornerShape(10.dp),
             )
             Column(
                 modifier = Modifier.weight(1f),
@@ -544,15 +545,20 @@ private fun PlaylistDetailHeroWide(
             .widthIn(max = 300.dp)
             .fillMaxWidth()
             .aspectRatio(1f)
-            .clip(RoundedCornerShape(14.dp))
+        val heroShape = RoundedCornerShape(14.dp)
         if (dailyMix != null) {
-            Box(coverModifier) { DailyMixMosaic(dailyMix.mix.coverUrls, playlist.title, 300.dp) }
+            Box(coverModifier) {
+                DailyMixMosaic(dailyMix.mix.coverUrls, playlist.title, 300.dp, shape = heroShape)
+            }
         } else {
             AsyncAlbumArtwork(
                 imageUrl = playlist.thumbUrl,
                 title = playlist.title,
                 modifier = coverModifier,
                 thumbnailSize = 300.dp,
+                fit = ArtworkFit.Contain,
+                alignment = Alignment.Center,
+                shape = heroShape,
             )
         }
     }
@@ -587,15 +593,20 @@ private fun PlaylistDetailHeroCompact(
             .fillMaxWidth(0.6f)
             .widthIn(max = 280.dp)
             .aspectRatio(1f)
-            .clip(RoundedCornerShape(14.dp))
+        val heroShape = RoundedCornerShape(14.dp)
         if (dailyMix != null) {
-            Box(coverModifier) { DailyMixMosaic(dailyMix.mix.coverUrls, playlist.title, 280.dp) }
+            Box(coverModifier) {
+                DailyMixMosaic(dailyMix.mix.coverUrls, playlist.title, 280.dp, shape = heroShape)
+            }
         } else {
             AsyncAlbumArtwork(
                 imageUrl = playlist.thumbUrl,
                 title = playlist.title,
                 modifier = coverModifier,
                 thumbnailSize = 280.dp,
+                fit = ArtworkFit.Contain,
+                alignment = Alignment.Center,
+                shape = heroShape,
             )
         }
         Spacer(Modifier.height(18.dp))

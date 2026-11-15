@@ -7,11 +7,28 @@ import org.junit.Test
 class ThumbnailUrlTest {
     @Test fun artworkAndArtistSizeBuckets() {
         for (path in listOf("artwork/12", "artists/12/image")) {
-            for ((px, size) in listOf(1 to 256, 256 to 256, 257 to 512, 1536 to 1536, 4000 to 1536)) {
+            for ((px, size) in listOf(1 to 256, 256 to 256, 257 to 512, 1536 to 1536)) {
                 assertEquals("https://h/api/v1/$path?mediaToken=x&size=$size",
                     music032ThumbnailUrl("https://h/api/v1/$path?mediaToken=x", px))
             }
+            // Above the largest bucket the original is requested (no size param).
+            assertEquals("https://h/api/v1/$path?mediaToken=x",
+                music032ThumbnailUrl("https://h/api/v1/$path?mediaToken=x&size=10", 4000))
         }
+    }
+
+    @Test fun serverSizeMatchesRustHeadroom() {
+        // Exact buckets skip the 1.25× headroom. Otherwise the smallest bucket
+        // >= px + ceil(px/4). None means "original".
+        assertEquals(256, music032ServerSize(1))
+        assertEquals(256, music032ServerSize(204))
+        assertEquals(512, music032ServerSize(205))
+        assertEquals(256, music032ServerSize(256))
+        assertEquals(768, music032ServerSize(480))
+        assertEquals(768, music032ServerSize(570))
+        assertEquals(1024, music032ServerSize(1024))
+        assertNull(music032ServerSize(1300))
+        assertNull(music032ServerSize(2000))
     }
 
     @Test fun preservedQueryFragmentAndReverseProxyPrefix() {
