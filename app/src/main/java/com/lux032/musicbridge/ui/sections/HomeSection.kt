@@ -416,7 +416,6 @@ private fun HomeQuickKeys(
                 label = Strings.allAlbums,
                 detail = "%,d".format(albumCount),
                 onClick = onOpenAllAlbums,
-                modifier = Modifier.width(120.dp),
             )
         }
         item(key = "quick-artists") {
@@ -425,7 +424,6 @@ private fun HomeQuickKeys(
                 label = Strings.artists,
                 detail = if (artistCount > 0) "%,d".format(artistCount) else null,
                 onClick = onOpenArtists,
-                modifier = Modifier.width(100.dp),
             )
         }
         item(key = "quick-favorites") {
@@ -433,7 +431,6 @@ private fun HomeQuickKeys(
                 icon = Icons.Filled.Favorite,
                 label = Strings.favoriteAlbums,
                 onClick = onOpenFavorites,
-                modifier = Modifier.width(100.dp),
             )
         }
         item(key = "quick-recent-added") {
@@ -441,7 +438,6 @@ private fun HomeQuickKeys(
                 icon = Icons.Filled.LibraryMusic,
                 label = Strings.recentAdded,
                 onClick = onOpenRecentAdded,
-                modifier = Modifier.width(100.dp),
             )
         }
     }
@@ -457,13 +453,16 @@ private fun HomeQuickKey(
 ) {
     Key(
         onClick = onClick,
-        modifier = modifier.height(72.dp),
+        modifier = modifier
+            .widthIn(min = 100.dp, max = 200.dp)
+            .height(72.dp),
         style = KeyStyle.Tonal,
         shape = RoundedCornerShape(18.dp),
     ) {
         Column(
             modifier = Modifier
-                .fillMaxSize()
+                .widthIn(min = 100.dp, max = 200.dp)
+                .fillMaxHeight()
                 .padding(12.dp),
             verticalArrangement = Arrangement.SpaceBetween,
         ) {
@@ -473,14 +472,16 @@ private fun HomeQuickKey(
                 tint = LocalArtworkPalette.current.accent,
                 modifier = Modifier.size(22.dp),
             )
-            Row(verticalAlignment = Alignment.Bottom) {
+            Row {
                 Text(
                     text = label,
                     color = AppColors.TextPrimary,
                     style = MaterialTheme.typography.labelLarge,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false),
+                    modifier = Modifier
+                        .weight(1f, fill = false)
+                        .alignByBaseline(),
                 )
                 if (detail != null) {
                     Text(
@@ -488,7 +489,9 @@ private fun HomeQuickKey(
                         color = AppColors.TextSecondary,
                         style = MaterialTheme.typography.labelMedium,
                         maxLines = 1,
-                        modifier = Modifier.padding(start = 5.dp),
+                        modifier = Modifier
+                            .padding(start = 5.dp)
+                            .alignByBaseline(),
                     )
                 }
             }
