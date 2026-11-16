@@ -91,6 +91,30 @@ class Music032Client(
         root.optJSONArray("items").toObjects().mapNotNull { parseArtist(it) }
     }
 
+    /** Unified local-library search (`GET /api/v1/search`), matching 032player-rs. */
+    suspend fun searchUnified(
+        query: String,
+        category: SearchCategory? = null,
+        offset: Int = 0,
+        limit: Int = 50,
+    ): UnifiedSearchResults {
+        val trimmed = query.trim().take(200)
+        val params = buildList {
+            if (trimmed.isNotEmpty()) {
+                val encoded = URLEncoder.encode(trimmed, StandardCharsets.UTF_8.name())
+                add("q=$encoded")
+            }
+            if (category != null) {
+                add("category=${category.apiValue}")
+                add("offset=${offset.coerceAtLeast(0)}")
+                add("limit=${limit.coerceAtLeast(1)}")
+            }
+        }.joinToString("&")
+        val path = if (params.isEmpty()) "/api/v1/search" else "/api/v1/search?$params"
+        val body = cancellableGet(path)
+        return Music032SearchJson.parse(body, baseUrl, mediaToken, section, sourceId)
+    }
+
     override suspend fun fetchArtistTracks(artist: MusicArtist): List<MusicTrack> = withContext(Dispatchers.IO) {
         val id = fetchArtistDetail(artist.ratingKey).artist.ratingKey
         val tracks = mutableListOf<MusicTrack>()

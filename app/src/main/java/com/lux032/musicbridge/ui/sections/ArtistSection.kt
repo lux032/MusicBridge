@@ -64,6 +64,7 @@ internal fun ArtistsSection(
     onPresentationChange: (ArtistPresentation) -> Unit,
     onSearchQueryChange: (String) -> Unit,
     onFavoritesOnlyChange: (Boolean) -> Unit,
+    onBack: (() -> Unit)? = null,
     onGoHome: () -> Unit,
     onArtistClick: (ArtistSummary) -> Unit,
 ) {
@@ -74,6 +75,9 @@ internal fun ArtistsSection(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
+            if (onBack != null) {
+                BackCircleButton(onClick = onBack, contentDescription = Strings.backToHome)
+            }
             EmptyStateCard(
                 title = Strings.noArtists,
                 body = Strings.noArtistsDesc,
@@ -113,6 +117,7 @@ internal fun ArtistsSection(
             presentation = presentation,
             searchQuery = searchQuery,
             favoritesOnly = favoritesOnly,
+            onBack = onBack,
             onPresentationChange = onPresentationChange,
             onSearchQueryChange = onSearchQueryChange,
             onFavoritesOnlyChange = onFavoritesOnlyChange,
@@ -263,6 +268,7 @@ private fun ArtistsHeader(
     presentation: ArtistPresentation,
     searchQuery: String,
     favoritesOnly: Boolean,
+    onBack: (() -> Unit)?,
     onPresentationChange: (ArtistPresentation) -> Unit,
     onSearchQueryChange: (String) -> Unit,
     onFavoritesOnlyChange: (Boolean) -> Unit,
@@ -272,6 +278,9 @@ private fun ArtistsHeader(
         modifier = Modifier.fillMaxWidth().padding(bottom = 2.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        if (onBack != null) {
+            BackCircleButton(onClick = onBack, contentDescription = Strings.backToHome)
+        }
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,

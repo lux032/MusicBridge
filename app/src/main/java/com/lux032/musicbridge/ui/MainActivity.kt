@@ -301,6 +301,7 @@ fun MusicBridgeApp(
             AppSection.FavoriteCollection,
             AppSection.RecentAdded,
             AppSection.AllAlbums,
+            AppSection.Search,
             AppSection.Artists,
             AppSection.Playlists,
             AppSection.Downloads,
@@ -453,8 +454,63 @@ fun MusicBridgeApp(
                             onPresentationChange = state::updateArtistPresentation,
                             onSearchQueryChange = { state.artistSearchQuery = it },
                             onFavoritesOnlyChange = state::updateArtistFavoritesOnly,
+                            onBack = state::navigateBack,
                             onGoHome = { state.switchPrimarySection(AppSection.Home) },
                             onArtistClick = state::openArtistAlbums,
+                        )
+                    }
+                } else if (currentSection == AppSection.Search) {
+                    val search = state.searchCoordinator
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        SearchSection(
+                            queryInput = search.queryInput,
+                            activeQuery = search.activeQuery,
+                            selectedTab = search.selectedTab,
+                            history = search.history,
+                            isOverviewLoading = search.isOverviewLoading,
+                            overviewError = search.overviewError,
+                            overview = search.overview,
+                            categoryStates = search.categoryStates,
+                            bottomContentPadding = contentBottomPadding,
+                            activeSourceId = state.connectionPreferences.id,
+                            onQueryInputChange = search::onQueryInputChanged,
+                            onSubmitSearch = { search.submitSearch() },
+                            onSelectHistoryQuery = search::selectHistoryQuery,
+                            onRemoveHistoryQuery = search::removeHistoryQuery,
+                            onClearHistory = search::clearHistory,
+                            onSelectTab = search::selectTab,
+                            onRetryOverview = search::retryOverview,
+                            onRetryCategory = search::retryCategory,
+                            onLoadMoreCategory = search::loadMoreCategory,
+                            onNavigateBackFromResults = { search.navigateBackFromResults() },
+                            onClearToRecent = { search.clearToRecent(clearInput = true) },
+                            onOpenBestMatch = search::openBestMatch,
+                            onOpenArtist = search::openArtist,
+                            onOpenAlbum = search::openAlbum,
+                            onPlayTrack = search::playTrack,
+                            onPlayArtist = { artist, shuffle ->
+                                search.recordHistoryIfActive()
+                                state.playArtist(artist, shuffle = shuffle)
+                            },
+                            onEnqueueArtist = { artist, placement ->
+                                search.recordHistoryIfActive()
+                                state.enqueueArtist(artist, placement)
+                            },
+                            onToggleArtistFavorite = state::toggleArtistFavorite,
+                            onPlayAlbum = { album ->
+                                search.recordHistoryIfActive()
+                                state.playAlbum(album)
+                            },
+                            onEnqueueAlbum = { album, placement ->
+                                search.recordHistoryIfActive()
+                                state.enqueueAlbum(album, placement)
+                            },
+                            onToggleAlbumFavorite = state::toggleAlbumFavorite,
+                            onEnqueueTrack = { track, placement ->
+                                search.recordHistoryIfActive()
+                                state.enqueueTrack(track, placement)
+                            },
+                            onToggleTrackFavorite = state::toggleTrackFavorite,
                         )
                     }
                 } else if (currentSection == AppSection.Playlists) {
@@ -881,8 +937,13 @@ fun MusicBridgeApp(
                             state.albumSearchQuery = ""
                             state.navigateTo(AppSection.AllAlbums)
                         },
+                        onOpenArtists = {
+                            state.artistSearchQuery = ""
+                            state.navigateTo(AppSection.Artists)
+                        },
                         onOpenFavorites = { state.navigateTo(AppSection.FavoriteCollection) },
                         onOpenRecentAdded = { state.navigateTo(AppSection.RecentAdded) },
+                        artistCount = state.artists.size,
                         homeWorks = state.homeWorks,
                         isWorksLoading = state.isWorksLoading,
                         worksError = state.worksError,
@@ -975,7 +1036,7 @@ fun MusicBridgeApp(
                 onSectionChange = { section: AppSection ->
                     when (section) {
                         AppSection.Home,
-                        AppSection.Artists,
+                        AppSection.Search,
                         AppSection.Playlists,
                         AppSection.Settings -> state.switchPrimarySection(section)
                         else -> Unit

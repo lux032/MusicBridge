@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.Sort
 import androidx.compose.material.icons.filled.Speaker
@@ -72,8 +73,10 @@ internal fun HomeSection(
     onAlbumQueueAction: (MusicAlbum, QueuePlacement) -> Unit,
     onPlayAlbum: (MusicAlbum) -> Unit = {},
     onOpenAllAlbums: () -> Unit,
+    onOpenArtists: () -> Unit = {},
     onOpenFavorites: () -> Unit,
     onOpenRecentAdded: () -> Unit,
+    artistCount: Int = 0,
     homeWorks: com.lux032.musicbridge.music.Music032WorkRotation = com.lux032.musicbridge.music.Music032WorkRotation(),
     isWorksLoading: Boolean = false,
     worksError: String? = null,
@@ -180,11 +183,13 @@ internal fun HomeSection(
                             )
                         }
                     }
-                    HomeModule.QuickKeys -> if (allAlbums.isNotEmpty()) {
+                    HomeModule.QuickKeys -> if (allAlbums.isNotEmpty() || artistCount > 0) {
                         item(key = "home-quick-keys", contentType = "entry") {
                             HomeQuickKeys(
                                 albumCount = allAlbums.size,
+                                artistCount = artistCount,
                                 onOpenAllAlbums = onOpenAllAlbums,
+                                onOpenArtists = onOpenArtists,
                                 onOpenFavorites = onOpenFavorites,
                                 onOpenRecentAdded = onOpenRecentAdded,
                             )
@@ -389,39 +394,56 @@ internal fun EntryActionCard(
 }
 
 /**
- * Home quick-entry keys (Design D): three real destinations as tonal squircle keys instead of
- * the old full-width "全部专辑" card. The first key carries the synced album count.
+ * Home quick-entry keys (Design D): horizontally scrollable tonal squircle keys for
+ * All Albums, Artists, Favorite Albums, and Recently Added.
  */
 @Composable
 private fun HomeQuickKeys(
     albumCount: Int,
+    artistCount: Int,
     onOpenAllAlbums: () -> Unit,
+    onOpenArtists: () -> Unit,
     onOpenFavorites: () -> Unit,
     onOpenRecentAdded: () -> Unit,
 ) {
-    Row(
+    LazyRow(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        HomeQuickKey(
-            icon = Icons.Filled.Album,
-            label = Strings.allAlbums,
-            detail = "%,d".format(albumCount),
-            onClick = onOpenAllAlbums,
-            modifier = Modifier.weight(1.35f),
-        )
-        HomeQuickKey(
-            icon = Icons.Filled.Favorite,
-            label = Strings.favoriteAlbums,
-            onClick = onOpenFavorites,
-            modifier = Modifier.weight(1f),
-        )
-        HomeQuickKey(
-            icon = Icons.Filled.LibraryMusic,
-            label = Strings.recentAdded,
-            onClick = onOpenRecentAdded,
-            modifier = Modifier.weight(1f),
-        )
+        item(key = "quick-all-albums") {
+            HomeQuickKey(
+                icon = Icons.Filled.Album,
+                label = Strings.allAlbums,
+                detail = "%,d".format(albumCount),
+                onClick = onOpenAllAlbums,
+                modifier = Modifier.width(120.dp),
+            )
+        }
+        item(key = "quick-artists") {
+            HomeQuickKey(
+                icon = Icons.Filled.Person,
+                label = Strings.artists,
+                detail = if (artistCount > 0) "%,d".format(artistCount) else null,
+                onClick = onOpenArtists,
+                modifier = Modifier.width(100.dp),
+            )
+        }
+        item(key = "quick-favorites") {
+            HomeQuickKey(
+                icon = Icons.Filled.Favorite,
+                label = Strings.favoriteAlbums,
+                onClick = onOpenFavorites,
+                modifier = Modifier.width(100.dp),
+            )
+        }
+        item(key = "quick-recent-added") {
+            HomeQuickKey(
+                icon = Icons.Filled.LibraryMusic,
+                label = Strings.recentAdded,
+                onClick = onOpenRecentAdded,
+                modifier = Modifier.width(100.dp),
+            )
+        }
     }
 }
 

@@ -18,6 +18,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
@@ -508,6 +510,9 @@ internal fun TonalSearchField(
     onValueChange: (String) -> Unit,
     placeholder: String,
     modifier: Modifier = Modifier,
+    keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
+    keyboardActions: KeyboardActions = KeyboardActions.Default,
+    onClear: (() -> Unit)? = null,
 ) {
     androidx.compose.material3.TextField(
         value = value,
@@ -516,6 +521,8 @@ internal fun TonalSearchField(
         placeholder = { Text(placeholder, color = AppColors.TextTertiary) },
         singleLine = true,
         shape = KeyShape,
+        keyboardOptions = keyboardOptions,
+        keyboardActions = keyboardActions,
         leadingIcon = {
             Icon(
                 Icons.Filled.Search,
@@ -528,7 +535,7 @@ internal fun TonalSearchField(
                 BareIcon(
                     icon = Icons.Filled.Close,
                     contentDescription = Strings.clear,
-                    onClick = { onValueChange("") },
+                    onClick = { onClear?.invoke() ?: onValueChange("") },
                     iconSize = 20.dp,
                 )
             }

@@ -141,7 +141,7 @@ internal fun BottomNavigationBar(
     val navigationBarBottomInset = WindowInsets.navigationBars
         .asPaddingValues()
         .calculateBottomPadding()
-    val sections = listOf(AppSection.Home, AppSection.Artists, AppSection.Playlists, AppSection.Settings)
+    val sections = listOf(AppSection.Home, AppSection.Search, AppSection.Playlists, AppSection.Settings)
 
     // Docked Material navigation bar (Design D): it shares the deep dock colour with the room
     // bar above it, so the two read as one bottom block instead of two floating pills.
@@ -223,7 +223,7 @@ internal fun AppNavigationRail(
         ) {
             listOf(
                 AppSection.Home,
-                AppSection.Artists,
+                AppSection.Search,
                 AppSection.Playlists,
                 AppSection.Settings,
             ).forEach { section ->
@@ -245,6 +245,7 @@ internal fun BottomNavButton(
 ) {
     val icon = when (section) {
         AppSection.Home -> NavIcon.Home
+        AppSection.Search -> NavIcon.Search
         AppSection.Artists -> NavIcon.Artists
         AppSection.Playlists -> NavIcon.Playlists
         AppSection.Settings -> NavIcon.Settings
@@ -252,6 +253,7 @@ internal fun BottomNavButton(
     }
     val label = when (section) {
         AppSection.Home -> Strings.home
+        AppSection.Search -> Strings.search
         AppSection.Artists -> Strings.artists
         AppSection.Playlists -> Strings.playlists
         AppSection.Settings -> Strings.settings
@@ -360,10 +362,12 @@ internal fun LoadingCard(message: String) {
 internal fun EmptyStateCard(
     title: String,
     body: String,
-    actionLabel: String,
-    onAction: () -> Unit,
+    actionLabel: String? = null,
+    onAction: (() -> Unit)? = null,
+    modifier: Modifier = Modifier,
 ) {
     Surface(
+        modifier = modifier,
         shape = RoundedCornerShape(22.dp),
         color = AppColors.CardSurface,
     ) {
@@ -378,7 +382,9 @@ internal fun EmptyStateCard(
                 fontWeight = FontWeight.Bold,
             )
             Text(text = body, color = AppColors.TextSecondary)
-            LabelKey(text = actionLabel, onClick = onAction, style = KeyStyle.Hi)
+            if (actionLabel != null && onAction != null) {
+                LabelKey(text = actionLabel, onClick = onAction, style = KeyStyle.Hi)
+            }
         }
     }
 }
@@ -511,6 +517,8 @@ internal fun QueueActionMenu(
     onRemoveFromPlaylist: (() -> Unit)? = null,
     recommendationBlocked: Boolean = false,
     onToggleRecommendationBlock: (() -> Unit)? = null,
+    isFavorite: Boolean = false,
+    onToggleFavorite: (() -> Unit)? = null,
 ) {
     DropdownMenu(expanded = expanded, onDismissRequest = onDismiss, shape = RoundedCornerShape(16.dp)) {
         if (onPlay != null) {
@@ -570,6 +578,25 @@ internal fun QueueActionMenu(
                     },
                 )
             }
+            HorizontalDivider(
+                color = KeyColors.Line,
+                modifier = Modifier.padding(vertical = 4.dp),
+            )
+        }
+        if (onToggleFavorite != null) {
+            DropdownMenuItem(
+                text = { Text(if (isFavorite) Strings.searchUnfavoriteAction else Strings.searchFavoriteAction) },
+                leadingIcon = {
+                    Icon(
+                        if (isFavorite) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
+                        contentDescription = null,
+                    )
+                },
+                onClick = {
+                    onDismiss()
+                    onToggleFavorite()
+                },
+            )
             HorizontalDivider(
                 color = KeyColors.Line,
                 modifier = Modifier.padding(vertical = 4.dp),
@@ -663,6 +690,7 @@ internal fun NavIconGraphic(
 ) {
     when (icon) {
         NavIcon.Home -> Icon(Icons.Filled.Home, Strings.home, tint = tint, modifier = modifier)
+        NavIcon.Search -> Icon(Icons.Filled.Search, Strings.search, tint = tint, modifier = modifier)
         NavIcon.Artists -> Icon(Icons.Filled.Person, Strings.artists, tint = tint, modifier = modifier)
         NavIcon.Playlists -> Icon(Icons.Filled.QueueMusic, Strings.playlists, tint = tint, modifier = modifier)
         NavIcon.Settings -> Icon(Icons.Filled.Settings, Strings.settings, tint = tint, modifier = modifier)

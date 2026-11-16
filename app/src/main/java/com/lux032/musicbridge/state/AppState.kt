@@ -141,11 +141,12 @@ class AppState(
     val downloadedTrackKeys = offlineDownloadManager.downloadedKeys
     val downloadedAlbums = offlineDownloadManager.downloadedAlbums
     val activeDownloadProgress = offlineDownloadManager.downloadProgress
-    private val libraryCoordinator = AppStateLibraryCoordinator(this)
+    internal val libraryCoordinator = AppStateLibraryCoordinator(this)
     private val playbackCoordinator = AppStatePlaybackCoordinator(this)
     private val playlistCoordinator = AppStatePlaylistCoordinator(this)
     private val dailyMixCoordinator = AppStateDailyMixCoordinator(this)
     private val worksCoordinator = AppStateWorksCoordinator(this)
+    internal val searchCoordinator = AppStateSearchCoordinator(this)
     var homeWorks by mutableStateOf(com.lux032.musicbridge.music.Music032WorkRotation())
     var homeWorksSourceId by mutableStateOf("")
     var isWorksLoading by mutableStateOf(false)
@@ -725,6 +726,7 @@ class AppState(
         clearLibraryForServerChange()
         recentPlayedAlbumKeys = appPreferences.loadRecentPlayedAlbumKeys(profile.id)
         lastAlbumSyncEpochMillis = appPreferences.loadLastAlbumSyncEpochMillis(profile.id)
+        searchCoordinator.loadHistory()
         probeActive032Profile(profile, probeProvidedToken = true)
         scope.launch {
             loadAlbumsFromLocalStore()
@@ -784,6 +786,8 @@ class AppState(
         errorMessage = null
         dailyMixCoordinator.reset()
         worksCoordinator.reset()
+        searchCoordinator.reset()
+        searchCoordinator.loadHistory()
     }
 
     fun openAlbumDetail(album: MusicAlbum) = libraryCoordinator.openAlbumDetail(album)
@@ -801,7 +805,15 @@ class AppState(
         artistChoices = emptyList()
     }
 
+    fun playArtist(artist: ArtistSummary, shuffle: Boolean = false) = libraryCoordinator.playArtist(artist, shuffle)
+
     fun shuffleArtist(artist: ArtistSummary) = libraryCoordinator.shuffleArtist(artist)
+
+    fun enqueueArtist(artist: ArtistSummary, placement: QueuePlacement) =
+        libraryCoordinator.enqueueArtist(artist, placement)
+
+    internal fun enqueueTracks(tracks: List<MusicTrack>, placement: QueuePlacement, label: String) =
+        playbackCoordinator.enqueueTracks(tracks, placement, label)
 
     fun loadPlaylists() = libraryCoordinator.loadPlaylists()
 
@@ -1046,6 +1058,7 @@ class AppState(
     private var persistedAlbum: MusicAlbum? = null
 
     init {
+        searchCoordinator.loadHistory()
         // Library caches of servers whose type is no longer supported (Plex).
         appPreferences.retiredServerIds.takeIf { it.isNotEmpty() }?.let { retired ->
             scope.launch(Dispatchers.IO) { retired.forEach(albumLocalStore::deleteServerData) }

@@ -383,43 +383,17 @@ internal class AppStateLibraryCoordinator(
     private fun splitArtistCredit(text: String): List<String> =
         text.split(", ", "、", " / ", "; ").map(String::trim).filter(String::isNotEmpty).distinct()
 
-    fun shuffleArtist(artist: ArtistSummary) {
-        if (state.isPlaybackCommandLoading || artist.albums.isEmpty()) return
+    fun playArtist(artist: ArtistSummary, shuffle: Boolean = false) {
+        if (state.isPlaybackCommandLoading) return
+        if (artist.ratingKey == null && artist.albums.isEmpty()) return
 
         state.isPlaybackCommandLoading = true
         state.errorMessage = null
         state.actionMessage = "正在整理 ${artist.name} 的歌曲..."
         state.scope.launch {
             runCatching {
-                val artistKey = artist.ratingKey
-                val performedTracks = if (isMusic032Active && artistKey != null) {
-                    // 032: only what the artist performs — not every track of a compilation
-                    // they merely appear on.
-                    withContext(Dispatchers.IO) {
-                        state.albumLocalStore.getArtistTracks(artist.sourceId, artistKey)
-                    }.ifEmpty {
-                        runCatching {
-                            state.clientFor(artist.sourceId).fetchArtistTracks(
-                                MusicArtist(ratingKey = artistKey, title = artist.name, thumbUrl = artist.coverUrl, sourceId = artist.sourceId)
-                            )
-                        }.getOrDefault(emptyList())
-                    }
-                } else {
-                    emptyList()
-                }
-                val tracks = performedTracks.ifEmpty { artist.albums.flatMap { album ->
-                    val cachedTracks = withContext(Dispatchers.IO) {
-                        state.albumLocalStore.getAlbumTracks(album.sourceId, album.ratingKey)
-                    }
-                    cachedTracks.ifEmpty {
-                        runCatching {
-                            state.clientFor(album.sourceId).fetchAlbumTrackStreams(album).tracks
-                        }.getOrDefault(emptyList())
-                    }
-                } }
-                    .distinctBy(MusicTrack::ratingKey)
-                    .shuffled()
-
+                val tracks = resolvePlayableArtistTracks(artist)
+                    .let { if (shuffle) it.shuffled() else it }
                 check(tracks.isNotEmpty()) { "未找到 ${artist.name} 的可播放歌曲" }
                 PlaylistTracksResult(
                     serverName = "",
@@ -434,12 +408,83 @@ internal class AppStateLibraryCoordinator(
                 )
             }.onSuccess { result ->
                 state.startPlaylistPlayback(result, shuffle = false)
-                state.actionMessage = "正在随机播放 ${artist.name} 的 ${result.tracks.size} 首歌曲"
+                state.actionMessage = if (shuffle) {
+                    "正在随机播放 ${artist.name} 的 ${result.tracks.size} 首歌曲"
+                } else {
+                    "正在播放 ${artist.name} 的 ${result.tracks.size} 首歌曲"
+                }
             }.onFailure {
                 state.errorMessage = it.message ?: "加载歌手歌曲失败"
                 state.isPlaybackCommandLoading = false
             }
         }
+    }
+
+    fun shuffleArtist(artist: ArtistSummary) = playArtist(artist, shuffle = true)
+
+    fun enqueueArtist(artist: ArtistSummary, placement: QueuePlacement) {
+        if (state.isPlaybackCommandLoading) return
+        if (artist.ratingKey == null && artist.albums.isEmpty()) return
+
+        state.isPlaybackCommandLoading = true
+        state.errorMessage = null
+        state.scope.launch {
+            runCatching {
+                val tracks = resolvePlayableArtistTracks(artist)
+                check(tracks.isNotEmpty()) { "未找到 ${artist.name} 的可播放歌曲" }
+                tracks
+            }.onSuccess { tracks ->
+                state.isPlaybackCommandLoading = false
+                state.enqueueTracks(tracks, placement, artist.name)
+            }.onFailure {
+                state.isPlaybackCommandLoading = false
+                state.errorMessage = it.message ?: "加载歌手歌曲失败"
+            }
+        }
+    }
+
+    private suspend fun resolvePlayableArtistTracks(artist: ArtistSummary): List<MusicTrack> {
+        val artistKey = artist.ratingKey
+        val performedTracks = if (isMusic032Active && artistKey != null) {
+            // 032: only what the artist performs — not every track of a compilation
+            // they merely appear on.
+            withContext(Dispatchers.IO) {
+                state.albumLocalStore.getArtistTracks(artist.sourceId, artistKey)
+            }.ifEmpty {
+                runCatching {
+                    state.clientFor(artist.sourceId).fetchArtistTracks(
+                        MusicArtist(ratingKey = artistKey, title = artist.name, thumbUrl = artist.coverUrl, sourceId = artist.sourceId)
+                    )
+                }.getOrDefault(emptyList())
+            }
+        } else {
+            emptyList()
+        }
+        if (performedTracks.isNotEmpty()) {
+            return performedTracks.distinctBy(MusicTrack::ratingKey)
+        }
+        val albumTracks = artist.albums.flatMap { album ->
+            val cachedTracks = withContext(Dispatchers.IO) {
+                state.albumLocalStore.getAlbumTracks(album.sourceId, album.ratingKey)
+            }
+            cachedTracks.ifEmpty {
+                runCatching {
+                    state.clientFor(album.sourceId).fetchAlbumTrackStreams(album).tracks
+                }.getOrDefault(emptyList())
+            }
+        }
+        if (albumTracks.isNotEmpty()) {
+            return albumTracks.distinctBy(MusicTrack::ratingKey)
+        }
+        if (isMusic032Active && artistKey != null) {
+            val client = runCatching { state.clientFor(artist.sourceId) as? Music032Client }.getOrNull()
+            if (client != null) {
+                return runCatching { client.fetchArtistCredits(artistKey, limit = 100, offset = 0).items.map { it.track } }
+                    .getOrDefault(emptyList())
+                    .distinctBy(MusicTrack::ratingKey)
+            }
+        }
+        return emptyList()
     }
 
     fun loadPlaylists() {
@@ -862,6 +907,7 @@ internal class AppStateLibraryCoordinator(
                 current
             }
         }
+        state.searchCoordinator.syncAlbumFavorite(updatedAlbum)
     }
 
     fun replaceTrackInState(updatedTrack: MusicTrack) {
@@ -932,6 +978,7 @@ internal class AppStateLibraryCoordinator(
                 )
             }
         }
+        state.searchCoordinator.syncTrackFavorite(updatedTrack)
     }
 
     fun toggleAlbumFavorite(album: MusicAlbum) {
@@ -986,6 +1033,7 @@ internal class AppStateLibraryCoordinator(
                         state.albumLocalStore.updateArtistFavorite(artist.sourceId, ratingKey, newRating)
                     }
                 }
+                state.searchCoordinator.syncArtistFavorite(artist.sourceId, ratingKey, newRating)
                 state.actionMessage = if (targetFavorite) {
                     "已收藏歌手：${artist.name}"
                 } else {
@@ -1277,7 +1325,7 @@ internal class AppStateLibraryCoordinator(
         }
     }
 
-    private fun resolveAlbumForTrack(
+    internal fun resolveAlbumForTrack(
         track: MusicTrack,
         fallbackAlbum: MusicAlbum? = null,
     ): MusicAlbum {

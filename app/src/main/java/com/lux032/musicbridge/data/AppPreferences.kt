@@ -275,6 +275,7 @@ class AppPreferences(context: Context) {
             remove(syncKey(sourceId))
             remove(lastSessionKey(sourceId))
             remove(resumeBlockKey(sourceId))
+            remove(searchHistoryKey(sourceId))
         }
     }
 
@@ -441,10 +442,20 @@ class AppPreferences(context: Context) {
         }
     }
 
+    fun loadSearchHistory(sourceId: String): List<String> =
+        parseSearchHistoryJson(sharedPreferences.getString(searchHistoryKey(sourceId), null))
+
+    fun saveSearchHistory(sourceId: String, items: List<String>) {
+        sharedPreferences.edit {
+            putString(searchHistoryKey(sourceId), encodeSearchHistoryJson(items))
+        }
+    }
+
     private fun recentKey(sourceId: String) = "${KEY_RECENT_PLAYED_ALBUM_KEYS}_$sourceId"
     private fun syncKey(sourceId: String) = "${KEY_LAST_ALBUM_SYNC_EPOCH_MILLIS}_$sourceId"
     private fun lastSessionKey(sourceId: String) = "${KEY_MUSIC032_LAST_SESSION}_$sourceId"
     private fun resumeBlockKey(sourceId: String) = "${KEY_MUSIC032_RESUME_BLOCK}_$sourceId"
+    private fun searchHistoryKey(sourceId: String) = "${KEY_SEARCH_HISTORY}_$sourceId"
 
     companion object {
         const val KEY_OPUS_TRANSCODE_MODE = "opus_transcode_mode_v1"
@@ -482,8 +493,37 @@ class AppPreferences(context: Context) {
         private const val KEY_ARTIST_PRESENTATION = "artist_presentation_v1"
         private const val KEY_ARTIST_FAVORITES_ONLY = "artist_favorites_only_v1"
         private const val KEY_HOME_LAYOUT = "home_layout_v1"
+        private const val KEY_SEARCH_HISTORY = "search_history_v1"
         private const val RECENT_PLAYED_SEPARATOR = "|"
         private const val MAX_RECENT_PLAYED = 100
+        private const val MAX_SEARCH_HISTORY = 20
+
+        internal fun normalizeSearchHistory(items: List<String>): List<String> =
+            items.asSequence()
+                .map(String::trim)
+                .filter(String::isNotEmpty)
+                .distinct()
+                .take(MAX_SEARCH_HISTORY)
+                .toList()
+
+        internal fun parseSearchHistoryJson(raw: String?): List<String> {
+            if (raw.isNullOrBlank()) return emptyList()
+            return runCatching {
+                val array = JSONArray(raw)
+                val parsed = buildList {
+                    for (index in 0 until array.length()) {
+                        add(array.optString(index))
+                    }
+                }
+                normalizeSearchHistory(parsed)
+            }.getOrDefault(emptyList())
+        }
+
+        internal fun encodeSearchHistoryJson(items: List<String>): String {
+            val array = JSONArray()
+            normalizeSearchHistory(items).forEach(array::put)
+            return array.toString()
+        }
 
         fun getOpusTranscodeMode(context: Context): OpusTranscodeMode =
             AppPreferences(context).getOpusTranscodeMode()

@@ -6,6 +6,7 @@ import com.lux032.musicbridge.sonos.SonosRoom
 
 enum class AppSection {
     Home,
+    Search,
     Artists,
     Playlists,
     AlbumDetail,
@@ -323,6 +324,7 @@ enum class OpusTranscodeMode(val id: String, val mimeType: String) {
 
 enum class NavIcon {
     Home,
+    Search,
     Artists,
     Playlists,
     Settings,
