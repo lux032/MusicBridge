@@ -69,11 +69,15 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import kotlin.math.roundToLong
+import com.lux032.musicbridge.music.AlbumDiscGroup
 import com.lux032.musicbridge.music.ArtistRef
 import com.lux032.musicbridge.music.MusicAlbum
 import com.lux032.musicbridge.music.AlbumTracksResult
 import com.lux032.musicbridge.music.MusicTrack
+import com.lux032.musicbridge.music.effectiveDiscCount
+import com.lux032.musicbridge.music.groupByDisc
 import com.lux032.musicbridge.music.isFavorite
+import com.lux032.musicbridge.music.isMultiDiscAlbum
 import com.lux032.musicbridge.music.playbackUrlIdentity
 import com.lux032.musicbridge.music.LyricsTranslationSettings
 import com.lux032.musicbridge.music.willTranscodeLocally
@@ -1428,7 +1432,10 @@ internal fun AlbumDetailSection(
     onDeleteDownloadedTrack: (MusicTrack) -> Unit = {},
     onDownloadAlbum: (MusicAlbum, List<MusicTrack>) -> Unit = { _, _ -> },
     onDeleteDownloadedAlbum: (MusicAlbum) -> Unit = {},
+    onDeleteDownloadedDisc: (List<MusicTrack>, Int) -> Unit = { _, _ -> },
     onPlayAlbum: (AlbumTracksResult) -> Unit,
+    onPlayDisc: (MusicAlbum, AlbumDiscGroup<MusicTrack>) -> Unit = { _, _ -> },
+    onQueueDisc: (MusicAlbum, AlbumDiscGroup<MusicTrack>, QueuePlacement) -> Unit = { _, _, _ -> },
     onPlayTrack: (MusicAlbum, MusicTrack) -> Unit,
     nowPlaying: NowPlayingMarker? = LocalNowPlaying.current,
 ) {
@@ -1445,6 +1452,15 @@ internal fun AlbumDetailSection(
 
     val layoutInfo = LocalAppLayoutInfo.current
     var showAlbumQueueMenu by remember { mutableStateOf(false) }
+    val isMultiDisc = remember(currentTrackResult) {
+        isMultiDiscAlbum(currentTrackResult.album, currentTrackResult.tracks)
+    }
+    val discCount = remember(currentTrackResult) {
+        effectiveDiscCount(currentTrackResult.album, currentTrackResult.tracks)
+    }
+    val discGroups = remember(currentTrackResult, isMultiDisc) {
+        if (isMultiDisc) currentTrackResult.tracks.groupByDisc() else emptyList()
+    }
 
     Column(modifier = modifier.fillMaxSize()) {
         Box(
@@ -1477,6 +1493,8 @@ internal fun AlbumDetailSection(
             ) {
                 AlbumDetailHeroWide(
                     trackResult = currentTrackResult,
+                    isMultiDisc = isMultiDisc,
+                    discCount = discCount,
                     outputTargetName = outputTargetName,
                     isPlaybackLoading = isPlaybackLoading,
                     isFavoriteLoading = isFavoriteLoading,
@@ -1499,30 +1517,26 @@ internal fun AlbumDetailSection(
                     .fillMaxHeight(),
                 contentPadding = PaddingValues(bottom = bottomContentPadding),
             ) {
-                itemsIndexed(
-                    items = currentTrackResult.tracks,
-                    key = { index, track -> track.ratingKey ?: index },
-                    contentType = { _, _ -> "album-track" },
-                ) { index, track ->
-                    Box(modifier = Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)) {
-                        AlbumTrackRow(
-                            index = index,
-                            album = currentTrackResult.album,
-                            track = track,
-                            isPlaybackLoading = isPlaybackLoading,
-                            isFavoriteLoading = isFavoriteLoading,
-                            downloadedTrackKeys = downloadedTrackKeys,
-                            downloadProgress = downloadProgress,
-                            onDownloadTrack = onDownloadTrack,
-                            onDeleteDownloadedTrack = onDeleteDownloadedTrack,
-                            onToggleTrackFavorite = onToggleTrackFavorite,
-                            onQueueTrack = onQueueTrack,
-                            onPlayTrack = onPlayTrack,
-                            nowPlaying = nowPlaying?.takeIf { it.matches(track) },
-                        )
-                    }
-                }
-
+                albumTrackItems(
+                    album = currentTrackResult.album,
+                    tracks = currentTrackResult.tracks,
+                    isMultiDisc = isMultiDisc,
+                    discGroups = discGroups,
+                    isPlaybackLoading = isPlaybackLoading,
+                    isFavoriteLoading = isFavoriteLoading,
+                    downloadedTrackKeys = downloadedTrackKeys,
+                    downloadProgress = downloadProgress,
+                    onDownloadTrack = onDownloadTrack,
+                    onDeleteDownloadedTrack = onDeleteDownloadedTrack,
+                    onDownloadAlbum = onDownloadAlbum,
+                    onDeleteDownloadedDisc = onDeleteDownloadedDisc,
+                    onToggleTrackFavorite = onToggleTrackFavorite,
+                    onQueueTrack = onQueueTrack,
+                    onPlayDisc = onPlayDisc,
+                    onQueueDisc = onQueueDisc,
+                    onPlayTrack = onPlayTrack,
+                    nowPlaying = nowPlaying,
+                )
             }
         }
     } else {
@@ -1538,6 +1552,8 @@ internal fun AlbumDetailSection(
             item(key = "album-summary", contentType = "album-summary") {
                 AlbumDetailHeroCompact(
                     trackResult = currentTrackResult,
+                    isMultiDisc = isMultiDisc,
+                    discCount = discCount,
                     outputTargetName = outputTargetName,
                     isPlaybackLoading = isPlaybackLoading,
                     isFavoriteLoading = isFavoriteLoading,
@@ -1553,32 +1569,265 @@ internal fun AlbumDetailSection(
                     onDeleteDownloadedAlbum = onDeleteDownloadedAlbum,
                 )
             }
-            itemsIndexed(
-                items = currentTrackResult.tracks,
-                key = { index, track -> track.ratingKey ?: index },
-                contentType = { _, _ -> "album-track" },
-            ) { index, track ->
-                Box(modifier = Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)) {
-                    AlbumTrackRow(
-                        index = index,
-                        album = currentTrackResult.album,
-                        track = track,
-                        isPlaybackLoading = isPlaybackLoading,
-                        isFavoriteLoading = isFavoriteLoading,
-                        downloadedTrackKeys = downloadedTrackKeys,
-                        downloadProgress = downloadProgress,
-                        onDownloadTrack = onDownloadTrack,
-                        onDeleteDownloadedTrack = onDeleteDownloadedTrack,
-                        onToggleTrackFavorite = onToggleTrackFavorite,
-                        onQueueTrack = onQueueTrack,
-                        onPlayTrack = onPlayTrack,
-                        nowPlaying = nowPlaying?.takeIf { it.matches(track) },
-                    )
-                }
-            }
-
+            albumTrackItems(
+                album = currentTrackResult.album,
+                tracks = currentTrackResult.tracks,
+                isMultiDisc = isMultiDisc,
+                discGroups = discGroups,
+                isPlaybackLoading = isPlaybackLoading,
+                isFavoriteLoading = isFavoriteLoading,
+                downloadedTrackKeys = downloadedTrackKeys,
+                downloadProgress = downloadProgress,
+                onDownloadTrack = onDownloadTrack,
+                onDeleteDownloadedTrack = onDeleteDownloadedTrack,
+                onDownloadAlbum = onDownloadAlbum,
+                onDeleteDownloadedDisc = onDeleteDownloadedDisc,
+                onToggleTrackFavorite = onToggleTrackFavorite,
+                onQueueTrack = onQueueTrack,
+                onPlayDisc = onPlayDisc,
+                onQueueDisc = onQueueDisc,
+                onPlayTrack = onPlayTrack,
+                nowPlaying = nowPlaying,
+            )
         }
     }
+    }
+}
+
+private fun androidx.compose.foundation.lazy.LazyListScope.albumTrackItems(
+    album: MusicAlbum,
+    tracks: List<MusicTrack>,
+    isMultiDisc: Boolean,
+    discGroups: List<AlbumDiscGroup<MusicTrack>>,
+    isPlaybackLoading: Boolean,
+    isFavoriteLoading: Boolean,
+    downloadedTrackKeys: Set<String>,
+    downloadProgress: Map<String, Float>,
+    onDownloadTrack: (MusicTrack) -> Unit,
+    onDeleteDownloadedTrack: (MusicTrack) -> Unit,
+    onDownloadAlbum: (MusicAlbum, List<MusicTrack>) -> Unit,
+    onDeleteDownloadedDisc: (List<MusicTrack>, Int) -> Unit,
+    onToggleTrackFavorite: (MusicTrack) -> Unit,
+    onQueueTrack: (MusicTrack, QueuePlacement) -> Unit,
+    onPlayDisc: (MusicAlbum, AlbumDiscGroup<MusicTrack>) -> Unit,
+    onQueueDisc: (MusicAlbum, AlbumDiscGroup<MusicTrack>, QueuePlacement) -> Unit,
+    onPlayTrack: (MusicAlbum, MusicTrack) -> Unit,
+    nowPlaying: NowPlayingMarker?,
+) {
+    if (!isMultiDisc) {
+        itemsIndexed(
+            items = tracks,
+            key = { index, track -> track.ratingKey ?: index },
+            contentType = { _, _ -> "album-track" },
+        ) { index, track ->
+            val displayNumber = (track.trackNumber?.takeIf { it > 0 } ?: (index + 1)).toString()
+            Box(modifier = Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)) {
+                AlbumTrackRow(
+                    index = index,
+                    displayNumber = displayNumber,
+                    album = album,
+                    track = track,
+                    isPlaybackLoading = isPlaybackLoading,
+                    isFavoriteLoading = isFavoriteLoading,
+                    downloadedTrackKeys = downloadedTrackKeys,
+                    downloadProgress = downloadProgress,
+                    onDownloadTrack = onDownloadTrack,
+                    onDeleteDownloadedTrack = onDeleteDownloadedTrack,
+                    onToggleTrackFavorite = onToggleTrackFavorite,
+                    onQueueTrack = onQueueTrack,
+                    onPlayTrack = onPlayTrack,
+                    nowPlaying = nowPlaying?.takeIf { it.matches(track) },
+                )
+            }
+        }
+        return
+    }
+
+    discGroups.forEachIndexed { groupIndex, discGroup ->
+        item(
+            key = "disc-header-${discGroup.discNumber}",
+            contentType = "album-disc-header",
+        ) {
+            AlbumDiscHeaderRow(
+                album = album,
+                discGroup = discGroup,
+                isFirstDisc = groupIndex == 0,
+                isPlaybackLoading = isPlaybackLoading,
+                downloadedTrackKeys = downloadedTrackKeys,
+                onPlayDisc = { onPlayDisc(album, discGroup) },
+                onQueueDisc = { placement -> onQueueDisc(album, discGroup, placement) },
+                onDownloadDisc = { onDownloadAlbum(album, discGroup.tracks) },
+                onDeleteDownloadedDisc = { onDeleteDownloadedDisc(discGroup.tracks, discGroup.discNumber) },
+            )
+        }
+        itemsIndexed(
+            items = discGroup.tracks,
+            key = { index, track -> "d${discGroup.discNumber}:${track.ratingKey ?: index}" },
+            contentType = { _, _ -> "album-track" },
+        ) { indexInDisc, track ->
+            // Multi-disc albums restart track numbers from 1 per disc on compact mobile rows.
+            val displayNumber = (indexInDisc + 1).toString()
+            Box(modifier = Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)) {
+                AlbumTrackRow(
+                    index = indexInDisc,
+                    displayNumber = displayNumber,
+                    album = album,
+                    track = track,
+                    isPlaybackLoading = isPlaybackLoading,
+                    isFavoriteLoading = isFavoriteLoading,
+                    downloadedTrackKeys = downloadedTrackKeys,
+                    downloadProgress = downloadProgress,
+                    onDownloadTrack = onDownloadTrack,
+                    onDeleteDownloadedTrack = onDeleteDownloadedTrack,
+                    onToggleTrackFavorite = onToggleTrackFavorite,
+                    onQueueTrack = onQueueTrack,
+                    onPlayTrack = onPlayTrack,
+                    nowPlaying = nowPlaying?.takeIf { it.matches(track) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AlbumDiscHeaderRow(
+    album: MusicAlbum,
+    discGroup: AlbumDiscGroup<MusicTrack>,
+    isFirstDisc: Boolean,
+    isPlaybackLoading: Boolean,
+    downloadedTrackKeys: Set<String>,
+    onPlayDisc: () -> Unit,
+    onQueueDisc: (QueuePlacement) -> Unit,
+    onDownloadDisc: () -> Unit,
+    onDeleteDownloadedDisc: () -> Unit,
+) {
+    val palette = LocalArtworkPalette.current
+    var showMenu by remember { mutableStateOf(false) }
+    var showDeleteDialog by remember { mutableStateOf(false) }
+    val isDiscDownloaded = remember(discGroup.tracks, downloadedTrackKeys) {
+        discGroup.tracks.isNotEmpty() && discGroup.tracks.all { track ->
+            "${track.sourceId}:${track.ratingKey}" in downloadedTrackKeys || track.ratingKey in downloadedTrackKeys
+        }
+    }
+    val metaText = remember(discGroup.tracks.size, discGroup.totalDurationMillis) {
+        buildString {
+            append(Strings.tracks(discGroup.tracks.size))
+            if (discGroup.totalDurationMillis > 0L) {
+                append(" · ")
+                append(formatDuration(discGroup.totalDurationMillis))
+            }
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = if (isFirstDisc) 8.dp else 18.dp, bottom = 4.dp),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(34.dp)
+                    .clip(CircleShape)
+                    .background(
+                        if (!isPlaybackLoading) palette.accent else palette.accent.copy(alpha = 0.45f),
+                    )
+                    .clickable(
+                        enabled = !isPlaybackLoading,
+                        role = Role.Button,
+                        onClickLabel = Strings.discPlayContentDescription(discGroup.discNumber),
+                        onClick = onPlayDisc,
+                    )
+                    .semantics {
+                        contentDescription = Strings.discPlayContentDescription(discGroup.discNumber)
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.PlayArrow,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(1.dp),
+            ) {
+                Text(
+                    text = Strings.discLabel(discGroup.discNumber),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = AppColors.TextPrimary,
+                )
+                Text(
+                    text = metaText,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AppColors.TextTertiary,
+                )
+            }
+            Box {
+                BareIcon(
+                    icon = Icons.Filled.MoreVert,
+                    contentDescription = Strings.discMoreContentDescription(discGroup.discNumber),
+                    onClick = { showMenu = true },
+                    modifier = Modifier.offset(x = 8.dp),
+                )
+                QueueActionMenu(
+                    expanded = showMenu,
+                    onDismiss = { showMenu = false },
+                    onAction = { placement ->
+                        showMenu = false
+                        onQueueDisc(placement)
+                    },
+                    onPlay = {
+                        showMenu = false
+                        onPlayDisc()
+                    },
+                    isDownloaded = isDiscDownloaded,
+                    downloadLabel = if (isDiscDownloaded) Strings.deleteDiscDownload else Strings.downloadDiscOriginal,
+                    onDownloadAction = {
+                        if (isDiscDownloaded) {
+                            showDeleteDialog = true
+                        } else {
+                            onDownloadDisc()
+                        }
+                    },
+                    onAddToPlaylist = addTracksToPlaylistAction(discGroup.tracks),
+                )
+            }
+        }
+        Hairline()
+    }
+
+    if (showDeleteDialog) {
+        AlertDialog(
+            onDismissRequest = { showDeleteDialog = false },
+            title = { Text(Strings.deleteDiscDownload) },
+            text = { Text("${album.title} · ${Strings.discLabel(discGroup.discNumber)}") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showDeleteDialog = false
+                    onDeleteDownloadedDisc()
+                }) {
+                    Text(Strings.confirmDelete, color = AppColors.ErrorText)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteDialog = false }) {
+                    Text(Strings.cancel, color = AppColors.TextSecondary)
+                }
+            },
+            containerColor = palette.backgroundBottom,
+            titleContentColor = AppColors.TextPrimary,
+            textContentColor = AppColors.TextSecondary,
+        )
     }
 }
 
@@ -1586,6 +1835,8 @@ internal fun AlbumDetailSection(
 @Composable
 private fun AlbumDetailHeroWide(
     trackResult: AlbumTracksResult,
+    isMultiDisc: Boolean,
+    discCount: Int,
     outputTargetName: String,
     isPlaybackLoading: Boolean,
     isFavoriteLoading: Boolean,
@@ -1688,6 +1939,10 @@ private fun AlbumDetailHeroWide(
             text = buildString {
                 album.year?.let {
                     append(it)
+                    append(" · ")
+                }
+                if (isMultiDisc) {
+                    append(Strings.discCountFact(discCount))
                     append(" · ")
                 }
                 append(Strings.tracks(trackResult.tracks.size))
@@ -1820,6 +2075,8 @@ private fun AlbumActionRow(
 @Composable
 private fun AlbumDetailHeroCompact(
     trackResult: AlbumTracksResult,
+    isMultiDisc: Boolean,
+    discCount: Int,
     outputTargetName: String,
     isPlaybackLoading: Boolean,
     isFavoriteLoading: Boolean,
@@ -1932,6 +2189,7 @@ private fun AlbumDetailHeroCompact(
         Text(
             text = buildString {
                 album.year?.let { append("$it · ") }
+                if (isMultiDisc) append(Strings.discCountFact(discCount)).append(" · ")
                 append(Strings.tracks(totalTracks))
                 if (totalDurationMillis > 0L) append(" · ").append(formatDuration(totalDurationMillis))
                 codec?.let { append(" · $it") }
@@ -1997,6 +2255,7 @@ private fun DeleteAlbumDownloadDialog(onConfirm: () -> Unit, onDismiss: () -> Un
 @Composable
 private fun AlbumTrackRow(
     index: Int,
+    displayNumber: String = "${index + 1}",
     album: MusicAlbum,
     track: MusicTrack,
     isPlaybackLoading: Boolean,
@@ -2039,9 +2298,9 @@ private fun AlbumTrackRow(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 TrackNumberSlot(
-                    text = "${index + 1}",
+                    text = displayNumber,
                     nowPlaying = nowPlaying,
-                    modifier = Modifier.width(24.dp),
+                    modifier = Modifier.widthIn(min = 24.dp),
                 )
                 Column(
                     modifier = Modifier.weight(1f),

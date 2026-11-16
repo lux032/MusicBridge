@@ -842,6 +842,7 @@ fun MusicBridgeApp(
                             onDeleteDownloadedTrack = state::deleteDownloadedTrack,
                             onDownloadAlbum = state::downloadAlbum,
                             onDeleteDownloadedAlbum = state::deleteDownloadedAlbum,
+                            onDeleteDownloadedDisc = state::deleteDownloadedDisc,
                             onReturnHome = state::navigateBack,
                             onArtistClick = state::openArtistLink,
                             onToggleAlbumFavorite = state::toggleAlbumFavorite,
@@ -850,6 +851,16 @@ fun MusicBridgeApp(
                             onQueueTrack = state::enqueueTrack,
                             onPlayAlbum = { albumTrackResult: AlbumTracksResult ->
                                 state.startAlbumPlayback(albumTrackResult)
+                            },
+                            onPlayDisc = { album, discGroup ->
+                                state.playAlbumDisc(album, discGroup.tracks)
+                            },
+                            onQueueDisc = { album, discGroup, placement ->
+                                state.enqueueTracks(
+                                    tracks = discGroup.tracks,
+                                    placement = placement,
+                                    label = "${album.title} · ${Strings.discLabel(discGroup.discNumber)}",
+                                )
                             },
                             onPlayTrack = { album: MusicAlbum, track: MusicTrack ->
                                 val currentTrackResult = state.trackResult
@@ -863,8 +874,7 @@ fun MusicBridgeApp(
                                             it.ratingKey == track.ratingKey && it.sourceId == track.sourceId
                                         }
                                         .coerceAtLeast(0)
-                                    val playlist = currentTrackResult.tracks.drop(trackIndex)
-                                    state.startSingleTrackPlayback(album, playlist, 0)
+                                    state.startSingleTrackPlayback(album, currentTrackResult.tracks, trackIndex)
                                 } else {
                                     state.startSingleTrackPlayback(album, listOf(track), 0)
                                 }
@@ -881,6 +891,7 @@ fun MusicBridgeApp(
                             bottomContentPadding = contentBottomPadding,
                             onBack = state::navigateBack,
                             onPlayAlbum = state::playDownloadedAlbum,
+                            onPlayDisc = state::playDownloadedDisc,
                             onPlayTrack = { group, track, index ->
                                 // Locate the tapped track by identity: the rendered order can
                                 // differ from the group order, and a wrong index plays the

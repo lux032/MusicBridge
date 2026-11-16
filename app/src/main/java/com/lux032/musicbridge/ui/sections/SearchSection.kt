@@ -853,7 +853,7 @@ private fun SearchAlbumShelfCard(
                 alignment = Alignment.BottomCenter,
                 shape = shape,
                 onCenterCaption = { centerCaption = it },
-                overlay = { NowPlayingCoverBadge(nowPlaying?.takeIf { it.matchesAlbum(album) }) },
+                overlay = { AlbumCoverOverlayBadges(nowPlaying?.takeIf { it.matchesAlbum(album) }, album.discCount) },
             )
             Text(
                 text = album.title,

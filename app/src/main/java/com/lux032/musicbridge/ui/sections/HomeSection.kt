@@ -310,7 +310,7 @@ private fun RecentPlayedShelfSection(
                         shape = recentShape,
                         imageModifier = Modifier.shadow(6.dp, recentShape, clip = false),
                         onCenterCaption = { centerCaption = it },
-                        overlay = { NowPlayingCoverBadge(nowPlaying?.takeIf { it.matchesAlbum(album) }) },
+                        overlay = { AlbumCoverOverlayBadges(nowPlaying?.takeIf { it.matchesAlbum(album) }, album.discCount) },
                     )
                     Text(
                         text = album.title,

@@ -77,6 +77,7 @@ internal object Music032Json {
             releaseDate = value.optString("releaseDate").trim().ifBlank { null }
                 ?: value.optString("originalReleaseDate").trim().ifBlank { null },
             artists = parseArtistRefs(value.optJSONArray("artists")),
+            discCount = value.optInt("discCount").takeIf { it > 0 },
         )
     }
 

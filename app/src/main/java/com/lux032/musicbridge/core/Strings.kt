@@ -519,5 +519,14 @@ object Strings {
     val searchOpenArtist get() = if (isZhCN) "查看歌手" else "Go to Artist"
     val searchFavoriteAction get() = if (isZhCN) "收藏" else "Favorite"
     val searchUnfavoriteAction get() = if (isZhCN) "取消收藏" else "Unfavorite"
+
+    // Multi-disc CD support
+    fun discLabel(discNumber: Int) = "Disc $discNumber"
+    fun discCountFact(count: Int) = if (isZhCN) "$count Disc" else if (count == 1) "1 Disc" else "$count Discs"
+    fun discPlayContentDescription(discNumber: Int) = if (isZhCN) "播放 Disc $discNumber" else "Play Disc $discNumber"
+    fun discMoreContentDescription(discNumber: Int) = if (isZhCN) "Disc $discNumber 更多操作" else "More options for Disc $discNumber"
+    val downloadDiscOriginal get() = if (isZhCN) "下载本碟原档" else "Download Disc"
+    val deleteDiscDownload get() = if (isZhCN) "删除本碟离线文件" else "Delete Disc Downloads"
+    fun discDownloadsDeleted(discNumber: Int) = if (isZhCN) "已删除 Disc $discNumber 离线原档" else "Deleted offline files for Disc $discNumber"
 }
 

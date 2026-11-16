@@ -100,6 +100,15 @@ internal fun addTrackToPlaylistAction(track: MusicTrack): (() -> Unit)? {
     return { editor.requestAdd(PlaylistAddition.Tracks(listOf(track))) }
 }
 
+/** "添加到歌单" action for a list of tracks (such as one disc), or null when unsupported. */
+@Composable
+internal fun addTracksToPlaylistAction(tracks: List<MusicTrack>): (() -> Unit)? {
+    val editor = LocalPlaylistEditor.current ?: return null
+    val valid = tracks.filter { it.ratingKey.isNotBlank() && editor.canAdd(it.sourceId) }
+    if (valid.isEmpty()) return null
+    return { editor.requestAdd(PlaylistAddition.Tracks(valid)) }
+}
+
 /** "添加到歌单" action for a whole album, or null when unsupported. */
 @Composable
 internal fun addAlbumToPlaylistAction(album: MusicAlbum, trackCount: Int? = album.leafCount): (() -> Unit)? {

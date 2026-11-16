@@ -195,4 +195,10 @@ class Music032JsonTest {
         assertTrue(shouldCacheArtistDetail(4, 4))
         assertFalse(shouldCacheArtistDetail(4, 5))
     }
+
+    @Test fun albumDiscCountParsesPositiveOnly() {
+        assertEquals(3, album("album", ",\"discCount\":3").discCount)
+        assertNull(album("album", ",\"discCount\":0").discCount)
+        assertNull(album("album").discCount)
+    }
 }

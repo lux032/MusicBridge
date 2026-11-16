@@ -10,6 +10,7 @@ import com.lux032.musicbridge.music.MusicArtist
 import com.lux032.musicbridge.music.MusicPlaylist
 import com.lux032.musicbridge.music.LibrarySection
 import com.lux032.musicbridge.music.MusicTrack
+import com.lux032.musicbridge.music.normalizedDiscNumber
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -500,17 +501,34 @@ class AlbumLocalStore(context: Context) {
         val database = helper.writableDatabase
         database.beginTransaction()
         try {
+            val existingDiscCounts = buildMap {
+                database.rawQuery(
+                    "SELECT ${AlbumDatabaseHelper.COLUMN_RATING_KEY}, ${AlbumDatabaseHelper.COLUMN_DISC_COUNT} " +
+                        "FROM ${AlbumDatabaseHelper.TABLE_ALBUMS} WHERE ${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ? " +
+                        "AND ${AlbumDatabaseHelper.COLUMN_DISC_COUNT} IS NOT NULL",
+                    arrayOf(sourceId),
+                ).use { cursor ->
+                    while (cursor.moveToNext()) {
+                        put(cursor.getString(0), cursor.getInt(1))
+                    }
+                }
+            }
             database.delete(AlbumDatabaseHelper.TABLE_ALBUMS, "${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ?", arrayOf(sourceId))
             database.delete(AlbumDatabaseHelper.TABLE_ALBUM_ARTIST_LINKS, "${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ?", arrayOf(sourceId))
             val links = ArtistLinkWriter(database)
             try {
                 albums.forEach { album ->
+                    val albumWithDiscCount = if (album.discCount != null) {
+                        album
+                    } else {
+                        existingDiscCounts[album.ratingKey]?.let { album.copy(discCount = it) } ?: album
+                    }
                     database.insertOrThrow(
                         AlbumDatabaseHelper.TABLE_ALBUMS,
                         null,
-                        album.toContentValues(),
+                        albumWithDiscCount.toContentValues(),
                     )
-                    links.album(album)
+                    links.album(albumWithDiscCount)
                 }
             } finally {
                 links.close()
@@ -856,6 +874,7 @@ class AlbumLocalStore(context: Context) {
                 links.close()
             }
             refreshArtistMetadata(sourceId, albumTracks.values.flatten())
+            syncAlbumDiscCounts(database, sourceId, albumTracks)
             database.setTransactionSuccessful()
         } finally {
             database.endTransaction()
@@ -891,9 +910,30 @@ class AlbumLocalStore(context: Context) {
                 links.close()
             }
             refreshArtistMetadata(sourceId, tracks)
+            syncAlbumDiscCounts(database, sourceId, mapOf(albumRatingKey to tracks))
             database.setTransactionSuccessful()
         } finally {
             database.endTransaction()
+        }
+    }
+
+    private fun syncAlbumDiscCounts(
+        database: SQLiteDatabase,
+        sourceId: String,
+        albumTracks: Map<String, List<MusicTrack>>,
+    ) {
+        val values = ContentValues()
+        albumTracks.forEach { (albumKey, tracks) ->
+            if (albumKey.isBlank() || tracks.isEmpty()) return@forEach
+            val discCount = tracks.map { normalizedDiscNumber(it.discNumber) }.distinct().size.coerceAtLeast(1)
+            values.clear()
+            values.put(AlbumDatabaseHelper.COLUMN_DISC_COUNT, discCount)
+            database.update(
+                AlbumDatabaseHelper.TABLE_ALBUMS,
+                values,
+                "${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ? AND ${AlbumDatabaseHelper.COLUMN_RATING_KEY} = ?",
+                arrayOf(sourceId, albumKey),
+            )
         }
     }
 
@@ -1005,6 +1045,10 @@ class AlbumLocalStore(context: Context) {
                 .takeIf { it >= 0 && !isNull(it) }
                 ?.let(::getString),
             artists = artistRefsColumn(),
+            discCount = getColumnIndex(AlbumDatabaseHelper.COLUMN_DISC_COUNT)
+                .takeIf { it >= 0 && !isNull(it) }
+                ?.let(::getInt)
+                ?.takeIf { it > 0 },
         )
     }
 
@@ -1167,6 +1211,7 @@ class AlbumLocalStore(context: Context) {
             put(AlbumDatabaseHelper.COLUMN_SUBFORMAT, subformat)
             put(AlbumDatabaseHelper.COLUMN_RELEASE_DATE, releaseDate)
             put(AlbumDatabaseHelper.COLUMN_ARTIST_REFS, encodeArtistRefs(artists))
+            put(AlbumDatabaseHelper.COLUMN_DISC_COUNT, discCount)
         }
 
     private fun MusicPlaylist.toContentValues(sourceId: String, sortOrder: Int): ContentValues = ContentValues().apply {
@@ -1303,6 +1348,16 @@ internal fun ensureVersion19Columns(db: SQLiteDatabase) {
     addColumnIfNotExists(db, "downloaded_tracks", "artist_refs", "TEXT")
 }
 
+/** v20 persists album disc counts for multi-disc album card badges across syncs. */
+internal fun ensureVersion20Columns(db: SQLiteDatabase) {
+    val albumsExist = db.rawQuery(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        arrayOf(AlbumDatabaseHelper.TABLE_ALBUMS),
+    ).use { it.moveToFirst() }
+    if (!albumsExist) return
+    addColumnIfNotExists(db, AlbumDatabaseHelper.TABLE_ALBUMS, AlbumDatabaseHelper.COLUMN_DISC_COUNT, "INTEGER")
+}
+
 /**
  * v18: 032 artist sync model. Albums/tracks keep their artist refs (JSON) for navigation, the
  * link tables make discography queries indexable, and `artists` holds the synced performers.
@@ -1404,6 +1459,7 @@ private class AlbumDatabaseHelper(context: Context) :
         createPlaylistTables(db)
         ensureVersion18Schema(db)
         ensureVersion19Columns(db)
+        ensureVersion20Columns(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -1451,12 +1507,13 @@ private class AlbumDatabaseHelper(context: Context) :
         if (oldVersion < 17) ensureVersion17Columns(db)
         if (oldVersion < 18) ensureVersion18Schema(db)
         if (oldVersion < 19) ensureVersion19Columns(db)
+        if (oldVersion < 20) ensureVersion20Columns(db)
     }
 
     companion object {
         // Historical file name, kept so existing installs keep their library cache.
         private const val DATABASE_NAME = "plex_album_cache.db"
-        private const val DATABASE_VERSION = 19
+        private const val DATABASE_VERSION = 20
 
         const val TABLE_ALBUMS = "albums"
         const val TABLE_TRACKS = "tracks"
@@ -1488,6 +1545,7 @@ private class AlbumDatabaseHelper(context: Context) :
         const val COLUMN_SECTION_TITLE = "section_title"
         const val COLUMN_SECTION_TYPE = "section_type"
         const val COLUMN_RELEASE_DATE = "release_date"
+        const val COLUMN_DISC_COUNT = "disc_count"
         const val COLUMN_TRACK_RATING_KEY = "rating_key"
         const val COLUMN_TRACK_TITLE = "title"
         const val COLUMN_TRACK_STREAM_URL = "stream_url"

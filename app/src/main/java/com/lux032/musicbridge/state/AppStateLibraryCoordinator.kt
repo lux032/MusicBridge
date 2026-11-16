@@ -9,7 +9,9 @@ import com.lux032.musicbridge.music.MusicPlaylist
 import com.lux032.musicbridge.music.PlaylistTracksResult
 import com.lux032.musicbridge.music.LibrarySection
 import com.lux032.musicbridge.music.MusicTrack
+import com.lux032.musicbridge.music.effectiveDiscCount
 import com.lux032.musicbridge.music.isFavorite
+import com.lux032.musicbridge.music.normalizedDiscNumber
 import com.lux032.musicbridge.music.withArtistMetadataFrom
 import com.lux032.musicbridge.storage.ArtistRelease
 import com.lux032.musicbridge.storage.DownloadedAlbumGroup
@@ -151,6 +153,11 @@ internal class AppStateLibraryCoordinator(
                 state.offlineDownloadManager.refreshMetadataSnapshot()
                 // Track artist links feed artist discographies (参与作品).
                 state.artistAlbumsRevision++
+                state.allAlbums = state.allAlbums.map { album ->
+                    val tracks = allTracks[album.ratingKey]
+                    if (tracks.isNullOrEmpty()) album
+                    else album.copy(discCount = effectiveDiscCount(album, tracks))
+                }
                 val totalTrackCount = allTracks.values.sumOf { tracks -> tracks.size }
                 state.actionMessage = "已同步 ${fetched.albums.size} 张专辑、${totalTrackCount} 首曲目"
             }.onFailure { error ->
@@ -193,8 +200,17 @@ internal class AppStateLibraryCoordinator(
                 state.isLoading = true
                 runCatching {
                     state.clientFor(album.sourceId).fetchAlbumTrackStreams(album)
-                }.onSuccess {
-                    state.trackResult = it
+                }.onSuccess { result ->
+                    val derivedDiscCount = effectiveDiscCount(result.album, result.tracks)
+                    val resolvedAlbum = result.album.copy(discCount = derivedDiscCount)
+                    state.trackResult = result.copy(album = resolvedAlbum)
+                    if (state.allAlbums.any { it.sourceId == resolvedAlbum.sourceId && it.ratingKey == resolvedAlbum.ratingKey }) {
+                        state.allAlbums = state.allAlbums.map { existing ->
+                            if (existing.sourceId == resolvedAlbum.sourceId && existing.ratingKey == resolvedAlbum.ratingKey) {
+                                existing.copy(discCount = derivedDiscCount)
+                            } else existing
+                        }
+                    }
                     state.navigateTo(AppSection.AlbumDetail)
                 }.onFailure {
                     state.errorMessage = it.message ?: "未知错误"
@@ -590,6 +606,18 @@ internal class AppStateLibraryCoordinator(
     fun deleteDownloadedAlbum(album: MusicAlbum) {
         state.offlineDownloadManager.deleteAlbumDownload(album.sourceId, album.ratingKey)
         state.actionMessage = "已删除专辑离线原档: ${album.title}"
+    }
+
+    fun deleteDownloadedDisc(tracks: List<MusicTrack>, discNumber: Int) {
+        if (tracks.isEmpty()) return
+        state.offlineDownloadManager.deleteDownloads(tracks)
+        state.actionMessage = Strings.discDownloadsDeleted(discNumber)
+    }
+
+    fun playDownloadedDisc(group: DownloadedAlbumGroup, discNumber: Int) {
+        val discTracks = group.tracks.filter { normalizedDiscNumber(it.discNumber) == discNumber }
+        if (discTracks.isEmpty()) return
+        playDownloadedAlbum(group.copy(tracks = discTracks), startIndex = 0)
     }
 
     /**

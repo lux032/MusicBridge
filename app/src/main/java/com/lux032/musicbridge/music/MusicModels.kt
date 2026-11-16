@@ -31,6 +31,8 @@ data class MusicAlbum(
     val releaseDate: String? = null,
     /** Credited album artists in credit order; [artistName] is only their joined text. */
     val artists: List<ArtistRef> = emptyList(),
+    /** Total disc count on the server (or derived from synced tracks when > 1). */
+    val discCount: Int? = null,
 ) {
     val isFavorite: Boolean
         get() = (userRating ?: 0f) > 0f

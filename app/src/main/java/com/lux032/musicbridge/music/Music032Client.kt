@@ -313,7 +313,7 @@ class Music032Client(
         val body = request("GET", "/api/v1/albums/${album.ratingKey}")
         val root = JSONObject(body)
         val resolvedAlbum = root.optJSONObject("album")?.let(::parseAlbum) ?: album
-        val tracks = root.optJSONArray("tracks").toObjects().map(::parseTrack)
+        val tracks = root.optJSONArray("tracks").toObjects().map(::parseTrack).sortedInDiscOrder()
         AlbumTracksResult(profile.displayName, resolvedAlbum, tracks)
     }
 

@@ -26,11 +26,15 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.lux032.musicbridge.music.MusicAlbum
 import com.lux032.musicbridge.music.MusicTrack
 import com.lux032.musicbridge.storage.DownloadedAudioTrack
@@ -226,4 +230,55 @@ internal fun BoxScope.NowPlayingCoverBadge(nowPlaying: NowPlayingMarker?) {
             modifier = Modifier.size(width = 13.dp, height = 11.dp),
         )
     }
+}
+
+/** Top-right diagonal triangle badge matching 032player-rs when an album has >1 disc. */
+@Composable
+internal fun BoxScope.MultiDiscCoverBadge(discCount: Int?) {
+    if (discCount == null || discCount <= 1) return
+    Box(
+        modifier = Modifier
+            .align(Alignment.TopEnd)
+            .size(34.dp),
+    ) {
+        Canvas(modifier = Modifier.matchParentSize()) {
+            val w = size.width
+            val h = size.height
+            val mainTriangle = Path().apply {
+                moveTo(0f, 0f)
+                lineTo(w, 0f)
+                lineTo(w, h)
+                close()
+            }
+            drawPath(mainTriangle, color = Color.Black.copy(alpha = 0.53f))
+            val foldTriangle = Path().apply {
+                val fold = w * (10f / 36f)
+                moveTo(0f, 0f)
+                lineTo(fold, fold)
+                lineTo(0f, fold)
+                close()
+            }
+            drawPath(foldTriangle, color = Color.White.copy(alpha = 0.27f))
+        }
+        Text(
+            text = discCount.toString(),
+            color = Color.White,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+            style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false)),
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(top = 3.dp, end = 5.dp),
+        )
+    }
+}
+
+/** Shared artwork overlay combining multi-disc and now-playing badges. */
+@Composable
+internal fun BoxScope.AlbumCoverOverlayBadges(
+    nowPlaying: NowPlayingMarker?,
+    discCount: Int?,
+) {
+    MultiDiscCoverBadge(discCount)
+    NowPlayingCoverBadge(nowPlaying)
 }

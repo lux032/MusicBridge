@@ -7,6 +7,7 @@ import com.lux032.musicbridge.local.LocalAudioCache
 import com.lux032.musicbridge.local.originalCacheKey
 import com.lux032.musicbridge.music.Music032TranscodeUrls
 import com.lux032.musicbridge.music.MusicTrack
+import com.lux032.musicbridge.music.normalizedDiscNumber
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -51,7 +52,7 @@ fun buildAlbumGroups(tracks: List<DownloadedAudioTrack>): List<DownloadedAlbumGr
             thumbPath = albumTracks.firstNotNullOfOrNull { it.localThumbPath },
             sourceId = first.sourceId,
             tracks = albumTracks.sortedWith(
-                compareBy<DownloadedAudioTrack> { it.discNumber ?: 1 }
+                compareBy<DownloadedAudioTrack> { normalizedDiscNumber(it.discNumber) }
                     .thenBy { it.trackNumber ?: Int.MAX_VALUE }
                     .thenBy { it.title.lowercase() }
             ),
@@ -166,6 +167,24 @@ class OfflineDownloadManager(
                 albumLocalStore.deleteDownloadedTrack(sourceId, ratingKey)
                 refreshDownloadedKeys()
             }
+        }
+    }
+
+    fun deleteDownloads(tracks: List<MusicTrack>) {
+        if (tracks.isEmpty()) return
+        scope.launch(Dispatchers.IO) {
+            var changed = false
+            tracks.forEach { track ->
+                val record = albumLocalStore.getDownloadedTrack(track.sourceId, track.ratingKey)
+                if (record != null) {
+                    runCatching { File(record.localAudioPath).delete() }
+                    record.localThumbPath?.let { runCatching { File(it).delete() } }
+                    record.localLyricPath?.let { runCatching { File(it).delete() } }
+                    albumLocalStore.deleteDownloadedTrack(track.sourceId, track.ratingKey)
+                    changed = true
+                }
+            }
+            if (changed) refreshDownloadedKeys()
         }
     }
 

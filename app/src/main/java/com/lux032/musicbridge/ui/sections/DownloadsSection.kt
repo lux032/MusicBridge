@@ -52,10 +52,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.lux032.musicbridge.music.groupTracksByDisc
+import com.lux032.musicbridge.music.hasMultipleDiscs
 import com.lux032.musicbridge.storage.DownloadedAlbumGroup
 import com.lux032.musicbridge.storage.DownloadedAudioTrack
 import java.util.Locale
@@ -73,6 +79,7 @@ internal fun DownloadsSection(
     modifier: Modifier = Modifier,
     onBack: () -> Unit,
     onPlayAlbum: (DownloadedAlbumGroup) -> Unit,
+    onPlayDisc: (DownloadedAlbumGroup, Int) -> Unit = { _, _ -> },
     onPlayTrack: (DownloadedAlbumGroup, DownloadedAudioTrack, Int) -> Unit,
     onDeleteAlbum: (DownloadedAlbumGroup) -> Unit,
     onDeleteTrack: (DownloadedAudioTrack) -> Unit,
@@ -225,6 +232,7 @@ internal fun DownloadsSection(
                     DownloadedAlbumCard(
                         group = group,
                         onPlayAlbum = { onPlayAlbum(group) },
+                        onPlayDisc = { discNumber -> onPlayDisc(group, discNumber) },
                         onPlayTrack = { track, index -> onPlayTrack(group, track, index) },
                         onDeleteAlbum = { onDeleteAlbum(group) },
                         onDeleteTrack = onDeleteTrack,
@@ -243,6 +251,7 @@ internal fun DownloadsSection(
 private fun DownloadedAlbumCard(
     group: DownloadedAlbumGroup,
     onPlayAlbum: () -> Unit,
+    onPlayDisc: (Int) -> Unit,
     onPlayTrack: (DownloadedAudioTrack, Int) -> Unit,
     onDeleteAlbum: () -> Unit,
     onDeleteTrack: (DownloadedAudioTrack) -> Unit,
@@ -252,6 +261,16 @@ private fun DownloadedAlbumCard(
     var isMenuExpanded by remember { mutableStateOf(false) }
     var showDeleteConfirmDialog by remember { mutableStateOf(false) }
     val palette = LocalArtworkPalette.current
+    val hasMultipleDiscs = remember(group.tracks) {
+        hasMultipleDiscs(group.tracks) { it.discNumber }
+    }
+    val discGroups = remember(group.tracks, hasMultipleDiscs) {
+        if (hasMultipleDiscs) {
+            groupTracksByDisc(group.tracks, { it.discNumber }, { it.durationMillis })
+        } else {
+            emptyList()
+        }
+    }
 
     Column(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.fillMaxWidth()) {
@@ -297,8 +316,15 @@ private fun DownloadedAlbumCard(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
+                    val summaryText = buildString {
+                        if (hasMultipleDiscs) {
+                            append(Strings.discCountFact(discGroups.size))
+                            append(" · ")
+                        }
+                        append("${group.tracks.size} 首歌曲 · ${formatFileSize(group.totalSizeBytes)}")
+                    }
                     Text(
-                        text = "${group.tracks.size} 首歌曲 · ${formatFileSize(group.totalSizeBytes)}",
+                        text = summaryText,
                         style = MaterialTheme.typography.bodySmall,
                         color = AppColors.TextTertiary,
                     )
@@ -366,23 +392,74 @@ private fun DownloadedAlbumCard(
                         .fillMaxWidth()
                         .padding(start = 66.dp, bottom = 4.dp),
                 ) {
-
-                    val hasMultipleDiscs = group.tracks.mapNotNull { it.discNumber }.distinct().size > 1
-                    group.tracks.forEachIndexed { index, track ->
-                        val displayIndex = if (hasMultipleDiscs && track.discNumber != null) {
-                            "${track.discNumber}-${track.trackNumber ?: (index + 1)}"
-                        } else if (track.trackNumber != null) {
-                            "${track.trackNumber}"
-                        } else {
-                            "${index + 1}"
+                    if (hasMultipleDiscs) {
+                        discGroups.forEachIndexed { discIndex, discGroup ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(
+                                        top = if (discIndex == 0) 4.dp else 12.dp,
+                                        bottom = 4.dp,
+                                        end = 4.dp,
+                                    ),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(26.dp)
+                                        .clip(CircleShape)
+                                        .background(palette.accent)
+                                        .clickable(
+                                            role = Role.Button,
+                                            onClickLabel = Strings.discPlayContentDescription(discGroup.discNumber),
+                                            onClick = { onPlayDisc(discGroup.discNumber) },
+                                        )
+                                        .semantics {
+                                            contentDescription = Strings.discPlayContentDescription(discGroup.discNumber)
+                                        },
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.PlayArrow,
+                                        contentDescription = null,
+                                        tint = Color.White,
+                                        modifier = Modifier.size(15.dp),
+                                    )
+                                }
+                                Text(
+                                    text = Strings.discLabel(discGroup.discNumber),
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = AppColors.TextPrimary,
+                                )
+                                Text(
+                                    text = Strings.tracks(discGroup.tracks.size),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = AppColors.TextTertiary,
+                                )
+                            }
+                            discGroup.tracks.forEachIndexed { indexInDisc, track ->
+                                DownloadedTrackItem(
+                                    displayIndex = "${indexInDisc + 1}",
+                                    track = track,
+                                    onPlay = { onPlayTrack(track, indexInDisc) },
+                                    onDelete = { onDeleteTrack(track) },
+                                    nowPlaying = nowPlaying?.takeIf { it.matches(track) },
+                                )
+                            }
                         }
-                        DownloadedTrackItem(
-                            displayIndex = displayIndex,
-                            track = track,
-                            onPlay = { onPlayTrack(track, index) },
-                            onDelete = { onDeleteTrack(track) },
-                            nowPlaying = nowPlaying?.takeIf { it.matches(track) },
-                        )
+                    } else {
+                        group.tracks.forEachIndexed { index, track ->
+                            val displayIndex = "${track.trackNumber?.takeIf { it > 0 } ?: (index + 1)}"
+                            DownloadedTrackItem(
+                                displayIndex = displayIndex,
+                                track = track,
+                                onPlay = { onPlayTrack(track, index) },
+                                onDelete = { onDeleteTrack(track) },
+                                nowPlaying = nowPlaying?.takeIf { it.matches(track) },
+                            )
+                        }
                     }
                     Spacer(modifier = Modifier.height(8.dp))
                 }

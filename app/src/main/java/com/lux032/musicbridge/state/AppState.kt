@@ -585,7 +585,13 @@ class AppState(
     fun downloadAlbum(album: MusicAlbum, tracks: List<MusicTrack>) = libraryCoordinator.downloadAlbum(album, tracks)
     fun deleteDownloadedAlbum(album: MusicAlbum) = libraryCoordinator.deleteDownloadedAlbum(album)
     fun deleteDownloadedAlbum(group: DownloadedAlbumGroup) = libraryCoordinator.deleteDownloadedAlbum(group)
+    fun deleteDownloadedDisc(tracks: List<MusicTrack>, discNumber: Int) = libraryCoordinator.deleteDownloadedDisc(tracks, discNumber)
     fun playDownloadedAlbum(group: DownloadedAlbumGroup, startIndex: Int = 0) = libraryCoordinator.playDownloadedAlbum(group, startIndex)
+    fun playDownloadedDisc(group: DownloadedAlbumGroup, discNumber: Int) = libraryCoordinator.playDownloadedDisc(group, discNumber)
+    fun playAlbumDisc(album: MusicAlbum, tracks: List<MusicTrack>) {
+        if (tracks.isEmpty()) return
+        startAlbumPlayback(AlbumTracksResult(connectionPreferences.displayName, album, tracks), startIndex = 0)
+    }
     fun shuffleAllDownloadedTracks() = libraryCoordinator.shuffleAllDownloadedTracks()
 
     fun updateAlbumSortOption(option: AlbumSortOption) {

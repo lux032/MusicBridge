@@ -947,6 +947,53 @@ class AlbumLocalStoreMigrationTest {
         }
     }
 
+    @Test
+    fun version20AddsAlbumDiscCountAndDerivesFromSyncedTracks() {
+        SQLiteDatabase.create(null).use { db ->
+            ensureVersion20Columns(db)
+            db.execSQL("CREATE TABLE albums (source_id TEXT, rating_key TEXT, title TEXT)")
+            db.execSQL("INSERT INTO albums VALUES ('source', 'album1', 'Double CD')")
+            ensureVersion20Columns(db)
+            ensureVersion20Columns(db)
+            assertTrue(db.columnNames("albums").contains("disc_count"))
+            assertEquals(1, db.rowCount("albums"))
+        }
+
+        val context = cleanDatabaseContext()
+        val store = AlbumLocalStore(context)
+        val syncedAlbum = MusicAlbum(
+            ratingKey = "album-multi",
+            title = "Soundtrack",
+            artistName = "Composer",
+            year = 2024,
+            thumbUrl = null,
+            userRating = null,
+            addedAtEpochSeconds = null,
+            lastViewedAtEpochSeconds = null,
+            section = LibrarySection("032", "Music", "artist"),
+            sourceId = "source",
+            discCount = null,
+        )
+        store.replaceAllAlbums("source", listOf(syncedAlbum))
+        store.replaceAllAlbumTracks(
+            "source",
+            mapOf(
+                "album-multi" to listOf(
+                    track("source", "t1", 0, 0).copy(albumRatingKey = "album-multi", discNumber = 1, trackNumber = 1),
+                    track("source", "t2", 0, 0).copy(albumRatingKey = "album-multi", discNumber = 2, trackNumber = 1),
+                )
+            ),
+        )
+        val storedAfterTrackSync = store.getAllAlbums("source").single()
+        assertEquals(2, storedAfterTrackSync.discCount)
+
+        // Re-syncing albums without discCount preserves previously derived disc_count.
+        store.replaceAllAlbums("source", listOf(syncedAlbum))
+        val storedAfterAlbumResync = store.getAllAlbums("source").single()
+        assertEquals(2, storedAfterAlbumResync.discCount)
+        context.deleteDatabase(DATABASE_NAME)
+    }
+
     private fun cleanDatabaseContext(): Context =
         RuntimeEnvironment.getApplication().also { it.deleteDatabase(DATABASE_NAME) }
 

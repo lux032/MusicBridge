@@ -500,7 +500,7 @@ private fun AlbumCoverArtwork(
         alignment = Alignment.BottomCenter,
         shape = RoundedCornerShape(12.dp),
         onCenterCaption = onCenterCaption,
-        overlay = { NowPlayingCoverBadge(nowPlaying) },
+        overlay = { AlbumCoverOverlayBadges(nowPlaying, album.discCount) },
     )
 }
 
