@@ -235,6 +235,7 @@ internal fun WorkDetailSection(
                 if (data.albums.isNotEmpty()) {
                     item("album-heading") { WorkSectionHeading(Strings.albums) }
                     item("albums") {
+                        val nowPlaying = LocalNowPlaying.current
                         LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                             items(data.albums, key = { it.album.ratingKey }) { entry ->
                                 var centerCaption by remember(entry.album.thumbUrl) { mutableStateOf(false) }
@@ -252,6 +253,12 @@ internal fun WorkDetailSection(
                                         alignment = Alignment.BottomCenter,
                                         shape = RoundedCornerShape(14.dp),
                                         onCenterCaption = { centerCaption = it },
+                                        overlay = {
+                                            AlbumCoverOverlayBadges(
+                                                nowPlaying?.takeIf { it.matchesAlbum(entry.album) },
+                                                entry.album.discCount,
+                                            )
+                                        },
                                     )
                                     Text(
                                         entry.album.title,

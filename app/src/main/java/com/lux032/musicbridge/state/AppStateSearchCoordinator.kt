@@ -404,7 +404,9 @@ internal class AppStateSearchCoordinator(private val state: AppState) {
             runCatching { client.searchUnified(query) }
                 .onSuccess { res ->
                     if (generation != overviewGeneration || state.connectionPreferences.id != profile.id) return@onSuccess
-                    overview = res
+                    overview = res.copy(
+                        albums = res.albums.copy(items = state.enrichAlbumDiscCounts(res.albums.items)),
+                    )
                     overviewError = null
                     isOverviewLoading = false
                 }
@@ -460,14 +462,17 @@ internal class AppStateSearchCoordinator(private val state: AppState) {
                             isLoadingMore = false,
                             error = null,
                         )
-                        SearchCategory.Albums -> current.copy(
-                            loadedQuery = query,
-                            albums = if (reset) res.albums.items else (current.albums + res.albums.items).distinctBy(MusicAlbum::ratingKey),
-                            total = res.albums.total,
-                            isLoading = false,
-                            isLoadingMore = false,
-                            error = null,
-                        )
+                        SearchCategory.Albums -> {
+                            val enriched = state.enrichAlbumDiscCounts(res.albums.items)
+                            current.copy(
+                                loadedQuery = query,
+                                albums = if (reset) enriched else (current.albums + enriched).distinctBy(MusicAlbum::ratingKey),
+                                total = res.albums.total,
+                                isLoading = false,
+                                isLoadingMore = false,
+                                error = null,
+                            )
+                        }
                         SearchCategory.Tracks -> current.copy(
                             loadedQuery = query,
                             tracks = if (reset) res.tracks.items else (current.tracks + res.tracks.items).distinctBy(MusicTrack::ratingKey),

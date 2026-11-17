@@ -410,6 +410,53 @@ class AlbumLocalStore(context: Context) {
             }
         }
 
+    private fun effectiveDiscCountColumnSql(): String =
+        "COALESCE(NULLIF(td.track_disc_count, 0), t1.${AlbumDatabaseHelper.COLUMN_DISC_COUNT}) AS effective_disc_count"
+
+    private fun discCountJoinSql(): String =
+        """
+        LEFT JOIN (
+            SELECT ${AlbumDatabaseHelper.COLUMN_TRACK_ALBUM_RATING_KEY} AS disc_album_key,
+                   COUNT(DISTINCT MAX(1, COALESCE(${AlbumDatabaseHelper.COLUMN_TRACK_DISC_NUMBER}, 1))) AS track_disc_count
+            FROM ${AlbumDatabaseHelper.TABLE_ALBUM_TRACKS}
+            WHERE ${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ?
+            GROUP BY ${AlbumDatabaseHelper.COLUMN_TRACK_ALBUM_RATING_KEY}
+        ) td ON td.disc_album_key = t1.${AlbumDatabaseHelper.COLUMN_RATING_KEY}
+        """.trimIndent()
+
+    private fun queryAlbumsWithDiscCounts(
+        sourceId: String,
+        extraWhereClause: String? = null,
+        extraArgs: Array<String> = emptyArray(),
+        limit: Int? = null,
+    ): List<MusicAlbum> {
+        val whereSql = buildString {
+            append("t1.${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ?")
+            if (!extraWhereClause.isNullOrBlank()) {
+                append(" AND (").append(extraWhereClause).append(")")
+            }
+        }
+        val limitSql = limit?.let { " LIMIT ${it.coerceAtLeast(1)}" }.orEmpty()
+        val args = arrayOf(sourceId, sourceId, *extraArgs)
+        return helper.readableDatabase.rawQuery(
+            """
+            SELECT t1.*,
+                   ${effectiveDiscCountColumnSql()}
+            FROM ${AlbumDatabaseHelper.TABLE_ALBUMS} t1
+            ${discCountJoinSql()}
+            WHERE $whereSql
+            ORDER BY t1.${AlbumDatabaseHelper.COLUMN_TITLE} COLLATE NOCASE ASC$limitSql
+            """.trimIndent(),
+            args,
+        ).use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) {
+                    add(cursor.toAlbum())
+                }
+            }
+        }
+    }
+
     fun getAlbumsByArtist(sourceId: String, artistName: String): List<MusicAlbum> {
         val normalizedArtist = artistName.trim().ifBlank { "未知艺人" }
         val artistSelection = if (normalizedArtist == "未知艺人") {
@@ -417,7 +464,11 @@ class AlbumLocalStore(context: Context) {
         } else {
             "TRIM(t1.${AlbumDatabaseHelper.COLUMN_ARTIST_NAME}) = ?"
         }
-        val selectionArgs = if (normalizedArtist == "未知艺人") arrayOf(sourceId) else arrayOf(sourceId, normalizedArtist)
+        val selectionArgs = if (normalizedArtist == "未知艺人") {
+            arrayOf(sourceId, sourceId)
+        } else {
+            arrayOf(sourceId, sourceId, normalizedArtist)
+        }
 
         return helper.readableDatabase.rawQuery(
             """
@@ -430,8 +481,10 @@ class AlbumLocalStore(context: Context) {
                            WHERE t2.${AlbumDatabaseHelper.COLUMN_TRACK_ALBUM_RATING_KEY} = t1.${AlbumDatabaseHelper.COLUMN_RATING_KEY}
                              AND t2.${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = t1.${AlbumDatabaseHelper.COLUMN_SOURCE_ID}
                        ), 0)
-                   ) AS effective_leaf_count
+                   ) AS effective_leaf_count,
+                   ${effectiveDiscCountColumnSql()}
             FROM ${AlbumDatabaseHelper.TABLE_ALBUMS} t1
+            ${discCountJoinSql()}
             WHERE t1.${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ? AND $artistSelection
             ORDER BY t1.${AlbumDatabaseHelper.COLUMN_YEAR} DESC, t1.${AlbumDatabaseHelper.COLUMN_TITLE} COLLATE NOCASE ASC
             """.trimIndent(),
@@ -446,21 +499,7 @@ class AlbumLocalStore(context: Context) {
     }
 
     fun getAllAlbums(sourceId: String): List<MusicAlbum> =
-        helper.readableDatabase.query(
-            AlbumDatabaseHelper.TABLE_ALBUMS,
-            null,
-            "${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ?",
-            arrayOf(sourceId),
-            null,
-            null,
-            "${AlbumDatabaseHelper.COLUMN_TITLE} COLLATE NOCASE ASC",
-        ).use { cursor ->
-            buildList {
-                while (cursor.moveToNext()) {
-                    add(cursor.toAlbum())
-                }
-            }
-        }
+        queryAlbumsWithDiscCounts(sourceId)
 
     fun searchAlbums(sourceId: String, query: String, limit: Int = DEFAULT_SEARCH_LIMIT): List<MusicAlbum> {
         val normalizedQuery = query.trim()
@@ -474,27 +513,12 @@ class AlbumLocalStore(context: Context) {
             .replace("_", "\\_")
         val likeArg = "%$escapedQuery%"
 
-        return helper.readableDatabase.query(
-            AlbumDatabaseHelper.TABLE_ALBUMS,
-            null,
-            """
-            ${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ? AND (
-                ${AlbumDatabaseHelper.COLUMN_TITLE} LIKE ? ESCAPE '\' OR
-                ${AlbumDatabaseHelper.COLUMN_ARTIST_NAME} LIKE ? ESCAPE '\'
-            )
-            """.trimIndent(),
-            arrayOf(sourceId, likeArg, likeArg),
-            null,
-            null,
-            "${AlbumDatabaseHelper.COLUMN_TITLE} COLLATE NOCASE ASC",
-            limit.coerceAtLeast(1).toString(),
-        ).use { cursor ->
-            buildList {
-                while (cursor.moveToNext()) {
-                    add(cursor.toAlbum())
-                }
-            }
-        }
+        return queryAlbumsWithDiscCounts(
+            sourceId = sourceId,
+            extraWhereClause = "t1.${AlbumDatabaseHelper.COLUMN_TITLE} LIKE ? ESCAPE '\\' OR t1.${AlbumDatabaseHelper.COLUMN_ARTIST_NAME} LIKE ? ESCAPE '\\'",
+            extraArgs = arrayOf(likeArg, likeArg),
+            limit = limit,
+        )
     }
 
     fun replaceAllAlbums(sourceId: String, albums: List<MusicAlbum>) {
@@ -663,9 +687,11 @@ class AlbumLocalStore(context: Context) {
                              AND t2.$source = t1.$source
                        ), 0)
                    ) AS effective_leaf_count,
+                   ${effectiveDiscCountColumnSql()},
                    EXISTS(SELECT 1 FROM $links l WHERE l.$source = t1.$source AND l.$albumKey = t1.${AlbumDatabaseHelper.COLUMN_RATING_KEY} AND l.$artistKey = ?) AS is_credited,
                    (SELECT COUNT(*) FROM $links l WHERE l.$source = t1.$source AND l.$albumKey = t1.${AlbumDatabaseHelper.COLUMN_RATING_KEY}) AS credited_count
             FROM ${AlbumDatabaseHelper.TABLE_ALBUMS} t1
+            ${discCountJoinSql()}
             WHERE t1.$source = ? AND t1.${AlbumDatabaseHelper.COLUMN_RATING_KEY} IN (
                 SELECT $albumKey FROM $links WHERE $source = ? AND $artistKey = ?
                 UNION
@@ -673,7 +699,7 @@ class AlbumLocalStore(context: Context) {
             )
             ORDER BY t1.${AlbumDatabaseHelper.COLUMN_YEAR} DESC, t1.${AlbumDatabaseHelper.COLUMN_TITLE} COLLATE NOCASE ASC
             """.trimIndent(),
-            arrayOf(artistId, sourceId, sourceId, artistId, sourceId, artistId),
+            arrayOf(artistId, sourceId, sourceId, sourceId, artistId, sourceId, artistId),
         ).use { cursor ->
             val creditedIndex = cursor.getColumnIndexOrThrow("is_credited")
             val countIndex = cursor.getColumnIndexOrThrow("credited_count")
@@ -1045,10 +1071,14 @@ class AlbumLocalStore(context: Context) {
                 .takeIf { it >= 0 && !isNull(it) }
                 ?.let(::getString),
             artists = artistRefsColumn(),
-            discCount = getColumnIndex(AlbumDatabaseHelper.COLUMN_DISC_COUNT)
+            discCount = getColumnIndex("effective_disc_count")
                 .takeIf { it >= 0 && !isNull(it) }
                 ?.let(::getInt)
-                ?.takeIf { it > 0 },
+                ?.takeIf { it > 0 }
+                ?: getColumnIndex(AlbumDatabaseHelper.COLUMN_DISC_COUNT)
+                    .takeIf { it >= 0 && !isNull(it) }
+                    ?.let(::getInt)
+                    ?.takeIf { it > 0 },
         )
     }
 

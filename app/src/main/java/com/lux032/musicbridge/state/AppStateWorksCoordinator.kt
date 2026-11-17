@@ -31,7 +31,16 @@ internal class AppStateWorksCoordinator(private val state: AppState) {
     }
 
     suspend fun info(sourceId: String, id: Long) = requireNotNull(client(sourceId)).fetchWorkInfo(id)
-    suspend fun detail(sourceId: String, id: Long) = requireNotNull(client(sourceId)).fetchWork(id)
+    suspend fun detail(sourceId: String, id: Long): Music032WorkDetail {
+        val detail = requireNotNull(client(sourceId)).fetchWork(id)
+        val enrichedAlbums = state.enrichAlbumDiscCounts(detail.albums.map { it.album })
+            .associateBy { it.ratingKey }
+        return detail.copy(
+            albums = detail.albums.map { entry ->
+                enrichedAlbums[entry.album.ratingKey]?.let { entry.copy(album = it) } ?: entry
+            },
+        )
+    }
     suspend fun series(sourceId: String, id: Long): Music032WorkSeries? {
         val client = client(sourceId) ?: return null
         if (client.ensureCapabilities()?.hasFeature("series") != true) return null

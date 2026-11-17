@@ -780,7 +780,6 @@ fun MusicBridgeApp(
                     ) {
                         AlbumCollectionSection(
                             title = Strings.favoriteAlbumsCollection,
-                            subtitle = Strings.favoriteAlbumsCollectionDesc,
                             albums = state.favoriteAlbums,
                             selectedAlbum = state.selectedAlbum,
                             bottomContentPadding = contentBottomPadding,
@@ -793,6 +792,9 @@ fun MusicBridgeApp(
                     }
                 } else if (currentSection == AppSection.RecentAdded) {
                     val savedPos = state.getSavedLazyScrollPosition(AppSection.RecentAdded)
+                    LaunchedEffect(savedPos.index) {
+                        state.ensureRecentAddedVisibleForIndex(savedPos.index)
+                    }
                     val recentAddedGridState = rememberLazyGridState(
                         initialFirstVisibleItemIndex = savedPos.index,
                         initialFirstVisibleItemScrollOffset = savedPos.offset,
@@ -806,16 +808,20 @@ fun MusicBridgeApp(
                             )
                         }
                     }
+                    val visibleRecentAdded = remember(state.recentAddedAlbums, state.recentAddedVisibleCount) {
+                        state.recentAddedAlbums.take(state.recentAddedVisibleCount)
+                    }
                     Box(
                         modifier = Modifier.fillMaxSize(),
                     ) {
                         AlbumCollectionSection(
-                            title = Strings.recentAdded100,
-                            subtitle = Strings.recentAdded100Desc,
-                            albums = state.recentAddedAlbums.take(100),
+                            title = Strings.recentAdded,
+                            albums = visibleRecentAdded,
                             selectedAlbum = state.selectedAlbum,
                             bottomContentPadding = contentBottomPadding,
                             gridState = recentAddedGridState,
+                            hasMore = visibleRecentAdded.size < state.recentAddedAlbums.size,
+                            onLoadMore = state::loadMoreRecentAdded,
                             onBack = state::navigateBack,
                             onAlbumClick = state::openAlbumDetail,
                             onAlbumQueueAction = state::enqueueAlbum,
@@ -928,7 +934,7 @@ fun MusicBridgeApp(
                         allAlbums = state.allAlbums,
                         recentPlayedAlbums = state.recentPlayedAlbums,
                         favoriteAlbums = state.favoriteAlbums,
-                        recentAddedAlbums = state.recentAddedAlbums.take(100),
+                        recentAddedAlbums = state.recentAddedAlbums,
                         selectedAlbum = state.selectedAlbum,
                         playbackTarget = state.selectedPlaybackTarget,
                         sonosRooms = state.sonosRooms,

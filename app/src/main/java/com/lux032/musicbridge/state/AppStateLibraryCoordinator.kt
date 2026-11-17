@@ -95,11 +95,12 @@ internal class AppStateLibraryCoordinator(
             val client = state.client(profile)
             val fetched = client.fetchAlbums()
             if (state.connectionPreferences.id != sourceId) return
-            withContext(Dispatchers.IO) {
+            val persistedAlbums = withContext(Dispatchers.IO) {
                 state.albumLocalStore.replaceAllAlbums(sourceId, fetched.albums)
+                state.albumLocalStore.getAllAlbums(sourceId)
             }
             if (state.connectionPreferences.id != sourceId) return
-            state.allAlbums = fetched.albums
+            state.allAlbums = persistedAlbums
             if (profile.type == MusicServerType.Music032) {
                 // Artists are part of the 032 sync model: one cursor sync, persisted locally.
                 runCatching { client.fetchArtists().artists }
@@ -194,23 +195,16 @@ internal class AppStateLibraryCoordinator(
                 state.albumLocalStore.getAlbumTracks(album.sourceId, album.ratingKey)
             }
             if (cachedTracks.isNotEmpty()) {
-                state.trackResult = AlbumTracksResult("", album, cachedTracks)
+                val resolvedAlbum = applyResolvedAlbumDiscCount(album, cachedTracks)
+                state.trackResult = AlbumTracksResult("", resolvedAlbum, cachedTracks)
                 state.navigateTo(AppSection.AlbumDetail)
             } else {
                 state.isLoading = true
                 runCatching {
                     state.clientFor(album.sourceId).fetchAlbumTrackStreams(album)
                 }.onSuccess { result ->
-                    val derivedDiscCount = effectiveDiscCount(result.album, result.tracks)
-                    val resolvedAlbum = result.album.copy(discCount = derivedDiscCount)
+                    val resolvedAlbum = applyResolvedAlbumDiscCount(result.album, result.tracks)
                     state.trackResult = result.copy(album = resolvedAlbum)
-                    if (state.allAlbums.any { it.sourceId == resolvedAlbum.sourceId && it.ratingKey == resolvedAlbum.ratingKey }) {
-                        state.allAlbums = state.allAlbums.map { existing ->
-                            if (existing.sourceId == resolvedAlbum.sourceId && existing.ratingKey == resolvedAlbum.ratingKey) {
-                                existing.copy(discCount = derivedDiscCount)
-                            } else existing
-                        }
-                    }
                     state.navigateTo(AppSection.AlbumDetail)
                 }.onFailure {
                     state.errorMessage = it.message ?: "未知错误"
@@ -218,6 +212,27 @@ internal class AppStateLibraryCoordinator(
                 state.isLoading = false
             }
         }
+    }
+
+    private fun applyResolvedAlbumDiscCount(album: MusicAlbum, tracks: List<MusicTrack>): MusicAlbum {
+        val derivedDiscCount = effectiveDiscCount(album, tracks)
+        val resolvedAlbum = if (album.discCount == derivedDiscCount) album else album.copy(discCount = derivedDiscCount)
+        if (state.selectedAlbum?.let { it.sourceId == resolvedAlbum.sourceId && it.ratingKey == resolvedAlbum.ratingKey } == true) {
+            state.selectedAlbum = resolvedAlbum
+        }
+        if (state.allAlbums.any {
+                it.sourceId == resolvedAlbum.sourceId &&
+                    it.ratingKey == resolvedAlbum.ratingKey &&
+                    it.discCount != derivedDiscCount
+            }
+        ) {
+            state.allAlbums = state.allAlbums.map { existing ->
+                if (existing.sourceId == resolvedAlbum.sourceId && existing.ratingKey == resolvedAlbum.ratingKey) {
+                    existing.copy(discCount = derivedDiscCount)
+                } else existing
+            }
+        }
+        return resolvedAlbum
     }
 
     private val isMusic032Active: Boolean

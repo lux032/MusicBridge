@@ -47,6 +47,7 @@ import androidx.compose.ui.unit.dp
 import com.lux032.musicbridge.music.Music032DailyMix
 import com.lux032.musicbridge.music.MusicAlbum
 import com.lux032.musicbridge.sonos.SonosRoom
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
 
@@ -232,7 +233,7 @@ internal fun HomeSection(
                             albums = recentAddedAlbums.take(layoutInfo.homePreviewItemCount),
                             columns = layoutInfo.homePreviewColumns,
                             selectedAlbum = selectedAlbum,
-                            actionLabel = Strings.viewTop100,
+                            actionLabel = Strings.viewAll,
                             onAction = onOpenRecentAdded,
                             onAlbumClick = onAlbumClick,
                             onAlbumQueueAction = onAlbumQueueAction,
@@ -557,11 +558,12 @@ private fun androidx.compose.foundation.lazy.LazyListScope.albumPreviewGridItems
 @Composable
 internal fun AlbumCollectionSection(
     title: String,
-    subtitle: String,
     albums: List<MusicAlbum>,
     selectedAlbum: MusicAlbum?,
     bottomContentPadding: androidx.compose.ui.unit.Dp,
     gridState: LazyGridState = rememberLazyGridState(),
+    hasMore: Boolean = false,
+    onLoadMore: () -> Unit = {},
     onBack: () -> Unit,
     onAlbumClick: (MusicAlbum) -> Unit,
     onAlbumQueueAction: (MusicAlbum, QueuePlacement) -> Unit,
@@ -585,6 +587,23 @@ internal fun AlbumCollectionSection(
         return
     }
 
+    if (hasMore) {
+        val columns = layoutInfo.albumGridColumns
+        LaunchedEffect(gridState, albums.size, hasMore, columns) {
+            snapshotFlow {
+                val layout = gridState.layoutInfo
+                val lastVisible = layout.visibleItemsInfo.lastOrNull()?.index ?: 0
+                layout.totalItemsCount to lastVisible
+            }
+                .distinctUntilChanged()
+                .collect { (totalItems, lastVisible) ->
+                    if (totalItems > 0 && lastVisible >= totalItems - 1 - (columns * 2)) {
+                        onLoadMore()
+                    }
+                }
+        }
+    }
+
     LazyVerticalGrid(
         state = gridState,
         columns = GridCells.Fixed(layoutInfo.albumGridColumns),
@@ -602,21 +621,12 @@ internal fun AlbumCollectionSection(
             BackCircleButton(onClick = onBack, contentDescription = Strings.backToHome)
         }
         item(span = { GridItemSpan(maxLineSpan) }, contentType = "header") {
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = AppColors.TextPrimary,
-                    fontWeight = FontWeight.Bold,
-                )
-                Text(
-                    text = "$subtitle ${Strings.totalAlbums(albums.size)}",
-                    color = AppColors.TextSecondary,
-                )
-            }
+            Text(
+                text = title,
+                style = MaterialTheme.typography.headlineMedium,
+                color = AppColors.TextPrimary,
+                fontWeight = FontWeight.Bold,
+            )
         }
         items(
             items = albums,

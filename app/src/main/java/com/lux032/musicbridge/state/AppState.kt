@@ -374,6 +374,40 @@ class AppState(
             )
     }
 
+    var recentAddedVisibleCount by mutableIntStateOf(RECENT_ADDED_PAGE_SIZE)
+        internal set
+
+    fun loadMoreRecentAdded() {
+        val total = recentAddedAlbums.size
+        if (recentAddedVisibleCount < total) {
+            recentAddedVisibleCount = (recentAddedVisibleCount + RECENT_ADDED_PAGE_SIZE).coerceAtMost(total)
+        }
+    }
+
+    fun ensureRecentAddedVisibleForIndex(index: Int) {
+        if (index <= 0) return
+        val required = ((index / RECENT_ADDED_PAGE_SIZE) + 1) * RECENT_ADDED_PAGE_SIZE
+        if (recentAddedVisibleCount < required) {
+            recentAddedVisibleCount = required
+        }
+    }
+
+    internal fun enrichAlbumDiscCounts(albums: List<MusicAlbum>): List<MusicAlbum> {
+        if (albums.none { it.discCount == null }) return albums
+        val discCounts = allAlbums.mapNotNull { album ->
+            album.discCount?.let { (album.sourceId to album.ratingKey) to it }
+        }.toMap()
+        if (discCounts.isEmpty()) return albums
+        return albums.map { album ->
+            if (album.discCount != null) album
+            else discCounts[album.sourceId to album.ratingKey]?.let { album.copy(discCount = it) } ?: album
+        }
+    }
+
+    internal companion object {
+        const val RECENT_ADDED_PAGE_SIZE = 60
+    }
+
     // Reads selectedArtistName + artists (snapshot state); re-queries the local store
     // only when either changes. A library sync rebuilds `artists`, which keeps the
     // cached album list in step with the underlying database.
@@ -788,6 +822,7 @@ class AppState(
         trackResult = null
         playlistTrackResult = null
         albumSearchResults = emptyList()
+        recentAddedVisibleCount = RECENT_ADDED_PAGE_SIZE
         hasLoadedLocalAlbums = false
         errorMessage = null
         dailyMixCoordinator.reset()

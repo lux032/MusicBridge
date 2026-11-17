@@ -994,6 +994,46 @@ class AlbumLocalStoreMigrationTest {
         context.deleteDatabase(DATABASE_NAME)
     }
 
+    @Test
+    fun albumQueriesBackfillNullDiscCountFromCachedAlbumTracks() {
+        val context = cleanDatabaseContext()
+        val store = AlbumLocalStore(context)
+        val syncedAlbum = MusicAlbum(
+            ratingKey = "album-null-col",
+            title = "Double OST",
+            artistName = "Composer",
+            year = 2024,
+            thumbUrl = null,
+            userRating = null,
+            addedAtEpochSeconds = null,
+            lastViewedAtEpochSeconds = null,
+            section = LibrarySection("032", "Music", "artist"),
+            sourceId = "source",
+            artists = listOf(ArtistRef(id = "artist-1", name = "Composer")),
+            discCount = null,
+        )
+        store.replaceAllAlbums("source", listOf(syncedAlbum))
+        store.replaceAllAlbumTracks(
+            "source",
+            mapOf(
+                "album-null-col" to listOf(
+                    track("source", "t1", 0, 0).copy(albumRatingKey = "album-null-col", discNumber = null, trackNumber = 1),
+                    track("source", "t2", 0, 0).copy(albumRatingKey = "album-null-col", discNumber = 2, trackNumber = 1),
+                )
+            ),
+        )
+        // Simulate pre-v20 upgrade state where albums.disc_count is NULL while album_tracks has disc_number.
+        context.openOrCreateDatabase(DATABASE_NAME, Context.MODE_PRIVATE, null).use { db ->
+            db.execSQL("UPDATE albums SET disc_count = NULL WHERE rating_key = 'album-null-col'")
+        }
+
+        assertEquals(2, store.getAllAlbums("source").single().discCount)
+        assertEquals(2, store.searchAlbums("source", "Double").single().discCount)
+        assertEquals(2, store.getAlbumsByArtist("source", "Composer").single().discCount)
+        assertEquals(2, store.getArtistDiscography("source", "artist-1").single().album.discCount)
+        context.deleteDatabase(DATABASE_NAME)
+    }
+
     private fun cleanDatabaseContext(): Context =
         RuntimeEnvironment.getApplication().also { it.deleteDatabase(DATABASE_NAME) }
 
