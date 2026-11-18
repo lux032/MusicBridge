@@ -41,11 +41,11 @@ class AlbumDetailMetadataTest {
             track("2", durationMillis = 185_000L, codec = "flac"),
         )
         assertEquals(
-            "2010-10-27 · ${Strings.discCountFact(2)} · ${Strings.tracks(2)} · 05:05 · FLAC",
+            "2010-10-27 · ${Strings.discCountFact(2)} · ${Strings.tracks(2)} · 5:05 · FLAC",
             albumDetailMetaText(sampleAlbum, tracks, isMultiDisc = true, discCount = 2),
         )
         assertEquals(
-            "2010-10-27 · ${Strings.tracks(2)} · 05:05 · FLAC",
+            "2010-10-27 · ${Strings.tracks(2)} · 5:05 · FLAC",
             albumDetailMetaText(sampleAlbum, tracks, isMultiDisc = false, discCount = 1),
         )
     }
