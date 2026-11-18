@@ -411,8 +411,7 @@ internal class AppStateLibraryCoordinator(
         )
     }
 
-    private fun splitArtistCredit(text: String): List<String> =
-        text.split(", ", "、", " / ", "; ").map(String::trim).filter(String::isNotEmpty).distinct()
+    private fun splitArtistCredit(text: String): List<String> = splitArtistNames(text)
 
     fun playArtist(artist: ArtistSummary, shuffle: Boolean = false) {
         if (state.isPlaybackCommandLoading) return

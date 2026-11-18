@@ -1,5 +1,6 @@
 package com.lux032.musicbridge
 
+import com.lux032.musicbridge.music.ArtistRef
 import com.lux032.musicbridge.music.MusicAlbum
 import com.lux032.musicbridge.music.MusicTrack
 import com.lux032.musicbridge.sonos.SonosRoom
@@ -115,24 +116,101 @@ enum class AlbumSortOption {
 
 private val RELEASE_DATE_PATTERN = Regex("""^(\d{4})(?:[-./]?(\d{1,2})(?:[-./]?(\d{1,2}))?)?""")
 
+private data class ReleaseDateParts(val year: Int, val month: Int?, val day: Int?)
+
 /**
- * Comparable release key `yyyyMMdd`; missing month/day count as 0, so a bare year sorts
- * after that year's dated releases when newest-first (same as the 032 web "date" sort).
- * A [MusicAlbum.year] that contradicts the date's year wins (it is the user-edited value),
- * and an album without a usable date falls back to its year. Null when neither exists.
+ * Extracts year/month/day for sorting and display: a [MusicAlbum.year] that contradicts the
+ * tagged date's year wins (user-edited value), and an album without a usable date falls back
+ * to its year. Null when neither exists.
  */
-fun MusicAlbum.releaseSortKey(): Int? {
+private fun MusicAlbum.effectiveReleaseDateParts(): ReleaseDateParts? {
     val validYear = year?.takeIf { it in 1..9999 }
     val match = releaseDate?.trim()?.let(RELEASE_DATE_PATTERN::find)
     if (match != null) {
         val dateYear = match.groupValues[1].toInt()
         if (dateYear > 0 && (validYear == null || validYear == dateYear)) {
-            val month = match.groupValues[2].toIntOrNull()?.takeIf { it in 1..12 } ?: 0
-            val day = if (month == 0) 0 else match.groupValues[3].toIntOrNull()?.takeIf { it in 1..31 } ?: 0
-            return dateYear * 10_000 + month * 100 + day
+            val month = match.groupValues[2].toIntOrNull()?.takeIf { it in 1..12 }
+            val day = if (month == null) null else match.groupValues[3].toIntOrNull()?.takeIf { it in 1..31 }
+            return ReleaseDateParts(dateYear, month, day)
         }
     }
-    return validYear?.let { it * 10_000 }
+    return validYear?.let { ReleaseDateParts(it, month = null, day = null) }
+}
+
+/**
+ * Comparable release key `yyyyMMdd`; missing month/day count as 0, so a bare year sorts
+ * after that year's dated releases when newest-first (same as the 032 web "date" sort).
+ */
+fun MusicAlbum.releaseSortKey(): Int? = effectiveReleaseDateParts()?.let { (y, m, d) ->
+    y * 10_000 + (m ?: 0) * 100 + (d ?: 0)
+}
+
+/** Formats [MusicAlbum.releaseDate] (or [MusicAlbum.year] fallback) as `YYYY-MM-DD`, `YYYY-MM`, or `YYYY`. */
+fun MusicAlbum.formattedReleaseDate(): String? = effectiveReleaseDateParts()?.let { (y, m, d) ->
+    buildString {
+        append(y.toString().padStart(4, '0'))
+        if (m != null) {
+            append('-').append(m.toString().padStart(2, '0'))
+            if (d != null) append('-').append(d.toString().padStart(2, '0'))
+        }
+    }
+}
+
+internal fun splitArtistNames(text: String): List<String> =
+    text.split(", ", "、", " / ", "; ").map(String::trim).filter(String::isNotEmpty).distinct()
+
+/** Performers for this track, falling back to [album] artists when the track carries none. */
+internal fun MusicTrack.resolvedPerformers(album: MusicAlbum? = null): List<ArtistRef> = when {
+    artists.isNotEmpty() -> artists
+    !artistName.isNullOrBlank() -> splitArtistNames(artistName).map { ArtistRef("", it) }
+    album != null && album.artists.isNotEmpty() -> album.artists
+    album != null && !album.artistName.isNullOrBlank() -> splitArtistNames(album.artistName).map { ArtistRef("", it) }
+    else -> emptyList()
+}
+
+/**
+ * True when this track has explicit performer metadata that differs from [album]'s credited
+ * artist(s), e.g. compilations, featured guests, or multi-singer tracks.
+ */
+internal fun MusicTrack.hasDifferentPerformersFrom(album: MusicAlbum): Boolean {
+    if (artists.isEmpty() && artistName.isNullOrBlank()) return false
+    if (artists.isNotEmpty() && album.artists.isNotEmpty()) {
+        return artists.map(ArtistRef::id).toSet() != album.artists.map(ArtistRef::id).toSet()
+    }
+    val trackNames = if (artists.isNotEmpty()) {
+        artists.map { it.name.trim().lowercase() }.toSet()
+    } else {
+        splitArtistNames(artistName.orEmpty()).map { it.lowercase() }.toSet()
+    }
+    val albumNames = if (album.artists.isNotEmpty()) {
+        album.artists.map { it.name.trim().lowercase() }.toSet()
+    } else {
+        splitArtistNames(album.artistName.orEmpty()).map { it.lowercase() }.toSet()
+    }
+    if (trackNames.isEmpty() || albumNames.isEmpty()) {
+        val rawTrack = artistName?.trim()?.lowercase().orEmpty()
+        val rawAlbum = album.artistName?.trim()?.lowercase().orEmpty()
+        return rawTrack.isNotEmpty() && rawTrack != rawAlbum
+    }
+    return trackNames != albumNames
+}
+
+/**
+ * Compact performer summary for an album track row; returns null when the track performer matches
+ * [album] so solo-artist albums stay clean, and condenses ≥3 performers into "A、B 等 N 位".
+ */
+internal fun MusicTrack.albumTrackRowPerformerSummary(album: MusicAlbum): String? {
+    if (!hasDifferentPerformersFrom(album)) return null
+    val names = if (artists.isNotEmpty()) {
+        artists.map(ArtistRef::name)
+    } else {
+        splitArtistNames(artistName.orEmpty())
+    }
+    return when {
+        names.isEmpty() -> null
+        names.size <= 2 -> names.joinToString(Strings.performerSeparator)
+        else -> Strings.trackPerformersSummary(names[0], names[1], names.size)
+    }
 }
 
 /** Sorts by [releaseSortKey] (keys computed once); undated albums always last, ties by title. */

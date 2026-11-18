@@ -25,6 +25,7 @@ import androidx.compose.ui.unit.dp
 import com.lux032.musicbridge.music.ArtistRef
 import com.lux032.musicbridge.music.Music032TrackWork
 import com.lux032.musicbridge.music.Music032Work
+import com.lux032.musicbridge.music.MusicAlbum
 import com.lux032.musicbridge.music.MusicTrack
 import com.lux032.musicbridge.music.TrackCredit
 import kotlinx.coroutines.CancellationException
@@ -97,29 +98,14 @@ internal fun PlaybackMoreContent(
         contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 24.dp),
     ) {
         item("header") {
-            Row(Modifier.fillMaxWidth().padding(bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(Strings.more, style = MaterialTheme.typography.titleLarge, color = AppColors.TextPrimary,
-                    modifier = Modifier.weight(1f))
-                BareIcon(Icons.Filled.Close, Strings.close, onDismiss)
-            }
-            Row(Modifier.fillMaxWidth().padding(bottom = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically) {
-                AsyncAlbumArtwork(
-                    imageUrl = artworkUrl,
-                    title = track.albumTitle ?: track.title,
-                    modifier = Modifier.size(44.dp),
-                    thumbnailSize = 64.dp,
-                    fit = ArtworkFit.Contain,
-                    alignment = Alignment.Center,
-                    shape = RoundedCornerShape(9.dp),
-                )
-                Column(Modifier.weight(1f)) {
-                    Text(track.title, style = MaterialTheme.typography.titleMedium, color = AppColors.TextPrimary,
-                        maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    Text(artistAlbum, style = MaterialTheme.typography.bodySmall, color = AppColors.TextSecondary,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-            }
+            TrackInfoSheetHeader(
+                sheetTitle = Strings.more,
+                trackTitle = track.title,
+                artworkUrl = artworkUrl,
+                artworkFallbackTitle = track.albumTitle ?: track.title,
+                subtitle = artistAlbum,
+                onDismiss = onDismiss,
+            )
             Hairline()
         }
         if (loading) item("works-loading") {
@@ -161,23 +147,264 @@ internal fun PlaybackMoreContent(
             credits.forEach { credit -> PlaybackCreditRow(credit, onOpenArtist) }
         }
         item("details") {
-            Hairline(Modifier.padding(top = if (credits.isEmpty()) 16.dp else 8.dp))
-            Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable { showDetails = !showDetails },
-                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Icon(Icons.Filled.Info, null, tint = AppColors.TextSecondary, modifier = Modifier.size(16.dp))
-                Text(Strings.trackDetails, style = MaterialTheme.typography.bodySmall, color = AppColors.TextSecondary,
-                    modifier = Modifier.weight(1f))
-                Icon(if (showDetails) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore, null,
-                    tint = AppColors.TextSecondary, modifier = Modifier.size(18.dp))
-            }
-            if (showDetails) Text(technicalDetails, style = MaterialTheme.typography.bodyMedium,
-                color = AppColors.TextSecondary, modifier = Modifier.padding(bottom = 8.dp))
+            TrackTechnicalDetailsBlock(
+                technicalDetails = technicalDetails,
+                showDetails = showDetails,
+                onToggleDetails = { showDetails = !showDetails },
+                topPadding = if (credits.isEmpty()) 16.dp else 8.dp,
+            )
+        }
+    }
+}
+
+/**
+ * Album track metadata sheet opened from a track's More menu: always shows performers,
+ * lazily loads backstage credits (with loading/empty feedback), optional works and audio specs.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun AlbumTrackInfoSheet(
+    track: MusicTrack,
+    album: MusicAlbum,
+    technicalDetails: String,
+    palette: ArtworkPalette,
+    loadWorks: suspend (MusicTrack) -> List<Music032TrackWork>,
+    loadWorkInfo: suspend (String, Long) -> Music032Work?,
+    loadCredits: suspend (MusicTrack) -> List<TrackCredit>,
+    onOpenWork: (String, Long) -> Unit,
+    onOpenArtist: (ArtistRef) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = palette.backgroundBottom) {
+        CompositionLocalProvider(LocalArtworkPalette provides palette) {
+            AlbumTrackInfoContent(
+                track = track,
+                album = album,
+                technicalDetails = technicalDetails,
+                loadWorks = loadWorks,
+                loadWorkInfo = loadWorkInfo,
+                loadCredits = loadCredits,
+                onOpenWork = { source, id -> onDismiss(); onOpenWork(source, id) },
+                onOpenArtist = { ref -> onDismiss(); onOpenArtist(ref) },
+                onDismiss = onDismiss,
+            )
         }
     }
 }
 
 @Composable
-private fun PlaybackWorkRow(
+private fun AlbumTrackInfoContent(
+    track: MusicTrack,
+    album: MusicAlbum,
+    technicalDetails: String,
+    loadWorks: suspend (MusicTrack) -> List<Music032TrackWork>,
+    loadWorkInfo: suspend (String, Long) -> Music032Work?,
+    loadCredits: suspend (MusicTrack) -> List<TrackCredit>,
+    onOpenWork: (String, Long) -> Unit,
+    onOpenArtist: (ArtistRef) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val performers = remember(track, album) { track.resolvedPerformers(album) }
+    var credits by remember(track.sourceId, track.ratingKey) { mutableStateOf(emptyList<TrackCredit>()) }
+    var creditsLoading by remember(track.sourceId, track.ratingKey) { mutableStateOf(true) }
+    var links by remember(track.sourceId, track.ratingKey) { mutableStateOf(emptyList<Music032TrackWork>()) }
+    var showDetails by rememberSaveable(track.sourceId, track.ratingKey) { mutableStateOf(true) }
+
+    LaunchedEffect(track.sourceId, track.ratingKey) {
+        creditsLoading = true
+        try {
+            credits = loadCredits(track)
+        } catch (cancel: CancellationException) {
+            throw cancel
+        } finally {
+            creditsLoading = false
+        }
+    }
+    LaunchedEffect(track.sourceId, track.ratingKey) {
+        links = try {
+            loadWorks(track).distinctBy { it.work.id }
+        } catch (cancel: CancellationException) {
+            throw cancel
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    val subtitle = remember(album.title, track.durationMillis) {
+        listOfNotNull(
+            album.title.takeIf { it.isNotBlank() },
+            track.durationMillis?.let(::formatDuration),
+        ).joinToString(" · ")
+    }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxWidth(),
+        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 24.dp),
+    ) {
+        item("header") {
+            TrackInfoSheetHeader(
+                sheetTitle = Strings.trackInfoTitle,
+                trackTitle = track.title,
+                artworkUrl = track.thumbUrl ?: album.thumbUrl,
+                artworkFallbackTitle = album.title.ifBlank { track.title },
+                subtitle = subtitle,
+                onDismiss = onDismiss,
+            )
+            Hairline()
+        }
+        item("performers-and-credits") {
+            Text(
+                Strings.performersAndCredits,
+                style = MaterialTheme.typography.labelMedium,
+                color = AppColors.TextSecondary,
+                modifier = Modifier.padding(top = 16.dp, bottom = 4.dp),
+            )
+            if (performers.isNotEmpty()) {
+                PlaybackCreditRow(TrackCredit("performer", performers), onOpenArtist)
+            }
+            when {
+                creditsLoading -> Row(
+                    modifier = Modifier.padding(vertical = 10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        strokeWidth = 2.dp,
+                        color = LocalArtworkPalette.current.accent,
+                    )
+                    Text(
+                        Strings.creditsLoading,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AppColors.TextSecondary,
+                    )
+                }
+                credits.isNotEmpty() -> credits.forEach { credit -> PlaybackCreditRow(credit, onOpenArtist) }
+                else -> Text(
+                    Strings.noTrackCredits,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AppColors.TextTertiary,
+                    modifier = Modifier.padding(vertical = 8.dp),
+                )
+            }
+        }
+        if (links.isNotEmpty()) {
+            item("works-heading") {
+                Text(
+                    Strings.workAssociations(links.size),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = AppColors.TextSecondary,
+                    modifier = Modifier.padding(top = 14.dp, bottom = 4.dp),
+                )
+            }
+            items(links, key = { "work:${it.work.id}" }) { link ->
+                PlaybackWorkRow(track.sourceId, link, loadWorkInfo) { onOpenWork(track.sourceId, link.work.id) }
+                Hairline()
+            }
+        }
+        item("details") {
+            TrackTechnicalDetailsBlock(
+                technicalDetails = technicalDetails,
+                showDetails = showDetails,
+                onToggleDetails = { showDetails = !showDetails },
+                topPadding = 10.dp,
+            )
+        }
+    }
+}
+
+@Composable
+private fun TrackInfoSheetHeader(
+    sheetTitle: String,
+    trackTitle: String,
+    artworkUrl: String?,
+    artworkFallbackTitle: String,
+    subtitle: String,
+    onDismiss: () -> Unit,
+) {
+    Row(Modifier.fillMaxWidth().padding(bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            sheetTitle,
+            style = MaterialTheme.typography.titleLarge,
+            color = AppColors.TextPrimary,
+            modifier = Modifier.weight(1f),
+        )
+        BareIcon(Icons.Filled.Close, Strings.close, onDismiss)
+    }
+    Row(
+        Modifier.fillMaxWidth().padding(bottom = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        AsyncAlbumArtwork(
+            imageUrl = artworkUrl,
+            title = artworkFallbackTitle,
+            modifier = Modifier.size(44.dp),
+            thumbnailSize = 64.dp,
+            fit = ArtworkFit.Contain,
+            alignment = Alignment.Center,
+            shape = RoundedCornerShape(9.dp),
+        )
+        Column(Modifier.weight(1f)) {
+            Text(
+                trackTitle,
+                style = MaterialTheme.typography.titleMedium,
+                color = AppColors.TextPrimary,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (subtitle.isNotBlank()) {
+                Text(
+                    subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AppColors.TextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TrackTechnicalDetailsBlock(
+    technicalDetails: String,
+    showDetails: Boolean,
+    onToggleDetails: () -> Unit,
+    topPadding: androidx.compose.ui.unit.Dp,
+) {
+    Hairline(Modifier.padding(top = topPadding))
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(onClick = onToggleDetails),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Icon(Icons.Filled.Info, null, tint = AppColors.TextSecondary, modifier = Modifier.size(16.dp))
+        Text(
+            Strings.trackDetails,
+            style = MaterialTheme.typography.bodySmall,
+            color = AppColors.TextSecondary,
+            modifier = Modifier.weight(1f),
+        )
+        Icon(
+            if (showDetails) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+            null,
+            tint = AppColors.TextSecondary,
+            modifier = Modifier.size(18.dp),
+        )
+    }
+    if (showDetails) {
+        Text(
+            technicalDetails,
+            style = MaterialTheme.typography.bodyMedium,
+            color = AppColors.TextSecondary,
+            modifier = Modifier.padding(bottom = 8.dp),
+        )
+    }
+}
+
+@Composable
+internal fun PlaybackWorkRow(
     sourceId: String,
     link: Music032TrackWork,
     loadInfo: suspend (String, Long) -> Music032Work?,
@@ -207,7 +434,7 @@ private fun PlaybackWorkRow(
 /** One role and its people. Names with an artist id are accent links; the rest are plain text. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun PlaybackCreditRow(credit: TrackCredit, onOpenArtist: (ArtistRef) -> Unit) {
+internal fun PlaybackCreditRow(credit: TrackCredit, onOpenArtist: (ArtistRef) -> Unit) {
     val nameHeight = Modifier.heightIn(min = 40.dp).wrapContentHeight(Alignment.CenterVertically)
     Row(Modifier.fillMaxWidth()) {
         Text(Strings.creditRole(credit.role), style = MaterialTheme.typography.bodySmall,

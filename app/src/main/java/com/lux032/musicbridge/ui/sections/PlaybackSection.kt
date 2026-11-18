@@ -1367,6 +1367,31 @@ private fun MusicTrack.trackDetailText(
     .joinToString(" · ")
     .ifBlank { sourceAudioCodec?.uppercase(Locale.ROOT) ?: "—" }
 
+internal fun sourceAudioDetailText(track: MusicTrack): String = buildList {
+    addAll(originalAudioQualityBadges(track.sourceAudioCodec, track.bitDepth, track.sourceAudioSampleRate))
+    track.sourceAudioBitrateKbps?.takeIf { it > 0 }?.let { add("$it kbps") }
+}.joinToString(" · ").ifBlank { "—" }
+
+internal fun albumDetailMetaText(
+    album: MusicAlbum,
+    tracks: List<MusicTrack>,
+    isMultiDisc: Boolean,
+    discCount: Int,
+): String {
+    val totalDurationMillis = tracks.sumOf { it.durationMillis ?: 0L }
+    val codec = tracks.firstOrNull()
+        ?.sourceAudioCodec
+        ?.takeIf { it.isNotBlank() }
+        ?.uppercase(Locale.ROOT)
+    return buildList {
+        album.formattedReleaseDate()?.let(::add)
+        if (isMultiDisc) add(Strings.discCountFact(discCount))
+        add(Strings.tracks(tracks.size))
+        if (totalDurationMillis > 0L) add(formatDuration(totalDurationMillis))
+        codec?.let(::add)
+    }.joinToString(" · ")
+}
+
 @Composable
 internal fun MoreSheetAction(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, onClick: () -> Unit) {
     Row(
@@ -1437,6 +1462,10 @@ internal fun AlbumDetailSection(
     onPlayDisc: (MusicAlbum, AlbumDiscGroup<MusicTrack>) -> Unit = { _, _ -> },
     onQueueDisc: (MusicAlbum, AlbumDiscGroup<MusicTrack>, QueuePlacement) -> Unit = { _, _, _ -> },
     onPlayTrack: (MusicAlbum, MusicTrack) -> Unit,
+    loadTrackWorks: suspend (MusicTrack) -> List<com.lux032.musicbridge.music.Music032TrackWork> = { emptyList() },
+    loadWorkInfo: suspend (String, Long) -> com.lux032.musicbridge.music.Music032Work? = { _, _ -> null },
+    loadTrackCredits: suspend (MusicTrack) -> List<com.lux032.musicbridge.music.TrackCredit> = { emptyList() },
+    onOpenWork: (String, Long) -> Unit = { _, _ -> },
     nowPlaying: NowPlayingMarker? = LocalNowPlaying.current,
 ) {
     val currentTrackResult = trackResult
@@ -1452,6 +1481,9 @@ internal fun AlbumDetailSection(
 
     val layoutInfo = LocalAppLayoutInfo.current
     var showAlbumQueueMenu by remember { mutableStateOf(false) }
+    var selectedInfoTrack by remember(currentTrackResult.album.sourceId, currentTrackResult.album.ratingKey) {
+        mutableStateOf<MusicTrack?>(null)
+    }
     val isMultiDisc = remember(currentTrackResult) {
         isMultiDiscAlbum(currentTrackResult.album, currentTrackResult.tracks)
     }
@@ -1535,6 +1567,7 @@ internal fun AlbumDetailSection(
                     onPlayDisc = onPlayDisc,
                     onQueueDisc = onQueueDisc,
                     onPlayTrack = onPlayTrack,
+                    onShowTrackInfo = { selectedInfoTrack = it },
                     nowPlaying = nowPlaying,
                 )
             }
@@ -1587,10 +1620,26 @@ internal fun AlbumDetailSection(
                 onPlayDisc = onPlayDisc,
                 onQueueDisc = onQueueDisc,
                 onPlayTrack = onPlayTrack,
+                onShowTrackInfo = { selectedInfoTrack = it },
                 nowPlaying = nowPlaying,
             )
         }
     }
+    }
+
+    selectedInfoTrack?.let { infoTrack ->
+        AlbumTrackInfoSheet(
+            track = infoTrack,
+            album = currentTrackResult.album,
+            technicalDetails = sourceAudioDetailText(infoTrack),
+            palette = LocalArtworkPalette.current,
+            loadWorks = loadTrackWorks,
+            loadWorkInfo = loadWorkInfo,
+            loadCredits = loadTrackCredits,
+            onOpenWork = onOpenWork,
+            onOpenArtist = { ref -> onArtistClick(ref.name, listOf(ref)) },
+            onDismiss = { selectedInfoTrack = null },
+        )
     }
 }
 
@@ -1612,6 +1661,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.albumTrackItems(
     onPlayDisc: (MusicAlbum, AlbumDiscGroup<MusicTrack>) -> Unit,
     onQueueDisc: (MusicAlbum, AlbumDiscGroup<MusicTrack>, QueuePlacement) -> Unit,
     onPlayTrack: (MusicAlbum, MusicTrack) -> Unit,
+    onShowTrackInfo: (MusicTrack) -> Unit,
     nowPlaying: NowPlayingMarker?,
 ) {
     if (!isMultiDisc) {
@@ -1636,6 +1686,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.albumTrackItems(
                     onToggleTrackFavorite = onToggleTrackFavorite,
                     onQueueTrack = onQueueTrack,
                     onPlayTrack = onPlayTrack,
+                    onShowTrackInfo = onShowTrackInfo,
                     nowPlaying = nowPlaying?.takeIf { it.matches(track) },
                 )
             }
@@ -1682,6 +1733,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.albumTrackItems(
                     onToggleTrackFavorite = onToggleTrackFavorite,
                     onQueueTrack = onQueueTrack,
                     onPlayTrack = onPlayTrack,
+                    onShowTrackInfo = onShowTrackInfo,
                     nowPlaying = nowPlaying?.takeIf { it.matches(track) },
                 )
             }
@@ -1935,20 +1987,15 @@ private fun AlbumDetailHeroWide(
                 .clip(RoundedCornerShape(6.dp))
                 .clickable { onArtistClick(album.artistName, album.artists) },
         )
+        val metaText = remember(album, trackResult.tracks, isMultiDisc, discCount) {
+            albumDetailMetaText(album, trackResult.tracks, isMultiDisc, discCount)
+        }
         Text(
-            text = buildString {
-                album.year?.let {
-                    append(it)
-                    append(" · ")
-                }
-                if (isMultiDisc) {
-                    append(Strings.discCountFact(discCount))
-                    append(" · ")
-                }
-                append(Strings.tracks(trackResult.tracks.size))
-            },
+            text = metaText,
             color = AppColors.TextTertiary,
             style = MaterialTheme.typography.bodyMedium,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
         )
         Spacer(Modifier.height(8.dp))
         AlbumActionRow(
@@ -2093,10 +2140,6 @@ private fun AlbumDetailHeroCompact(
 ) {
     val palette = LocalArtworkPalette.current
     val album = trackResult.album
-    val codec = trackResult.tracks.firstOrNull()
-        ?.sourceAudioCodec
-        ?.takeIf { it.isNotBlank() }
-        ?.uppercase(Locale.ROOT)
     val totalTracks = trackResult.tracks.size
     val downloadedCount = trackResult.tracks.count { track ->
         "${track.sourceId}:${track.ratingKey}" in downloadedTrackKeys || track.ratingKey in downloadedTrackKeys
@@ -2106,7 +2149,9 @@ private fun AlbumDetailHeroCompact(
     }
     val isAllDownloaded = totalTracks > 0 && downloadedCount == totalTracks
     var showDeleteAlbumDialog by remember { mutableStateOf(false) }
-    val totalDurationMillis = trackResult.tracks.sumOf { it.durationMillis ?: 0L }
+    val metaText = remember(album, trackResult.tracks, isMultiDisc, discCount) {
+        albumDetailMetaText(album, trackResult.tracks, isMultiDisc, discCount)
+    }
 
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -2187,17 +2232,13 @@ private fun AlbumDetailHeroCompact(
         )
         Spacer(Modifier.height(4.dp))
         Text(
-            text = buildString {
-                album.year?.let { append("$it · ") }
-                if (isMultiDisc) append(Strings.discCountFact(discCount)).append(" · ")
-                append(Strings.tracks(totalTracks))
-                if (totalDurationMillis > 0L) append(" · ").append(formatDuration(totalDurationMillis))
-                codec?.let { append(" · $it") }
-            },
+            text = metaText,
             color = AppColors.TextTertiary,
             style = MaterialTheme.typography.bodySmall,
-            maxLines = 1,
+            textAlign = TextAlign.Center,
+            maxLines = 2,
             overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(horizontal = 8.dp),
         )
         Spacer(Modifier.height(18.dp))
         AlbumActionRow(
@@ -2267,6 +2308,7 @@ private fun AlbumTrackRow(
     onToggleTrackFavorite: (MusicTrack) -> Unit,
     onQueueTrack: (MusicTrack, QueuePlacement) -> Unit,
     onPlayTrack: (MusicAlbum, MusicTrack) -> Unit,
+    onShowTrackInfo: (MusicTrack) -> Unit = {},
     nowPlaying: NowPlayingMarker? = null,
 ) {
     var showQueueMenu by remember { mutableStateOf(false) }
@@ -2277,6 +2319,7 @@ private fun AlbumTrackRow(
         "${track.sourceId}:${track.ratingKey}" in downloadedTrackKeys || track.ratingKey in downloadedTrackKeys
     }
     val progress = downloadProgress["${track.sourceId}:${track.ratingKey}"]
+    val performerSummary = remember(album, track) { track.albumTrackRowPerformerSummary(album) }
     val palette = LocalArtworkPalette.current
 
     // Editorial hairline row: number · title/duration · favourite · more. Tap plays, long-press
@@ -2333,11 +2376,29 @@ private fun AlbumTrackRow(
                                 color = palette.accent,
                             )
                         }
+                        if (performerSummary != null) {
+                            Text(
+                                text = performerSummary,
+                                color = AppColors.TextSecondary,
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false),
+                            )
+                            if (track.durationMillis != null) {
+                                Text(
+                                    text = "·",
+                                    color = AppColors.TextTertiary,
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                        }
                         track.durationMillis?.let { duration ->
                             Text(
                                 formatDuration(duration),
                                 color = AppColors.TextTertiary,
                                 style = MaterialTheme.typography.bodySmall,
+                                maxLines = 1,
                             )
                         }
                     }
@@ -2375,6 +2436,7 @@ private fun AlbumTrackRow(
                 showQueueMenu = false
                 onQueueTrack(track, placement)
             },
+            onShowTrackInfo = { onShowTrackInfo(track) },
             isDownloaded = isDownloaded,
             onDownloadAction = {
                 if (isDownloaded) onDeleteDownloadedTrack(track) else onDownloadTrack(track)

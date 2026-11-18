@@ -510,6 +510,7 @@ internal fun QueueActionMenu(
     onDismiss: () -> Unit,
     onAction: (QueuePlacement) -> Unit,
     onPlay: (() -> Unit)? = null,
+    onShowTrackInfo: (() -> Unit)? = null,
     isDownloaded: Boolean = false,
     downloadLabel: String? = null,
     onDownloadAction: (() -> Unit)? = null,
@@ -528,6 +529,20 @@ internal fun QueueActionMenu(
                 onClick = {
                     onDismiss()
                     onPlay()
+                },
+            )
+            HorizontalDivider(
+                color = KeyColors.Line,
+                modifier = Modifier.padding(vertical = 4.dp),
+            )
+        }
+        if (onShowTrackInfo != null) {
+            DropdownMenuItem(
+                text = { Text(Strings.trackInfoAndCredits) },
+                leadingIcon = { Icon(Icons.Filled.Info, contentDescription = null) },
+                onClick = {
+                    onDismiss()
+                    onShowTrackInfo()
                 },
             )
             HorizontalDivider(

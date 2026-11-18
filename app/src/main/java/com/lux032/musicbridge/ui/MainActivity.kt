@@ -885,6 +885,10 @@ fun MusicBridgeApp(
                                     state.startSingleTrackPlayback(album, listOf(track), 0)
                                 }
                             },
+                            loadTrackWorks = state::fetchTrackWorks,
+                            loadWorkInfo = state::fetchWorkInfo,
+                            loadTrackCredits = state::fetchTrackCredits,
+                            onOpenWork = state::openWork,
                         )
                     }
                 } else if (currentSection == AppSection.Downloads) {
