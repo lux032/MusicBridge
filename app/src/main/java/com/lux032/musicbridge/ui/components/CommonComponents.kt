@@ -8,6 +8,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.material3.ripple
@@ -33,16 +35,20 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.lux032.musicbridge.sonos.SonosRoom
@@ -502,6 +508,59 @@ private fun AlbumCoverArtwork(
         onCenterCaption = onCenterCaption,
         overlay = { AlbumCoverOverlayBadges(nowPlaying, album.discCount) },
     )
+}
+
+/**
+ * Tracks where the user pressed on a row so long-pressing opens its context menu right at the
+ * finger, while tapping the trailing `⋯` button opens the menu anchored to that button.
+ */
+@Stable
+internal class ContextualMenuState {
+    var expanded by mutableStateOf(false)
+        private set
+    var pressOffset by mutableStateOf<IntOffset?>(null)
+        private set
+    internal var lastDownOffset: Offset? = null
+
+    fun openAtLastPress() {
+        pressOffset = lastDownOffset?.let { IntOffset(it.x.roundToInt(), it.y.roundToInt()) }
+        expanded = true
+    }
+
+    fun openAtAnchor() {
+        pressOffset = null
+        expanded = true
+    }
+
+    fun dismiss() {
+        expanded = false
+    }
+}
+
+@Composable
+internal fun rememberContextualMenuState(): ContextualMenuState = remember { ContextualMenuState() }
+
+internal fun Modifier.trackMenuPressPosition(menuState: ContextualMenuState): Modifier =
+    pointerInput(menuState) {
+        awaitEachGesture {
+            val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+            menuState.lastDownOffset = down.position
+            do {
+                val event = awaitPointerEvent(PointerEventPass.Initial)
+            } while (event.changes.any { it.pressed })
+            menuState.lastDownOffset = null
+        }
+    }
+
+@Composable
+internal fun ContextualMenuAnchor(
+    menuState: ContextualMenuState,
+    menu: @Composable () -> Unit,
+) {
+    val offset = menuState.pressOffset ?: return
+    Box(modifier = Modifier.offset { offset }.size(0.dp)) {
+        menu()
+    }
 }
 
 @Composable

@@ -2311,7 +2311,7 @@ private fun AlbumTrackRow(
     onShowTrackInfo: (MusicTrack) -> Unit = {},
     nowPlaying: NowPlayingMarker? = null,
 ) {
-    var showQueueMenu by remember { mutableStateOf(false) }
+    val menuState = rememberContextualMenuState()
     // Only the matching row receives a non-null marker, so other rows skip recomposition
     // when play/pause toggles.
     val isCurrent = nowPlaying != null
@@ -2321,24 +2321,42 @@ private fun AlbumTrackRow(
     val progress = downloadProgress["${track.sourceId}:${track.ratingKey}"]
     val performerSummary = remember(album, track) { track.albumTrackRowPerformerSummary(album) }
     val palette = LocalArtworkPalette.current
+    val renderMenu: @Composable () -> Unit = {
+        QueueActionMenu(
+            expanded = menuState.expanded,
+            onDismiss = { menuState.dismiss() },
+            onAction = { placement ->
+                menuState.dismiss()
+                onQueueTrack(track, placement)
+            },
+            onShowTrackInfo = { onShowTrackInfo(track) },
+            isDownloaded = isDownloaded,
+            onDownloadAction = {
+                if (isDownloaded) onDeleteDownloadedTrack(track) else onDownloadTrack(track)
+            },
+            onAddToPlaylist = addTrackToPlaylistAction(track),
+        )
+    }
 
     // Editorial hairline row: number · title/duration · favourite · more. Tap plays, long-press
-    // or ⋯ opens the queue menu anchored at the ⋯ button.
-    Column {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = 60.dp)
-                .clip(RoundedCornerShape(10.dp))
-                .combinedClickable(
-                    enabled = !isPlaybackLoading,
-                    onClick = { onPlayTrack(album, track) },
-                    onLongClick = { showQueueMenu = true },
-                )
-                .padding(start = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+    // opens the menu at the press point, and ⋯ anchors the menu to the button.
+    Box {
+        Column {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 60.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .trackMenuPressPosition(menuState)
+                    .combinedClickable(
+                        enabled = !isPlaybackLoading,
+                        onClick = { onPlayTrack(album, track) },
+                        onLongClick = { menuState.openAtLastPress() },
+                    )
+                    .padding(start = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 TrackNumberSlot(
                     text = displayNumber,
                     nowPlaying = nowPlaying,
@@ -2416,32 +2434,23 @@ private fun AlbumTrackRow(
                         selectedSize = 20.dp,
                     )
                 }
-            Box(modifier = Modifier.offset(x = 6.dp)) {
-                BareIcon(
-                    icon = Icons.Filled.MoreVert,
-                    contentDescription = Strings.more,
-                    onClick = { showQueueMenu = true },
-                    tint = AppColors.TextTertiary,
-                    size = 44.dp,
-                    iconSize = 20.dp,
-                )
-                QueueActionMenu(
-                    expanded = showQueueMenu,
-                    onDismiss = { showQueueMenu = false },
-                    onAction = { placement ->
-                        showQueueMenu = false
-                        onQueueTrack(track, placement)
-                    },
-                    onShowTrackInfo = { onShowTrackInfo(track) },
-                    isDownloaded = isDownloaded,
-                    onDownloadAction = {
-                        if (isDownloaded) onDeleteDownloadedTrack(track) else onDownloadTrack(track)
-                    },
-                    onAddToPlaylist = addTrackToPlaylistAction(track),
-                )
+                Box(modifier = Modifier.offset(x = 6.dp)) {
+                    BareIcon(
+                        icon = Icons.Filled.MoreVert,
+                        contentDescription = Strings.more,
+                        onClick = { menuState.openAtAnchor() },
+                        tint = AppColors.TextTertiary,
+                        size = 44.dp,
+                        iconSize = 20.dp,
+                    )
+                    if (menuState.pressOffset == null) {
+                        renderMenu()
+                    }
+                }
             }
+            Hairline(modifier = Modifier.fillMaxWidth().padding(start = 40.dp))
         }
-        Hairline(modifier = Modifier.fillMaxWidth().padding(start = 40.dp))
+        ContextualMenuAnchor(menuState, renderMenu)
     }
 }
 

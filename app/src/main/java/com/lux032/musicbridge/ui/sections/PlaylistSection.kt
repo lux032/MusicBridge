@@ -726,7 +726,7 @@ private fun PlaylistDetailTrackRow(
     isRecommendationBlocked: Boolean = false,
     onToggleRecommendationBlock: (() -> Unit)? = null,
 ) {
-    var showQueueMenu by remember { mutableStateOf(false) }
+    val menuState = rememberContextualMenuState()
     val isCurrent = nowPlaying != null
     val isDownloaded = remember(track.sourceId, track.ratingKey, downloadedTrackKeys) {
         "${track.sourceId}:${track.ratingKey}" in downloadedTrackKeys || track.ratingKey in downloadedTrackKeys
@@ -737,23 +737,43 @@ private fun PlaylistDetailTrackRow(
         track.artistName?.takeIf { it.isNotBlank() },
         track.durationMillis?.let { formatDuration(it) },
     ).joinToString(" · ")
+    val renderMenu: @Composable () -> Unit = {
+        QueueActionMenu(
+            expanded = menuState.expanded,
+            onDismiss = { menuState.dismiss() },
+            onAction = { placement ->
+                menuState.dismiss()
+                onQueueTrack(track, placement)
+            },
+            isDownloaded = isDownloaded,
+            onDownloadAction = {
+                if (isDownloaded) onDeleteDownloadedTrack(track) else onDownloadTrack(track)
+            },
+            onAddToPlaylist = addTrackToPlaylistAction(track),
+            onRemoveFromPlaylist = onRemoveFromPlaylist?.let { remove -> { remove(track) } },
+            recommendationBlocked = isRecommendationBlocked,
+            onToggleRecommendationBlock = onToggleRecommendationBlock,
+        )
+    }
 
     // Editorial hairline row: number · title / artist · duration · favourite · more.
-    Column {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = 60.dp)
-                .clip(RoundedCornerShape(10.dp))
-                .combinedClickable(
-                    enabled = !isPlaybackLoading,
-                    onClick = { onPlayTrack(playlist, track, index) },
-                    onLongClick = { showQueueMenu = true },
-                )
-                .padding(start = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+    Box {
+        Column {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 60.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .trackMenuPressPosition(menuState)
+                    .combinedClickable(
+                        enabled = !isPlaybackLoading,
+                        onClick = { onPlayTrack(playlist, track, index) },
+                        onLongClick = { menuState.openAtLastPress() },
+                    )
+                    .padding(start = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 TrackNumberSlot(
                     text = "${index + 1}",
                     nowPlaying = nowPlaying,
@@ -831,34 +851,23 @@ private fun PlaylistDetailTrackRow(
                         selectedSize = 20.dp,
                     )
                 }
-            Box(modifier = Modifier.offset(x = 6.dp)) {
-                BareIcon(
-                    icon = Icons.Filled.MoreVert,
-                    contentDescription = Strings.more,
-                    onClick = { showQueueMenu = true },
-                    tint = AppColors.TextTertiary,
-                    size = 44.dp,
-                    iconSize = 20.dp,
-                )
-                QueueActionMenu(
-                    expanded = showQueueMenu,
-                    onDismiss = { showQueueMenu = false },
-                    onAction = { placement ->
-                        showQueueMenu = false
-                        onQueueTrack(track, placement)
-                    },
-                    isDownloaded = isDownloaded,
-                    onDownloadAction = {
-                        if (isDownloaded) onDeleteDownloadedTrack(track) else onDownloadTrack(track)
-                    },
-                    onAddToPlaylist = addTrackToPlaylistAction(track),
-                    onRemoveFromPlaylist = onRemoveFromPlaylist?.let { remove -> { remove(track) } },
-                    recommendationBlocked = isRecommendationBlocked,
-                    onToggleRecommendationBlock = onToggleRecommendationBlock,
-                )
+                Box(modifier = Modifier.offset(x = 6.dp)) {
+                    BareIcon(
+                        icon = Icons.Filled.MoreVert,
+                        contentDescription = Strings.more,
+                        onClick = { menuState.openAtAnchor() },
+                        tint = AppColors.TextTertiary,
+                        size = 44.dp,
+                        iconSize = 20.dp,
+                    )
+                    if (menuState.pressOffset == null) {
+                        renderMenu()
+                    }
+                }
             }
+            Hairline(modifier = Modifier.fillMaxWidth().padding(start = 40.dp))
         }
-        Hairline(modifier = Modifier.fillMaxWidth().padding(start = 40.dp))
+        ContextualMenuAnchor(menuState, renderMenu)
     }
 }
 

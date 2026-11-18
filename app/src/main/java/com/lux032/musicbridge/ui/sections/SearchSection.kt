@@ -898,23 +898,37 @@ private fun SearchTrackRow(
     onOpenArtist: (() -> Unit)?,
 ) {
     val nowPlaying = LocalNowPlaying.current?.takeIf { it.matches(track) }
-    var menuExpanded by remember(track.ratingKey) { mutableStateOf(false) }
+    val menuState = remember(track.ratingKey) { ContextualMenuState() }
     val subtitle = listOfNotNull(
         track.artistName?.takeIf { it.isNotBlank() },
         track.albumTitle?.takeIf { it.isNotBlank() },
     ).joinToString(" · ")
+    val renderMenu: @Composable () -> Unit = {
+        SearchTrackActionMenu(
+            expanded = menuState.expanded,
+            track = track,
+            onDismiss = { menuState.dismiss() },
+            onPlay = onPlay,
+            onEnqueue = onEnqueue,
+            onToggleFavorite = onToggleFavorite,
+            onOpenAlbum = onOpenAlbum,
+            onOpenArtist = onOpenArtist,
+        )
+    }
 
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .combinedClickable(
-                onClick = onPlay,
-                onLongClick = { menuExpanded = true },
-            )
-            .padding(vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
+    Box {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .trackMenuPressPosition(menuState)
+                .combinedClickable(
+                    onClick = onPlay,
+                    onLongClick = { menuState.openAtLastPress() },
+                )
+                .padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
         Box(
             modifier = Modifier
                 .size(44.dp)
@@ -962,25 +976,20 @@ private fun SearchTrackRow(
                 style = MaterialTheme.typography.bodySmall,
             )
         }
-        Box {
-            BareIcon(
-                icon = Icons.Filled.MoreVert,
-                contentDescription = Strings.more,
-                onClick = { menuExpanded = true },
-                tint = AppColors.TextTertiary,
-                iconSize = 20.dp,
-            )
-            SearchTrackActionMenu(
-                expanded = menuExpanded,
-                track = track,
-                onDismiss = { menuExpanded = false },
-                onPlay = onPlay,
-                onEnqueue = onEnqueue,
-                onToggleFavorite = onToggleFavorite,
-                onOpenAlbum = onOpenAlbum,
-                onOpenArtist = onOpenArtist,
-            )
+            Box {
+                BareIcon(
+                    icon = Icons.Filled.MoreVert,
+                    contentDescription = Strings.more,
+                    onClick = { menuState.openAtAnchor() },
+                    tint = AppColors.TextTertiary,
+                    iconSize = 20.dp,
+                )
+                if (menuState.pressOffset == null) {
+                    renderMenu()
+                }
+            }
         }
+        ContextualMenuAnchor(menuState, renderMenu)
     }
 }
 
