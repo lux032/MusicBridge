@@ -739,22 +739,21 @@ private fun PlaylistDetailTrackRow(
     ).joinToString(" · ")
 
     // Editorial hairline row: number · title / artist · duration · favourite · more.
-    Box {
-        Column {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 60.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .combinedClickable(
-                        enabled = !isPlaybackLoading,
-                        onClick = { onPlayTrack(playlist, track, index) },
-                        onLongClick = { showQueueMenu = true },
-                    )
-                    .padding(start = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
+    Column {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 60.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .combinedClickable(
+                    enabled = !isPlaybackLoading,
+                    onClick = { onPlayTrack(playlist, track, index) },
+                    onLongClick = { showQueueMenu = true },
+                )
+                .padding(start = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
                 TrackNumberSlot(
                     text = "${index + 1}",
                     nowPlaying = nowPlaying,
@@ -832,6 +831,7 @@ private fun PlaylistDetailTrackRow(
                         selectedSize = 20.dp,
                     )
                 }
+            Box(modifier = Modifier.offset(x = 6.dp)) {
                 BareIcon(
                     icon = Icons.Filled.MoreVert,
                     contentDescription = Strings.more,
@@ -839,27 +839,26 @@ private fun PlaylistDetailTrackRow(
                     tint = AppColors.TextTertiary,
                     size = 44.dp,
                     iconSize = 20.dp,
-                    modifier = Modifier.offset(x = 6.dp),
+                )
+                QueueActionMenu(
+                    expanded = showQueueMenu,
+                    onDismiss = { showQueueMenu = false },
+                    onAction = { placement ->
+                        showQueueMenu = false
+                        onQueueTrack(track, placement)
+                    },
+                    isDownloaded = isDownloaded,
+                    onDownloadAction = {
+                        if (isDownloaded) onDeleteDownloadedTrack(track) else onDownloadTrack(track)
+                    },
+                    onAddToPlaylist = addTrackToPlaylistAction(track),
+                    onRemoveFromPlaylist = onRemoveFromPlaylist?.let { remove -> { remove(track) } },
+                    recommendationBlocked = isRecommendationBlocked,
+                    onToggleRecommendationBlock = onToggleRecommendationBlock,
                 )
             }
-            Hairline(modifier = Modifier.fillMaxWidth().padding(start = 40.dp))
         }
-        QueueActionMenu(
-            expanded = showQueueMenu,
-            onDismiss = { showQueueMenu = false },
-            onAction = { placement ->
-                showQueueMenu = false
-                onQueueTrack(track, placement)
-            },
-            isDownloaded = isDownloaded,
-            onDownloadAction = {
-                if (isDownloaded) onDeleteDownloadedTrack(track) else onDownloadTrack(track)
-            },
-            onAddToPlaylist = addTrackToPlaylistAction(track),
-            onRemoveFromPlaylist = onRemoveFromPlaylist?.let { remove -> { remove(track) } },
-            recommendationBlocked = isRecommendationBlocked,
-            onToggleRecommendationBlock = onToggleRecommendationBlock,
-        )
+        Hairline(modifier = Modifier.fillMaxWidth().padding(start = 40.dp))
     }
 }
 

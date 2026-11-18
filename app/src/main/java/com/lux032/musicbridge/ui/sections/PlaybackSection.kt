@@ -2323,23 +2323,22 @@ private fun AlbumTrackRow(
     val palette = LocalArtworkPalette.current
 
     // Editorial hairline row: number · title/duration · favourite · more. Tap plays, long-press
-    // or ⋯ opens the queue menu.
-    Box {
-        Column {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 60.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .combinedClickable(
-                        enabled = !isPlaybackLoading,
-                        onClick = { onPlayTrack(album, track) },
-                        onLongClick = { showQueueMenu = true },
-                    )
-                    .padding(start = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
+    // or ⋯ opens the queue menu anchored at the ⋯ button.
+    Column {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 60.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .combinedClickable(
+                    enabled = !isPlaybackLoading,
+                    onClick = { onPlayTrack(album, track) },
+                    onLongClick = { showQueueMenu = true },
+                )
+                .padding(start = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
                 TrackNumberSlot(
                     text = displayNumber,
                     nowPlaying = nowPlaying,
@@ -2417,6 +2416,7 @@ private fun AlbumTrackRow(
                         selectedSize = 20.dp,
                     )
                 }
+            Box(modifier = Modifier.offset(x = 6.dp)) {
                 BareIcon(
                     icon = Icons.Filled.MoreVert,
                     contentDescription = Strings.more,
@@ -2424,25 +2424,24 @@ private fun AlbumTrackRow(
                     tint = AppColors.TextTertiary,
                     size = 44.dp,
                     iconSize = 20.dp,
-                    modifier = Modifier.offset(x = 6.dp),
+                )
+                QueueActionMenu(
+                    expanded = showQueueMenu,
+                    onDismiss = { showQueueMenu = false },
+                    onAction = { placement ->
+                        showQueueMenu = false
+                        onQueueTrack(track, placement)
+                    },
+                    onShowTrackInfo = { onShowTrackInfo(track) },
+                    isDownloaded = isDownloaded,
+                    onDownloadAction = {
+                        if (isDownloaded) onDeleteDownloadedTrack(track) else onDownloadTrack(track)
+                    },
+                    onAddToPlaylist = addTrackToPlaylistAction(track),
                 )
             }
-            Hairline(modifier = Modifier.fillMaxWidth().padding(start = 40.dp))
         }
-        QueueActionMenu(
-            expanded = showQueueMenu,
-            onDismiss = { showQueueMenu = false },
-            onAction = { placement ->
-                showQueueMenu = false
-                onQueueTrack(track, placement)
-            },
-            onShowTrackInfo = { onShowTrackInfo(track) },
-            isDownloaded = isDownloaded,
-            onDownloadAction = {
-                if (isDownloaded) onDeleteDownloadedTrack(track) else onDownloadTrack(track)
-            },
-            onAddToPlaylist = addTrackToPlaylistAction(track),
-        )
+        Hairline(modifier = Modifier.fillMaxWidth().padding(start = 40.dp))
     }
 }
 

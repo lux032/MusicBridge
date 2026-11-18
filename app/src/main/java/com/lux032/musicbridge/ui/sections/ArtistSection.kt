@@ -1082,8 +1082,7 @@ private fun ArtistTrackRow(
     }
     val progress = downloadProgress["${track.sourceId}:${track.ratingKey}"]
 
-    Box {
-        Column {
+    Column {
         Row(
             modifier = Modifier.fillMaxWidth()
                 .clickable(enabled = !isPlaybackLoading) { onPlayTrack(artist, track, index) }
@@ -1140,30 +1139,30 @@ private fun ArtistTrackRow(
             track.durationMillis?.let {
                 Text(formatDuration(it), color = AppColors.TextTertiary, style = MaterialTheme.typography.bodySmall)
             }
-            BareIcon(
-                icon = Icons.Filled.MoreVert,
-                contentDescription = Strings.more,
-                onClick = { showQueueMenu = true },
-                tint = AppColors.TextTertiary,
-                iconSize = 20.dp,
-                modifier = Modifier.offset(x = 10.dp),
-            )
+            Box(modifier = Modifier.offset(x = 10.dp)) {
+                BareIcon(
+                    icon = Icons.Filled.MoreVert,
+                    contentDescription = Strings.more,
+                    onClick = { showQueueMenu = true },
+                    tint = AppColors.TextTertiary,
+                    iconSize = 20.dp,
+                )
+                QueueActionMenu(
+                    expanded = showQueueMenu,
+                    onDismiss = { showQueueMenu = false },
+                    onAction = {
+                        showQueueMenu = false
+                        onQueueTrack(track, it)
+                    },
+                    isDownloaded = isDownloaded,
+                    onDownloadAction = {
+                        if (isDownloaded) onDeleteDownloadedTrack(track) else onDownloadTrack(track)
+                    },
+                    onAddToPlaylist = addTrackToPlaylistAction(track),
+                )
+            }
         }
         Hairline(Modifier.fillMaxWidth())
-        }
-        QueueActionMenu(
-            expanded = showQueueMenu,
-            onDismiss = { showQueueMenu = false },
-            onAction = {
-                showQueueMenu = false
-                onQueueTrack(track, it)
-            },
-            isDownloaded = isDownloaded,
-            onDownloadAction = {
-                if (isDownloaded) onDeleteDownloadedTrack(track) else onDownloadTrack(track)
-            },
-            onAddToPlaylist = addTrackToPlaylistAction(track),
-        )
     }
 }
 
