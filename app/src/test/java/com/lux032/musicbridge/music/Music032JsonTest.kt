@@ -17,6 +17,18 @@ class Music032JsonTest {
         JSONObject("""{"id":1,"title":"Ordinary","trackCount":10,"formats":"FLAC,MP3","albumType":"$type"$extra}"""),
         base, "token", section, "032")
 
+    @Test fun featureCreditKeepsDisplayAndSeparateArtistLinks() {
+        val duet = track("""{"id":7,"artist":"Aiobahn +81 feat. DEMONDICE","artists":[
+            {"id":2,"name":"Aiobahn +81"},{"id":3,"name":"DEMONDICE","joinPhrase":" feat. "}
+        ]}""")
+        val release = album("single", ""","artist":"Aiobahn +81","artists":[{"id":2,"name":"Aiobahn +81"}]""")
+
+        assertEquals("Aiobahn +81 feat. DEMONDICE", duet.artistName)
+        assertEquals(listOf(ArtistRef("2", "Aiobahn +81"), ArtistRef("3", "DEMONDICE", " feat. ")), duet.artists)
+        assertEquals("Aiobahn +81", release.artistName)
+        assertEquals(listOf(ArtistRef("2", "Aiobahn +81")), release.artists)
+    }
+
     @Test fun artistRefsAndSyncArtists() {
         val duet = album("album", ""","artist":"A, B","artists":[{"id":2,"name":"A"},{"id":3,"name":"B"},{"id":0,"name":"bad"},{"id":2,"name":"A"}]""")
         assertEquals(listOf(ArtistRef("2", "A"), ArtistRef("3", "B")), duet.artists)

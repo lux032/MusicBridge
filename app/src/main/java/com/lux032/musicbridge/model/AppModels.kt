@@ -175,7 +175,8 @@ internal fun MusicTrack.resolvedPerformers(album: MusicAlbum? = null): List<Arti
 internal fun MusicTrack.hasDifferentPerformersFrom(album: MusicAlbum): Boolean {
     if (artists.isEmpty() && artistName.isNullOrBlank()) return false
     if (artists.isNotEmpty() && album.artists.isNotEmpty()) {
-        return artists.map(ArtistRef::id).toSet() != album.artists.map(ArtistRef::id).toSet()
+        return artists.map(ArtistRef::id) != album.artists.map(ArtistRef::id) ||
+            (!artistName.isNullOrBlank() && !album.artistName.isNullOrBlank() && artistName != album.artistName)
     }
     val trackNames = if (artists.isNotEmpty()) {
         artists.map { it.name.trim().lowercase() }.toSet()
@@ -195,22 +196,15 @@ internal fun MusicTrack.hasDifferentPerformersFrom(album: MusicAlbum): Boolean {
     return trackNames != albumNames
 }
 
-/**
- * Compact performer summary for an album track row; returns null when the track performer matches
- * [album] so solo-artist albums stay clean, and condenses ≥3 performers into "A、B 等 N 位".
- */
-internal fun MusicTrack.albumTrackRowPerformerSummary(album: MusicAlbum): String? {
+/** A track's own credit when it differs from the album display. */
+internal fun MusicTrack.albumTrackRowPerformerSummary(album: MusicAlbum, compact: Boolean = false): String? {
     if (!hasDifferentPerformersFrom(album)) return null
-    val names = if (artists.isNotEmpty()) {
-        artists.map(ArtistRef::name)
-    } else {
-        splitArtistNames(artistName.orEmpty())
+    val names = if (artists.isNotEmpty()) artists.map(ArtistRef::name) else splitArtistNames(artistName.orEmpty())
+    if (compact && names.size > 2) {
+        val separator = if (artists.isEmpty()) Strings.performerSeparator else artists[1].joinPhrase ?: ", "
+        return Strings.trackPerformersSummary(names[0], names[1], names.size, separator)
     }
-    return when {
-        names.isEmpty() -> null
-        names.size <= 2 -> names.joinToString(Strings.performerSeparator)
-        else -> Strings.trackPerformersSummary(names[0], names[1], names.size)
-    }
+    return artistName?.takeIf(String::isNotBlank) ?: names.joinToString(", ").takeIf(String::isNotEmpty)
 }
 
 /** Sorts by [releaseSortKey] (keys computed once); undated albums always last, ties by title. */

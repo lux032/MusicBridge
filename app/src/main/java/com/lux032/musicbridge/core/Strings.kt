@@ -48,8 +48,8 @@ object Strings {
     val creditsLoading get() = if (isZhCN) "正在加载幕后人员…" else "Loading credits…"
     val noTrackCredits get() = if (isZhCN) "暂无作词、作曲等幕后人员信息" else "No lyricist, composer, or other credits"
     val performerSeparator get() = if (isZhCN) "、" else ", "
-    fun trackPerformersSummary(first: String, second: String, totalCount: Int): String =
-        if (isZhCN) "$first、$second 等 $totalCount 位" else "$first, $second +${totalCount - 2} more"
+    fun trackPerformersSummary(first: String, second: String, totalCount: Int, separator: String): String =
+        if (isZhCN) "$first$separator$second 等 $totalCount 位" else "$first$separator$second +${totalCount - 2} more"
     val artistCredits get() = if (isZhCN) "幕后作品" else "Credits"
     fun artistCreditsCount(count: Int) = if (isZhCN) "幕后作品 $count 首" else "$count credited tracks"
     val creditsAll get() = if (isZhCN) "全部" else "All"

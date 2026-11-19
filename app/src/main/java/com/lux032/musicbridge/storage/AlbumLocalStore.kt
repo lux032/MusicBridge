@@ -1491,7 +1491,7 @@ internal fun ensureVersion18Schema(db: SQLiteDatabase) {
 internal fun encodeArtistRefs(refs: List<ArtistRef>): String? {
     if (refs.isEmpty()) return null
     val array = JSONArray()
-    refs.forEach { ref -> array.put(JSONObject().put("id", ref.id).put("name", ref.name)) }
+    refs.forEach { ref -> array.put(JSONObject().put("id", ref.id).put("name", ref.name).put("joinPhrase", ref.joinPhrase)) }
     return array.toString()
 }
 
@@ -1503,7 +1503,7 @@ internal fun decodeArtistRefs(text: String?): List<ArtistRef> {
             val item = array.optJSONObject(index) ?: return@mapNotNull null
             val id = item.optString("id").trim()
             val name = item.optString("name").trim()
-            if (id.isEmpty() || name.isEmpty()) null else ArtistRef(id, name)
+            if (id.isEmpty() || name.isEmpty()) null else ArtistRef(id, name, item.optString("joinPhrase", null))
         }
     }.getOrDefault(emptyList())
 }

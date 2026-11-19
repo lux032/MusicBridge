@@ -5,7 +5,7 @@ data class LibrarySection(val key: String, val title: String, val type: String)
 
 /** Server-side artist identity (032 artist id + display name). Links that only carry text
  *  (old caches) leave refs empty and keep navigating by name. */
-data class ArtistRef(val id: String, val name: String)
+data class ArtistRef(val id: String, val name: String, val joinPhrase: String? = null)
 
 /** Backstage credit of a track: one role (`lyricist`, `composer`, `arranger`, `producer`) and
  *  its people. A blank [ArtistRef.id] is a name with no artist page to open. */

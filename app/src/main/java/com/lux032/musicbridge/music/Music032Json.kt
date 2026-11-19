@@ -88,7 +88,7 @@ internal object Music032Json {
             val item = array.optJSONObject(index) ?: return@mapNotNull null
             val id = item.optLong("id").takeIf { it > 0L } ?: return@mapNotNull null
             val name = item.optString("name").trim().ifBlank { return@mapNotNull null }
-            ArtistRef(id.toString(), name)
+            ArtistRef(id.toString(), name, item.optString("joinPhrase", null))
         }.distinctBy(ArtistRef::id)
     }
 

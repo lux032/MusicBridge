@@ -63,9 +63,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import kotlin.math.roundToLong
@@ -2320,6 +2322,9 @@ private fun AlbumTrackRow(
     }
     val progress = downloadProgress["${track.sourceId}:${track.ratingKey}"]
     val performerSummary = remember(album, track) { track.albumTrackRowPerformerSummary(album) }
+    val compactPerformerSummary = remember(album, track) {
+        track.albumTrackRowPerformerSummary(album, compact = true)?.takeUnless { it == performerSummary }
+    }
     val palette = LocalArtworkPalette.current
     val renderMenu: @Composable () -> Unit = {
         QueueActionMenu(
@@ -2394,14 +2399,23 @@ private fun AlbumTrackRow(
                             )
                         }
                         if (performerSummary != null) {
-                            Text(
-                                text = performerSummary,
-                                color = AppColors.TextSecondary,
-                                style = MaterialTheme.typography.bodySmall,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f, fill = false),
-                            )
+                            BoxWithConstraints(modifier = Modifier.weight(1f, fill = false)) {
+                                val style = MaterialTheme.typography.bodySmall
+                                val caption = if (compactPerformerSummary != null && rememberTextMeasurer().measure(
+                                        text = performerSummary,
+                                        style = style,
+                                        maxLines = 1,
+                                        constraints = Constraints(maxWidth = constraints.maxWidth),
+                                    ).hasVisualOverflow
+                                ) compactPerformerSummary else performerSummary
+                                Text(
+                                    text = caption,
+                                    color = AppColors.TextSecondary,
+                                    style = style,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
                             if (track.durationMillis != null) {
                                 Text(
                                     text = "·",

@@ -63,17 +63,25 @@ class AlbumDetailMetadataTest {
             artists = listOf(ArtistRef("1", "Aimer"), ArtistRef("2", "milet")),
         )
         assertTrue(duetTrack.hasDifferentPerformersFrom(soloAlbum))
-        assertEquals("Aimer${Strings.performerSeparator}milet", duetTrack.albumTrackRowPerformerSummary(soloAlbum))
+        assertEquals("Aimer, milet", duetTrack.albumTrackRowPerformerSummary(soloAlbum))
 
         val fiveSingersTrack = track(
             "3",
-            artistName = "S1, S2, S3, S4, S5",
-            artists = (1..5).map { ArtistRef(it.toString(), "S$it") },
+            artistName = "S1 feat. S2 & S3, S4, S5",
+            artists = (1..5).map { ArtistRef(it.toString(), "S$it", if (it == 2) " feat. " else null) },
         )
+        assertEquals("S1 feat. S2 & S3, S4, S5", fiveSingersTrack.albumTrackRowPerformerSummary(soloAlbum))
         assertEquals(
-            Strings.trackPerformersSummary("S1", "S2", 5),
-            fiveSingersTrack.albumTrackRowPerformerSummary(soloAlbum),
+            Strings.trackPerformersSummary("S1", "S2", 5, " feat. "),
+            fiveSingersTrack.albumTrackRowPerformerSummary(soloAlbum, compact = true),
         )
+    }
+
+    @Test fun albumTrackRowShowsFeatureEvenWhenTrackAndAlbumCreditTheSameArtists() {
+        val refs = listOf(ArtistRef("1", "Aiobahn +81"), ArtistRef("2", "DEMONDICE"))
+        val release = album(2026, "2026-09-30", artistName = "Aiobahn +81, DEMONDICE", artists = refs)
+        val song = track("1", artistName = "Aiobahn +81 feat. DEMONDICE", artists = refs)
+        assertEquals("Aiobahn +81 feat. DEMONDICE", song.albumTrackRowPerformerSummary(release))
     }
 
     @Test fun trackPerformerComparisonFallsBackToNamesWhenIdsAreAbsent() {
@@ -81,7 +89,7 @@ class AlbumDetailMetadataTest {
         val guestTrack = track("1", artistName = "ReoNa、SawanoHiroyuki[nZk]", artists = emptyList())
         assertTrue(guestTrack.hasDifferentPerformersFrom(compilationAlbum))
         assertEquals(
-            "ReoNa${Strings.performerSeparator}SawanoHiroyuki[nZk]",
+            "ReoNa、SawanoHiroyuki[nZk]",
             guestTrack.albumTrackRowPerformerSummary(compilationAlbum),
         )
 

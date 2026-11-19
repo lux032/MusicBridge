@@ -136,13 +136,13 @@ private fun JSONObject.optFloatOrNull(key: String): Float? =
     if (has(key) && !isNull(key)) getDouble(key).toFloat() else null
 
 private fun List<ArtistRef>.toJson(): JSONArray =
-    JSONArray().apply { forEach { put(JSONObject().put("id", it.id).put("name", it.name)) } }
+    JSONArray().apply { forEach { put(JSONObject().put("id", it.id).put("name", it.name).put("joinPhrase", it.joinPhrase)) } }
 
 private fun JSONObject.optArtistRefs(key: String): List<ArtistRef> {
     val array = optJSONArray(key) ?: return emptyList()
     return (0 until array.length()).mapNotNull { index ->
         val item = array.optJSONObject(index) ?: return@mapNotNull null
-        ArtistRef(item.optString("id"), item.optString("name"))
+        ArtistRef(item.optString("id"), item.optString("name"), item.optString("joinPhrase", null))
     }
 }
 
