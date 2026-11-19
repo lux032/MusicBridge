@@ -1013,8 +1013,16 @@ internal fun ArtistChoiceDialog(
             Text(Strings.chooseArtist, color = AppColors.TextPrimary, fontWeight = FontWeight.Bold)
         },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                choices.forEach { ref ->
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 380.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                itemsIndexed(
+                    items = choices,
+                    key = { index, ref -> "${ref.id}:$index" },
+                ) { _, ref ->
                     ChoiceRow(
                         selected = false,
                         onClick = { onChoose(ref) },
