@@ -50,6 +50,7 @@ import com.lux032.musicbridge.LocalArtworkPalette
 import com.lux032.musicbridge.MusicServerProfile
 import com.lux032.musicbridge.MusicServerType
 import com.lux032.musicbridge.Strings
+import com.lux032.musicbridge.music.Music032ConnectionTestResult
 import com.lux032.musicbridge.ui.settings.dialogs.ServerEditSheet
 
 @Composable
@@ -57,7 +58,8 @@ fun ServerSection(
     serverProfiles: List<MusicServerProfile>,
     activeServerId: String,
     onSwitchServer: (String) -> Unit,
-    onSaveServer: (MusicServerProfile, Boolean) -> Unit,
+    onSaveServer: (MusicServerProfile, Boolean) -> String?,
+    onTestServerConnection: suspend (MusicServerProfile) -> Music032ConnectionTestResult,
     onDeleteServer: (String) -> Unit,
     onRefreshHome: () -> Unit,
     modifier: Modifier = Modifier,
@@ -70,10 +72,10 @@ fun ServerSection(
     pendingDeleteProfile?.let { profile ->
         AlertDialog(
             onDismissRequest = { pendingDeleteProfile = null },
-            title = { Text("移除服务器？", color = AppColors.TextPrimary) },
+            title = { Text(Strings.removeServerDialogTitle, color = AppColors.TextPrimary) },
             text = {
                 Text(
-                    "将从本机删除“${profile.displayName}”的连接配置，服务器上的音乐和数据不会被删除。",
+                    Strings.removeServerDialogBody(profile.displayName),
                     color = AppColors.TextSecondary,
                 )
             },
@@ -84,12 +86,12 @@ fun ServerSection(
                         pendingDeleteProfile = null
                     },
                 ) {
-                    Text("移除", color = AppColors.ErrorText)
+                    Text(Strings.removeAction, color = AppColors.ErrorText)
                 }
             },
             dismissButton = {
                 TextButton(onClick = { pendingDeleteProfile = null }) {
-                    Text("取消", color = AppColors.TextSecondary)
+                    Text(Strings.cancel, color = AppColors.TextSecondary)
                 }
             },
         )
@@ -100,6 +102,7 @@ fun ServerSection(
         ServerEditSheet(
             initialProfile = profile,
             onSave = onSaveServer,
+            onTestConnection = onTestServerConnection,
             onDismiss = { editingProfile = null },
         )
     }
@@ -116,19 +119,19 @@ fun ServerSection(
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "音乐服务器",
+                    text = Strings.musicServersTitle,
                     style = MaterialTheme.typography.titleLarge,
                     color = AppColors.TextPrimary,
                 )
                 Text(
-                    text = "支持管理多个音乐服务器并随时切换",
+                    text = Strings.musicServersDesc,
                     style = MaterialTheme.typography.bodySmall,
                     color = AppColors.TextTertiary,
                 )
             }
 
             LabelKey(
-                text = "添加",
+                text = Strings.add,
                 icon = Icons.Filled.Add,
                 onClick = { editingProfile = MusicServerProfile(type = MusicServerType.Music032) },
                 height = 40.dp,
@@ -148,12 +151,12 @@ fun ServerSection(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     Text(
-                        text = "暂未配置音乐服务器",
+                        text = Strings.noServersConfigured,
                         style = MaterialTheme.typography.bodyLarge,
                         color = AppColors.TextSecondary,
                     )
                     LabelKey(
-                        text = "立即添加服务器",
+                        text = Strings.addServerNow,
                         icon = Icons.Filled.Add,
                         onClick = { editingProfile = MusicServerProfile(type = MusicServerType.Music032) },
                         style = KeyStyle.Hi,
@@ -201,14 +204,14 @@ fun ServerSection(
                                     if (isActive) {
                                         LiveDot()
                                         Text(
-                                            text = "当前",
+                                            text = Strings.currentServerBadge,
                                             style = MaterialTheme.typography.labelSmall,
                                             color = palette.accent,
                                         )
                                     }
                                 }
                                 Text(
-                                    text = "${profile.type.label} · ${profile.baseUrl.ifBlank { "自动发现" }}",
+                                    text = "${profile.type.label} · ${profile.baseUrl.ifBlank { Strings.autoDiscover }}",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = AppColors.TextSecondary,
                                     maxLines = 1,
@@ -218,13 +221,13 @@ fun ServerSection(
 
                             BareIcon(
                                 icon = Icons.Filled.Edit,
-                                contentDescription = "编辑服务器",
+                                contentDescription = Strings.editServer,
                                 onClick = { editingProfile = profile },
                                 iconSize = 20.dp,
                             )
                             BareIcon(
                                 icon = Icons.Filled.DeleteOutline,
-                                contentDescription = "移除服务器",
+                                contentDescription = Strings.removeServer,
                                 onClick = { pendingDeleteProfile = profile },
                                 iconSize = 20.dp,
                                 modifier = Modifier.offset(x = 6.dp),

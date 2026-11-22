@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import com.lux032.musicbridge.AppColors
 import com.lux032.musicbridge.KeyColors
 import com.lux032.musicbridge.LocalArtworkPalette
+import com.lux032.musicbridge.Strings
 import java.util.Locale
 
 /**
@@ -297,7 +298,10 @@ fun CacheQuotaBar(
                         .background(cacheColor)
                 )
                 Text(
-                    text = "已占用 ${formatStorageBytes(usedCacheBytes)} / 上限 ${formatStorageBytes(totalCacheSizeBytes)}",
+                    text = Strings.cacheQuotaBarSummary(
+                        formatStorageBytes(usedCacheBytes),
+                        formatStorageBytes(totalCacheSizeBytes),
+                    ),
                     style = MaterialTheme.typography.bodySmall,
                     fontWeight = FontWeight.Medium,
                     color = AppColors.TextPrimary,
@@ -348,7 +352,7 @@ fun DeviceStorageStatus(
                         .background(downloadColor)
                 )
                 Text(
-                    text = "离线原档占用",
+                    text = Strings.offlineDownloadedSpaceTitle,
                     style = MaterialTheme.typography.bodySmall,
                     color = AppColors.TextSecondary,
                 )
@@ -369,12 +373,15 @@ fun DeviceStorageStatus(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    text = "机身剩余可用空间",
+                    text = Strings.deviceFreeStorageLabel,
                     style = MaterialTheme.typography.bodySmall,
                     color = AppColors.TextTertiary,
                 )
                 Text(
-                    text = "${formatStorageBytes(deviceUsableBytes)} / 总共 ${formatStorageBytes(deviceTotalBytes)}",
+                    text = Strings.deviceStorageSummary(
+                        formatStorageBytes(deviceUsableBytes),
+                        formatStorageBytes(deviceTotalBytes),
+                    ),
                     style = MaterialTheme.typography.bodySmall,
                     color = AppColors.TextTertiary,
                 )

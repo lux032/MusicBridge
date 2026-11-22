@@ -3,6 +3,9 @@ package com.lux032.musicbridge.ui.settings.sections
 import com.lux032.musicbridge.KeyButton
 import com.lux032.musicbridge.KeyStyle
 import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.provider.Settings
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
@@ -24,11 +27,9 @@ import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -47,6 +48,7 @@ import androidx.core.content.FileProvider
 import com.lux032.musicbridge.AppColors
 import com.lux032.musicbridge.BuildConfig
 import com.lux032.musicbridge.LocalArtworkPalette
+import com.lux032.musicbridge.Strings
 import com.lux032.musicbridge.local.PlaybackDiagnostics
 import com.lux032.musicbridge.ui.settings.components.SettingsDivider
 import com.lux032.musicbridge.ui.settings.components.SettingsGroup
@@ -64,27 +66,47 @@ fun AboutAndDiagnosticsSection(
     val palette = LocalArtworkPalette.current
 
     var isDiagnosticsExpanded by remember { mutableStateOf(false) }
-    var snapshotStatus by remember { mutableStateOf("正在读取快照…") }
+    var snapshotStatus by remember { mutableStateOf(Strings.diagnosticsReadingSnapshots) }
 
     LaunchedEffect(context, isDiagnosticsExpanded) {
         if (isDiagnosticsExpanded) {
             val count = withContext(Dispatchers.IO) { PlaybackDiagnostics.snapshotCount(context) }
-            snapshotStatus = "已保存 $count 份快照"
+            snapshotStatus = Strings.diagnosticsSavedCount(count)
         }
     }
 
     SettingsGroup(
-        title = "关于与诊断",
-        description = "版本信息与开发者排障工具",
+        title = Strings.aboutAndDiagnosticsTitle,
+        description = Strings.aboutAndDiagnosticsDesc,
         modifier = modifier,
     ) {
         // App Version item
         SettingsItem(
             title = "MusicBridge",
-            subtitle = "032 Music Server Android 客户端 · 本机 / Sonos 播放",
+            subtitle = Strings.appSubtitle,
             value = "v${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
             icon = Icons.Filled.Info,
         )
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            SettingsDivider()
+            SettingsItem(
+                title = Strings.appLanguageTitle,
+                subtitle = Strings.appLanguageSubtitle,
+                value = Strings.appLanguageCurrentValue,
+                icon = Icons.Filled.Language,
+                onClick = {
+                    runCatching {
+                        context.startActivity(
+                            Intent(
+                                Settings.ACTION_APP_LOCALE_SETTINGS,
+                                Uri.fromParts("package", context.packageName, null),
+                            ),
+                        )
+                    }
+                },
+            )
+        }
 
         SettingsDivider()
 
@@ -109,13 +131,13 @@ fun AboutAndDiagnosticsSection(
                 verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
                 Text(
-                    text = "卡顿诊断与日志快照",
+                    text = Strings.diagnosticsTitle,
                     style = MaterialTheme.typography.bodyLarge,
                     color = AppColors.TextPrimary,
                     fontWeight = FontWeight.Medium,
                 )
                 Text(
-                    text = if (isDiagnosticsExpanded) "点击收起诊断工具" else "点击展开排障日志与工具",
+                    text = if (isDiagnosticsExpanded) Strings.diagnosticsCollapseHint else Strings.diagnosticsExpandHint,
                     style = MaterialTheme.typography.bodySmall,
                     color = AppColors.TextSecondary,
                 )
@@ -123,7 +145,7 @@ fun AboutAndDiagnosticsSection(
 
             Icon(
                 imageVector = if (isDiagnosticsExpanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
-                contentDescription = if (isDiagnosticsExpanded) "收起" else "展开",
+                contentDescription = if (isDiagnosticsExpanded) Strings.collapse else Strings.expand,
                 tint = AppColors.TextTertiary,
                 modifier = Modifier.size(20.dp),
             )
@@ -142,7 +164,7 @@ fun AboutAndDiagnosticsSection(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Text(
-                    text = "听到卡顿后立即点击保存。快照包含最近 3 分钟日志，并高亮标记最后 60 秒。",
+                    text = Strings.diagnosticsDescription,
                     color = AppColors.TextSecondary,
                     style = MaterialTheme.typography.bodySmall,
                 )
@@ -156,17 +178,21 @@ fun AboutAndDiagnosticsSection(
                             }
                             result.onSuccess { file ->
                                 val count = withContext(Dispatchers.IO) { PlaybackDiagnostics.snapshotCount(context) }
-                                snapshotStatus = "已保存快照：${file.name} (共 $count 份)"
-                                Toast.makeText(context, "$snapshotStatus\n稍后可导出排查", Toast.LENGTH_LONG).show()
+                                snapshotStatus = Strings.diagnosticsSnapshotSaved(file.name, count)
+                                Toast.makeText(
+                                    context,
+                                    "$snapshotStatus\n${Strings.diagnosticsExportLaterHint}",
+                                    Toast.LENGTH_LONG,
+                                ).show()
                             }.onFailure { error ->
-                                snapshotStatus = "保存失败：${error.message}"
+                                snapshotStatus = Strings.diagnosticsSaveFailed(error.message)
                                 Toast.makeText(context, snapshotStatus, Toast.LENGTH_LONG).show()
                             }
                         }
                     },
                     modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Text("抓取卡顿诊断快照")
+                    Text(Strings.diagnosticsCaptureButton)
                 }
 
                 KeyButton(
@@ -176,7 +202,7 @@ fun AboutAndDiagnosticsSection(
                                 PlaybackDiagnostics.latestSnapshot(context)
                             }
                             if (latest == null) {
-                                Toast.makeText(context, "暂无可分享的诊断快照", Toast.LENGTH_LONG).show()
+                                Toast.makeText(context, Strings.diagnosticsNoSnapshotToShare, Toast.LENGTH_LONG).show()
                             } else {
                                 runCatching {
                                     val uri = FileProvider.getUriForFile(
@@ -191,18 +217,18 @@ fun AboutAndDiagnosticsSection(
                                                 putExtra(Intent.EXTRA_STREAM, uri)
                                                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                                             },
-                                            "分享诊断快照",
+                                            Strings.diagnosticsShareChooserTitle,
                                         ),
                                     )
                                 }.onFailure {
-                                    Toast.makeText(context, "分享失败：${it.message}", Toast.LENGTH_LONG).show()
+                                    Toast.makeText(context, Strings.diagnosticsShareFailed(it.message), Toast.LENGTH_LONG).show()
                                 }
                             }
                         }
                     },
                     modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Text("分享最新快照", color = AppColors.TextPrimary)
+                    Text(Strings.diagnosticsShareButton, color = AppColors.TextPrimary)
                 }
 
                 Row(
@@ -222,17 +248,17 @@ fun AboutAndDiagnosticsSection(
                                 val cleared = withContext(Dispatchers.IO) {
                                     PlaybackDiagnostics.clearSnapshots(context)
                                 }
-                                snapshotStatus = if (cleared) "已清空诊断快照" else "清空失败：外部存储不可用"
+                                snapshotStatus = if (cleared) Strings.diagnosticsCleared else Strings.diagnosticsClearFailed
                                 Toast.makeText(context, snapshotStatus, Toast.LENGTH_SHORT).show()
                             }
                         },
                     ) {
-                        Text("清空快照", color = AppColors.TextSecondary, style = MaterialTheme.typography.bodySmall)
+                        Text(Strings.diagnosticsClearButton, color = AppColors.TextSecondary, style = MaterialTheme.typography.bodySmall)
                     }
                 }
 
                 Text(
-                    text = "ADB 导出命令：",
+                    text = Strings.diagnosticsAdbPullLabel,
                     color = AppColors.TextTertiary,
                     style = MaterialTheme.typography.labelSmall,
                 )

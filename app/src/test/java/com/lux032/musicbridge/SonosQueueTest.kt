@@ -149,21 +149,27 @@ class SonosQueueTest {
         assertEquals(3, actions.count { it.first == "AddURIToQueue" })
     }
 
-    @Test fun chunkedResponsesAreDecodedByBytes() {
-        val body = "<r>卧室 音乐</r>".toByteArray(Charsets.UTF_8)
-        // Split inside a multi-byte character, as a speaker may do.
-        val first = body.copyOfRange(0, 5)
-        val second = body.copyOfRange(5, body.size)
-        val raw = java.io.ByteArrayOutputStream().apply {
-            write("HTTP/1.1 200 OK\r\nTRANSFER-ENCODING: chunked\r\n\r\n".toByteArray())
-            write("${first.size.toString(16)}\r\n".toByteArray()); write(first); write("\r\n".toByteArray())
-            write("${second.size.toString(16)};ext=1\r\n".toByteArray()); write(second); write("\r\n0\r\n\r\n".toByteArray())
-        }.toByteArray()
-        val (headers, decoded) = com.lux032.musicbridge.sonos.splitHttpResponse(raw)
-        assertTrue(headers.startsWith("HTTP/1.1 200"))
-        assertEquals("<r>卧室 音乐</r>", decoded)
-        val plain = com.lux032.musicbridge.sonos.splitHttpResponse("HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\n<a/>".toByteArray())
-        assertEquals("<a/>", plain.second)
+    @Test fun chunkedUtf8BrowseResponsesDecodeCleanly() = runBlocking {
+        // Multi-byte UTF-8 characters inside chunked Browse responses must decode cleanly over OkHttp.
+        browseQueue = listOf("http://10.0.0.2:4533/api/v1/tracks/1/stream?mediaToken=t&room=卧室音乐")
+        val read = SonosController().browseQueue(room())
+        assertEquals(1, read.size)
+        assertEquals(browseQueue.single(), read.single().url)
+    }
+
+    @Test fun xmlParserRejectsDoctypeAndExternalEntityPayloads() {
+        val xxePayload = """
+            <?xml version="1.0" encoding="utf-8"?>
+            <!DOCTYPE foo [
+              <!ENTITY xxe SYSTEM "file:///etc/passwd">
+            ]>
+            <root>&xxe;</root>
+        """.trimIndent()
+        val failed = runCatching { com.lux032.musicbridge.sonos.parseSonosXml(xxePayload) }
+        assertTrue("Expected XXE payload to be rejected", failed.isFailure)
+
+        val valid = com.lux032.musicbridge.sonos.parseSonosXml("<root><CurrentVolume>42</CurrentVolume></root>")
+        assertEquals("42", valid.getElementsByTagName("CurrentVolume").item(0).textContent)
     }
 
     @Test fun browseQueueReadsAllPages() = runBlocking {

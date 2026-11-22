@@ -193,9 +193,9 @@ class AppState(
                     scope.launch {
                         when (notice) {
                             is ReporterNotice.ResumeBlocked ->
-                                actionMessage = "播放记录与服务端会话冲突，本次播放不再上报"
+                                actionMessage = Strings.playbackReportConflict
                             is ReporterNotice.StartRejected ->
-                                actionMessage = "播放上报被服务器拒绝（HTTP ${notice.status}），本次播放不再上报"
+                                actionMessage = Strings.playbackReportRejected(notice.status)
                         }
                     }
                 },
@@ -573,8 +573,8 @@ class AppState(
         musicSourceClients.clear()
         appPreferences.setOpusTranscodeMode(mode)
         actionMessage = when (mode) {
-            OpusTranscodeMode.DIRECT_MP3 -> "已切换为 Opus 直连秒播 (MP3 320k)"
-            OpusTranscodeMode.PROXY_FLAC -> "已切换为 Opus 无损中继 (FLAC 本地缓存)"
+            OpusTranscodeMode.DIRECT_MP3 -> Strings.opusSwitchedDirectMp3
+            OpusTranscodeMode.PROXY_FLAC -> Strings.opusSwitchedProxyFlac
         }
     }
 
@@ -583,9 +583,9 @@ class AppState(
         musicSourceClients.clear()
         appPreferences.setSonosHiResTranscodeMode(mode)
         actionMessage = when (mode) {
-            SonosHiResTranscodeMode.TRANSCODE_MP3 -> "已开启 Sonos Hi-Res MP3 320k 转码"
-            SonosHiResTranscodeMode.TRANSCODE_FLAC_48K -> "已开启 Sonos Hi-Res FLAC 24/48 转码"
-            SonosHiResTranscodeMode.DIRECT_ORIGINAL -> "已切换为 Sonos Hi-Res 原盘直投"
+            SonosHiResTranscodeMode.TRANSCODE_MP3 -> Strings.sonosHiResSwitchedMp3
+            SonosHiResTranscodeMode.TRANSCODE_FLAC_48K -> Strings.sonosHiResSwitchedFlac48k
+            SonosHiResTranscodeMode.DIRECT_ORIGINAL -> Strings.sonosHiResSwitchedOriginal
         }
     }
 
@@ -596,26 +596,26 @@ class AppState(
     fun updateLocalStreamingLimit(wifi: Boolean, limit: LocalStreamingLimit) {
         if (wifi) wifiStreamingLimit = limit else cellularStreamingLimit = limit
         appPreferences.saveLocalStreamingLimit(wifi, limit)
-        actionMessage = "已更新${if (wifi) "WiFi" else "蜂窝网络"}流媒体上限：${limit.label}"
+        actionMessage = Strings.localLimitUpdated(wifi, limit.label)
     }
 
     fun updateLocalOpusBitrate(bitrate: LocalOpusBitrate) {
         localOpusBitrate = bitrate
         appPreferences.saveLocalOpusBitrate(bitrate)
-        actionMessage = "本机转码已设为 Opus ${bitrate.label}"
+        actionMessage = Strings.localOpusBitrateUpdated(bitrate.label)
     }
 
     fun updateLocalPrecacheCount(wifi: Boolean, count: LocalPrecacheCount) {
         if (wifi) wifiPrecacheCount = count else cellularPrecacheCount = count
         appPreferences.saveLocalPrecacheCount(wifi, count)
-        actionMessage = "已更新${if (wifi) "WiFi" else "蜂窝网络"}预缓存：${count.label}"
+        actionMessage = Strings.localPrecacheUpdated(wifi, count.label)
     }
 
     fun updateLocalCacheSize(size: LocalCacheSize) {
         localCacheSize = size
         appPreferences.saveLocalCacheSize(size)
         LocalAudioCache.setMaxBytes(size.bytes)
-        actionMessage = "本机缓存上限已设为 ${size.megabytesLabel}"
+        actionMessage = Strings.localCacheLimitUpdated(size.megabytesLabel)
     }
 
     fun updateHomeLayout(layout: List<HomeModuleConfig>) {
@@ -630,7 +630,7 @@ class AppState(
 
     fun clearLocalAudioCache() {
         LocalAudioCache.clear()
-        actionMessage = "已清空本机缓存"
+        actionMessage = Strings.localCacheCleared
     }
 
     fun localCacheUsedBytes(): Long = LocalAudioCache.usedBytes()
@@ -714,7 +714,7 @@ class AppState(
         client(
             serverProfiles.firstOrNull { it.id == sourceId }
                 ?: connectionPreferences.takeIf { sourceId.isBlank() }
-                ?: error("对应的音乐服务器连接已被移除。")
+                ?: error(Strings.serverConnectionRemoved)
         )
 
     suspend fun loadAlbumsFromLocalStore() = libraryCoordinator.loadAlbumsFromLocalStore()
@@ -723,19 +723,19 @@ class AppState(
 
     suspend fun refreshAlbums(showLoading: Boolean = true) = libraryCoordinator.refreshAlbums(showLoading)
 
-    fun saveServerProfile(profile: MusicServerProfile, refreshAfterSave: Boolean) {
+    /**
+     * Validates and persists a server profile. Returns `null` on success, or an inline error
+     * message on validation failure so the edit sheet can stay open and show the error.
+     */
+    fun saveServerProfile(profile: MusicServerProfile, refreshAfterSave: Boolean): String? {
         val normalized = profile.copy(
             id = profile.id.ifBlank { UUID.randomUUID().toString() },
         ).normalizedForStorage()
+        val validation = com.lux032.musicbridge.ui.settings.validateServerProfile(normalized)
+        if (!validation.isValid) {
+            return validation.firstError ?: Strings.music032MissingMediaToken
+        }
         val index = serverProfiles.indexOfFirst { it.id == normalized.id }
-        if (!normalized.hasCredentials()) {
-            errorMessage = Strings.music032MissingMediaToken
-            return
-        }
-        if (normalized.type == MusicServerType.Music032 && normalized.mediaToken.isBlank()) {
-            errorMessage = Strings.music032MissingMediaToken
-            return
-        }
         val previous032 = if (index >= 0) {
             serverProfiles[index].takeIf { it.type == MusicServerType.Music032 }
         } else {
@@ -759,7 +759,21 @@ class AppState(
             }
         }
         activateServer(normalized, refreshAfterSave || mediaUrlChanged)
-        actionMessage = "已保存服务器：${normalized.displayName}"
+        actionMessage = Strings.serverSaved(normalized.displayName)
+        return null
+    }
+
+    suspend fun testServerConnection(profile: MusicServerProfile): com.lux032.musicbridge.music.Music032ConnectionTestResult {
+        val normalized = profile.copy(
+            id = profile.id.ifBlank { "connection_test" },
+        ).normalizedForStorage()
+        val validation = com.lux032.musicbridge.ui.settings.validateServerProfile(normalized)
+        if (!validation.isValid) {
+            return com.lux032.musicbridge.music.Music032ConnectionTestResult.Failure(
+                validation.firstError ?: Strings.music032MissingMediaToken,
+            )
+        }
+        return Music032Client(normalized).testConnection()
     }
 
     fun switchServer(serverId: String) {
@@ -799,7 +813,7 @@ class AppState(
         } else {
             appPreferences.saveServerProfiles(serverProfiles, connectionPreferences.id)
         }
-        actionMessage = "服务器已移除"
+        actionMessage = Strings.serverRemoved
     }
 
     private fun activateServer(profile: MusicServerProfile, refreshAfterSave: Boolean) {

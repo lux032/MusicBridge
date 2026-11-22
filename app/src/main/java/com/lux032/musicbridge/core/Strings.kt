@@ -13,14 +13,18 @@ object Strings {
     val music032MissingMediaToken get() = if (isZhCN) "请填写 032 Music Server 地址、API Token 和媒体 Token。" else "Enter the 032 Music Server address, API Token and media Token."
     val music032InvalidMediaToken get() = if (isZhCN) "媒体 Token 无效，音频、封面和歌词将无法加载，请填写服务端的 MUSIC_SERVER_MEDIA_TOKEN。" else "Invalid media Token. Audio, artwork and lyrics will not load; enter MUSIC_SERVER_MEDIA_TOKEN from the server."
 
+    @Volatile
     private var currentLocale: Locale = Locale.getDefault()
 
     fun init(context: Context) {
         currentLocale = context.resources.configuration.locales[0]
     }
 
+    internal fun isChineseLocale(locale: Locale): Boolean =
+        locale.language.equals("zh", ignoreCase = true)
+
     private val isZhCN: Boolean
-        get() = currentLocale.language == "zh" && currentLocale.country == "CN"
+        get() = isChineseLocale(currentLocale)
 
     val browseWorks get() = if (isZhCN) "按作品漫游" else "Explore by work"
     val workRotationRenewed get() = if (isZhCN) "今日作品推荐已更新" else "Today's works have been refreshed"
@@ -533,5 +537,172 @@ object Strings {
     val downloadDiscOriginal get() = if (isZhCN) "下载本碟原档" else "Download Disc"
     val deleteDiscDownload get() = if (isZhCN) "删除本碟离线文件" else "Delete Disc Downloads"
     fun discDownloadsDeleted(discNumber: Int) = if (isZhCN) "已删除 Disc $discNumber 离线原档" else "Deleted offline files for Disc $discNumber"
+
+    // Common & fallback metadata
+    val unknownAlbum get() = if (isZhCN) "未知专辑" else "Unknown Album"
+    val unknownError get() = if (isZhCN) "未知错误" else "Unknown error"
+    val albumNoPlayableTracks get() = if (isZhCN) "专辑里没有可播放的单曲。" else "This album has no playable tracks."
+    val precacheOff get() = if (isZhCN) "关闭" else "Off"
+    fun precacheTrackCount(count: Int) = if (isZhCN) "$count 首" else if (count == 1) "1 track" else "$count tracks"
+    fun sonosReadVolumeFailed(urls: String, errors: String) =
+        if (isZhCN) "无法读取音量。尝试的URL: $urls。错误: $errors"
+        else "Could not read volume. Tried: $urls. Errors: $errors"
+
+    // Downloads section
+    fun offlineLibrarySummary(albumCount: Int, trackCount: Int, formattedSize: String) =
+        if (isZhCN) "$albumCount 张专辑 · $trackCount 首单曲 · 共 $formattedSize"
+        else "$albumCount albums · $trackCount tracks · $formattedSize"
+    fun offlineAlbumSummary(trackCount: Int, formattedSize: String) =
+        if (isZhCN) "$trackCount 首歌曲 · $formattedSize"
+        else "$trackCount tracks · $formattedSize"
+    val collapse get() = if (isZhCN) "折叠" else "Collapse"
+    val expand get() = if (isZhCN) "展开" else "Expand"
+    fun confirmDeleteDownloadedTrack(title: String) =
+        if (isZhCN) "确定要删除「$title」的离线原档吗？"
+        else "Delete the offline original file for \"$title\"?"
+
+    // Settings: Servers & Server Edit Sheet
+    val musicServersTitle get() = if (isZhCN) "音乐服务器" else "Music Servers"
+    val musicServersDesc get() = if (isZhCN) "支持管理多个音乐服务器并随时切换" else "Manage multiple music servers and switch anytime"
+    val add get() = if (isZhCN) "添加" else "Add"
+    val noServersConfigured get() = if (isZhCN) "暂未配置音乐服务器" else "No Music Server Configured"
+    val addServerNow get() = if (isZhCN) "立即添加服务器" else "Add Server Now"
+    val currentServerBadge get() = if (isZhCN) "当前" else "Active"
+    val autoDiscover get() = if (isZhCN) "自动发现" else "Auto-discover"
+    val editServer get() = if (isZhCN) "编辑服务器" else "Edit Server"
+    val removeServer get() = if (isZhCN) "移除服务器" else "Remove Server"
+    val removeServerDialogTitle get() = if (isZhCN) "移除服务器？" else "Remove server?"
+    fun removeServerDialogBody(name: String) =
+        if (isZhCN) "将从本机删除“$name”的连接配置，服务器上的音乐和数据不会被删除。"
+        else "This removes the saved connection for \"$name\" from this device. Music and data on the server are not affected."
+    val removeAction get() = if (isZhCN) "移除" else "Remove"
+    val addMusicServerTitle get() = if (isZhCN) "添加音乐服务器" else "Add Music Server"
+    val editMusicServerTitle get() = if (isZhCN) "编辑音乐服务器" else "Edit Music Server"
+    val serverDisplayNameLabel get() = if (isZhCN) "显示名称" else "Display Name"
+    val serverAddressLabel get() = if (isZhCN) "服务器地址" else "Server URL"
+    val serverAddressHint get() = if (isZhCN) "需以 http:// 或 https:// 开头" else "Must start with http:// or https://"
+    val serverApiTokenLabel get() = if (isZhCN) "API Token" else "API Token"
+    val serverMediaTokenLabel get() = if (isZhCN) "媒体 Token" else "Media Token"
+    val serverMediaTokenHint get() = if (isZhCN) "必填：服务端 MUSIC_SERVER_MEDIA_TOKEN 的值。" else "Required: MUSIC_SERVER_MEDIA_TOKEN from the server."
+    val clearInput get() = if (isZhCN) "清空" else "Clear"
+    val hideSecret get() = if (isZhCN) "隐藏内容" else "Hide"
+    val showSecret get() = if (isZhCN) "显示明文" else "Show"
+    val serverValidationUrlRequired get() = if (isZhCN) "请填写服务器地址" else "Enter the server URL"
+    val serverValidationUrlScheme get() = if (isZhCN) "服务器地址必须以 http:// 或 https:// 开头" else "Server URL must start with http:// or https://"
+    val serverValidationUrlInvalid get() = if (isZhCN) "服务器地址格式无效，请检查主机名与端口" else "Invalid server URL; check host and port"
+    val serverValidationTokenRequired get() = if (isZhCN) "请填写 API Token" else "Enter the API Token"
+    val serverValidationMediaTokenRequired get() = if (isZhCN) "请填写媒体 Token" else "Enter the Media Token"
+    val testConnection get() = if (isZhCN) "测试连接" else "Test Connection"
+    val testingConnection get() = if (isZhCN) "正在测试…" else "Testing…"
+    val testConnectionSuccess get() = if (isZhCN) "连接成功，API Token 与媒体 Token 均有效" else "Connected! API Token and Media Token verified"
+    val testConnectionSuccessUnverifiedMedia get() = if (isZhCN) "连接成功（API Token 有效，媒体 Token 状态未知）" else "Connected (API Token valid; Media Token status unknown)"
+    val testConnectionInvalidApiToken get() = if (isZhCN) "API Token 无效或无权限（HTTP 401/403）" else "Invalid API Token (HTTP 401/403)"
+    fun testConnectionFailed(detail: String) = if (isZhCN) "连接失败：$detail" else "Connection failed: $detail"
+    val importConfig get() = if (isZhCN) "导入配置" else "Import"
+    val scanQrCode get() = if (isZhCN) "扫码导入" else "Scan QR"
+    val scanQrFromCamera get() = if (isZhCN) "拍照识别二维码" else "Scan with Camera"
+    val scanQrFromGallery get() = if (isZhCN) "从相册选择二维码" else "Pick QR Image"
+    val importConfigDialogTitle get() = if (isZhCN) "导入服务器配置" else "Import Server Config"
+    val importConfigDialogHint get() = if (isZhCN) "支持粘贴 JSON、musicbridge:// 链接或 MUSIC_SERVER_* 环境变量文本" else "Paste JSON, a musicbridge:// link, or MUSIC_SERVER_* env lines"
+    val pasteFromClipboard get() = if (isZhCN) "粘贴剪贴板" else "Paste Clipboard"
+    val applyImport get() = if (isZhCN) "填入表单" else "Apply"
+    val importConfigSuccess get() = if (isZhCN) "已导入配置，请检查并测试或保存" else "Config imported; review, test, or save"
+    val importConfigInvalid get() = if (isZhCN) "无法解析配置内容，请检查 JSON / 链接 / 键值格式" else "Could not parse config; check JSON, URI, or key=value format"
+    val qrNoCodeFound get() = if (isZhCN) "未在图片中识别到二维码" else "No QR code found in image"
+    val qrCameraUnavailable get() = if (isZhCN) "无法打开系统相机" else "Could not open camera"
+    fun serverSaved(name: String) = if (isZhCN) "已保存服务器：$name" else "Saved server: $name"
+    val serverRemoved get() = if (isZhCN) "服务器已移除" else "Server removed"
+    val serverConnectionRemoved get() = if (isZhCN) "对应的音乐服务器连接已被移除。" else "This music server connection was removed."
+
+    // Settings: Audio Playback
+    val localPlaybackAndQualityTitle get() = if (isZhCN) "本机播放与音质" else "On-Device Playback & Quality"
+    val localOpusBitrateSubtitle get() = if (isZhCN) "非无损及转码时的 Opus 编码质量" else "Opus encoding bitrate when transcoding"
+    val wifiPrecacheSubtitle get() = if (isZhCN) "WiFi 下自动预拉取的后续曲目数" else "Upcoming tracks to precache on Wi-Fi"
+    val cellularPrecacheSubtitle get() = if (isZhCN) "蜂窝移动网络下自动预拉取的曲目数" else "Upcoming tracks to precache on cellular"
+
+    // Settings: Storage & Cache
+    val storageAndCacheTitle get() = if (isZhCN) "存储与缓存" else "Storage & Cache"
+    val storageAndCacheDesc get() = if (isZhCN) "分别管理在线播放临时缓存与离线无损原档" else "Manage temporary streaming cache and offline original files separately"
+    val onlineCacheHeader get() = if (isZhCN) "在线播放缓存" else "Streaming Cache"
+    val onlineCacheDesc get() = if (isZhCN) "试听与在线播放时自动生成的临时缓存，受配额上限约束自动循环覆盖" else "Temporary cache created while streaming, automatically evicted when full"
+    val localCacheSizeSubtitle get() = if (isZhCN) "自动清理超过设定上限的旧缓存" else "Automatically evict old cache above this limit"
+    fun cacheUsedSummary(used: String) = if (isZhCN) "已缓存 $used" else "$used cached"
+    val noCacheYet get() = if (isZhCN) "当前无缓存" else "No cache used"
+    fun cacheQuotaBarSummary(used: String, limit: String) =
+        if (isZhCN) "已占用 $used / 上限 $limit" else "$used used / $limit limit"
+    val offlineOriginalHeader get() = if (isZhCN) "离线无损原档" else "Offline Originals"
+    val offlineOriginalDesc get() = if (isZhCN) "手动下载的高规格完整音轨，不受缓存上限影响，支持完全脱网播放" else "Manually downloaded full-quality tracks unaffected by cache limits"
+    fun downloadedBytesSummary(size: String) = if (isZhCN) "已下载 $size" else "$size downloaded"
+    val deviceFreeStorageLabel get() = if (isZhCN) "机身剩余可用空间" else "Device Free Storage"
+    fun deviceStorageSummary(usable: String, total: String) =
+        if (isZhCN) "$usable / 总共 $total" else "$usable / $total total"
+    val confirmClearCacheTitle get() = if (isZhCN) "清空音频缓存？" else "Clear audio cache?"
+    fun confirmClearCacheBody(size: String) =
+        if (isZhCN) "将删除本机已缓存的 $size 临时音频文件。离线下载的原档不会被删除。"
+        else "Deletes $size of temporary cached audio. Offline downloaded originals are kept."
+    val confirmClearAction get() = if (isZhCN) "确定清空" else "Clear"
+    val confirmClearDownloadsTitle get() = if (isZhCN) "清空已下载离线原档？" else "Clear all offline originals?"
+    fun confirmClearDownloadsBody(size: String) =
+        if (isZhCN) "将彻底删除保存在本机的 $size 离线原档歌曲。删除后需在联网状态重新下载。"
+        else "Permanently deletes $size of offline original tracks stored on this device."
+
+    // Settings: Sonos Advanced
+    val sonosAdvancedTitle get() = if (isZhCN) "Sonos 与硬件转码" else "Sonos & Transcoding"
+    val sonosAdvancedDesc get() = if (isZhCN) "配置推送到 Sonos 音箱时的音轨兼容与转码策略" else "Configure compatibility and transcoding when casting to Sonos"
+    val recommendedBadge get() = if (isZhCN) "推荐" else "Recommended"
+
+    // Settings: Language & About / Diagnostics
+    val aboutAndDiagnosticsTitle get() = if (isZhCN) "关于与诊断" else "About & Diagnostics"
+    val aboutAndDiagnosticsDesc get() = if (isZhCN) "版本信息、语言与开发者排障工具" else "Version info, language, and diagnostic tools"
+    val appSubtitle get() = if (isZhCN) "032 Music Server Android 客户端 · 本机 / Sonos 播放" else "032 Music Server Android Client · Local & Sonos Playback"
+    val appLanguageTitle get() = if (isZhCN) "应用语言" else "App Language"
+    val appLanguageSubtitle get() = if (isZhCN) "在系统设置中为此应用单独选择显示语言" else "Choose display language for this app in system settings"
+    val appLanguageCurrentValue get() = if (isZhCN) "中文" else "English"
+    val diagnosticsTitle get() = if (isZhCN) "卡顿诊断与日志快照" else "Stutter Diagnostics & Log Snapshots"
+    val diagnosticsCollapseHint get() = if (isZhCN) "点击收起诊断工具" else "Tap to collapse diagnostics"
+    val diagnosticsExpandHint get() = if (isZhCN) "点击展开排障日志与工具" else "Tap to expand diagnostic tools"
+    val diagnosticsReadingSnapshots get() = if (isZhCN) "正在读取快照…" else "Loading snapshots…"
+    fun diagnosticsSavedCount(count: Int) = if (isZhCN) "已保存 $count 份快照" else "$count snapshots saved"
+    val diagnosticsDescription get() = if (isZhCN) "听到卡顿后立即点击保存。快照包含最近 3 分钟日志，并高亮标记最后 60 秒。" else "Save immediately after hearing a stutter. Snapshots include the last 3 minutes of logs with the final 60s highlighted."
+    val diagnosticsCaptureButton get() = if (isZhCN) "抓取卡顿诊断快照" else "Capture Diagnostic Snapshot"
+    fun diagnosticsSnapshotSaved(name: String, count: Int) = if (isZhCN) "已保存快照：$name (共 $count 份)" else "Saved snapshot: $name ($count total)"
+    val diagnosticsExportLaterHint get() = if (isZhCN) "稍后可导出排查" else "You can share or export it later"
+    fun diagnosticsSaveFailed(message: String?) = if (isZhCN) "保存失败：${message ?: unknownError}" else "Save failed: ${message ?: unknownError}"
+    val diagnosticsShareButton get() = if (isZhCN) "分享最新快照" else "Share Latest Snapshot"
+    val diagnosticsNoSnapshotToShare get() = if (isZhCN) "暂无可分享的诊断快照" else "No diagnostic snapshot to share"
+    val diagnosticsShareChooserTitle get() = if (isZhCN) "分享诊断快照" else "Share diagnostic snapshot"
+    fun diagnosticsShareFailed(message: String?) = if (isZhCN) "分享失败：${message ?: unknownError}" else "Share failed: ${message ?: unknownError}"
+    val diagnosticsCleared get() = if (isZhCN) "已清空诊断快照" else "Cleared diagnostic snapshots"
+    val diagnosticsClearFailed get() = if (isZhCN) "清空失败：外部存储不可用" else "Clear failed: storage unavailable"
+    val diagnosticsClearButton get() = if (isZhCN) "清空快照" else "Clear Snapshots"
+    val diagnosticsAdbPullLabel get() = if (isZhCN) "ADB 导出命令：" else "ADB pull command:"
+
+    // State / Coordinator action notices
+    val opusSwitchedDirectMp3 get() = if (isZhCN) "已切换为 Opus 直连秒播 (MP3 320k)" else "Switched to Opus Direct Play (MP3 320k)"
+    val opusSwitchedProxyFlac get() = if (isZhCN) "已切换为 Opus 无损中继 (FLAC 本地缓存)" else "Switched to Opus Lossless Relay (FLAC)"
+    val sonosHiResSwitchedMp3 get() = if (isZhCN) "已开启 Sonos Hi-Res MP3 320k 转码" else "Sonos Hi-Res set to MP3 320k transcode"
+    val sonosHiResSwitchedFlac48k get() = if (isZhCN) "已开启 Sonos Hi-Res FLAC 24/48 转码" else "Sonos Hi-Res set to FLAC 24/48 transcode"
+    val sonosHiResSwitchedOriginal get() = if (isZhCN) "已切换为 Sonos Hi-Res 原盘直投" else "Sonos Hi-Res set to Keep Original"
+    fun localLimitUpdated(wifi: Boolean, label: String) =
+        if (isZhCN) "已更新${if (wifi) "WiFi" else "蜂窝网络"}流媒体上限：$label"
+        else "Updated ${if (wifi) "Wi-Fi" else "Cellular"} streaming limit: $label"
+    fun localOpusBitrateUpdated(label: String) =
+        if (isZhCN) "本机转码已设为 Opus $label" else "On-device transcode set to Opus $label"
+    fun localPrecacheUpdated(wifi: Boolean, label: String) =
+        if (isZhCN) "已更新${if (wifi) "WiFi" else "蜂窝网络"}预缓存：$label"
+        else "Updated ${if (wifi) "Wi-Fi" else "Cellular"} precache: $label"
+    fun localCacheLimitUpdated(label: String) =
+        if (isZhCN) "本机缓存上限已设为 $label" else "Local cache limit set to $label"
+    val localCacheCleared get() = if (isZhCN) "已清空本机缓存" else "Cleared local audio cache"
+    val playbackReportConflict get() = if (isZhCN) "播放记录与服务端会话冲突，本次播放不再上报" else "Playback session conflicted with server; reporting paused for this session"
+    fun playbackReportRejected(status: Int) = if (isZhCN) "播放上报被服务器拒绝（HTTP $status），本次播放不再上报" else "Playback report rejected by server (HTTP $status); reporting paused"
+    val serverUrlChangedReportingPaused get() = if (isZhCN) "服务器地址已变更，当前曲目的播放上报已暂停，重新播放后恢复" else "Server URL changed; reporting for the current track is paused until next play"
+    fun playingTrack(title: String) = if (isZhCN) "正在播放：$title" else "Playing: $title"
+    fun playingLocally(title: String) = if (isZhCN) "正在本机播放：$title" else "Playing on this device: $title"
+    fun playbackEnded(albumTitle: String) = if (isZhCN) "播放结束：$albumTitle" else "Playback ended: $albumTitle"
+    fun trackPlaybackErrorSkipped(title: String) = if (isZhCN) "《$title》播放异常，已跳至下一首" else "Skipped \"$title\" due to playback error"
+    val playbackPausedNotice get() = if (isZhCN) "已暂停播放" else "Paused"
+    val playbackResumedNotice get() = if (isZhCN) "已继续播放" else "Resumed"
+    fun seekedToNotice(formattedTime: String) = if (isZhCN) "已跳转到 $formattedTime" else "Seeked to $formattedTime"
 }
 

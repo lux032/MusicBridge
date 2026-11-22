@@ -115,4 +115,42 @@ class OfflineDownloadsTest {
         assertTrue(isDownloadComplete(bytesRead = 1024L, expectedContentLength = 1024L))
         assertTrue(isDownloadComplete(bytesRead = 1024L, expectedContentLength = -1L))
     }
+
+    @Test
+    fun sharedAlbumCoverReferenceCountTracksRemainingDownloads() {
+        val store = AlbumLocalStore(context)
+        store.clearAllDownloadedTracks()
+
+        val sharedThumb = "/tmp/covers/album_server1_album1.cover"
+        val t1 = DownloadedAudioTrack(
+            sourceId = "server1",
+            ratingKey = "t1",
+            partKey = "/p1",
+            title = "Track 1",
+            artistName = "Artist",
+            albumTitle = "Album",
+            albumRatingKey = "album1",
+            durationMillis = 120000L,
+            sourceAudioCodec = "flac",
+            sourceAudioBitrateKbps = 900,
+            sourceAudioSampleRate = 44100,
+            bitDepth = 16,
+            localAudioPath = "/tmp/t1.audio",
+            localThumbPath = sharedThumb,
+            localLyricPath = null,
+            fileSize = 1000L,
+            downloadedAtEpochSeconds = 100L,
+        )
+        val t2 = t1.copy(ratingKey = "t2", partKey = "/p2", title = "Track 2", localAudioPath = "/tmp/t2.audio")
+
+        store.insertDownloadedTrack(t1)
+        store.insertDownloadedTrack(t2)
+        assertEquals(2, store.countDownloadedTracksByThumbPath(sharedThumb))
+
+        store.deleteDownloadedTrack("server1", "t1")
+        assertEquals(1, store.countDownloadedTracksByThumbPath(sharedThumb))
+
+        store.deleteDownloadedTrack("server1", "t2")
+        assertEquals(0, store.countDownloadedTracksByThumbPath(sharedThumb))
+    }
 }

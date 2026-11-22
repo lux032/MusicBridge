@@ -2,7 +2,8 @@ package com.lux032.musicbridge.storage
 
 import android.content.Context
 import android.util.Log
-import androidx.media3.datasource.DefaultHttpDataSource
+import com.lux032.musicbridge.Strings
+import com.lux032.musicbridge.core.AppHttpClient
 import com.lux032.musicbridge.local.LocalAudioCache
 import com.lux032.musicbridge.local.originalCacheKey
 import com.lux032.musicbridge.music.Music032TranscodeUrls
@@ -17,10 +18,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import okhttp3.Request
 import java.io.File
-import java.io.FileOutputStream
-import java.net.HttpURLConnection
-import java.net.URL
 import java.util.concurrent.ConcurrentHashMap
 
 fun downloadedTrackKey(sourceId: String, ratingKey: String): String = "$sourceId:$ratingKey"
@@ -35,6 +34,27 @@ internal fun isDownloadComplete(bytesRead: Long, expectedContentLength: Long): B
     if (expectedContentLength > 0L && bytesRead != expectedContentLength) return false
     return true
 }
+
+/**
+ * Deduplicates downloaded album artwork by `(sourceId, albumRatingKey)` so tracks from the
+ * same album share a single local cover file on disk instead of duplicating image bytes.
+ */
+internal fun offlineCoverFileName(
+    sourceId: String,
+    albumRatingKey: String?,
+    trackRatingKey: String,
+): String {
+    val safeSource = sanitizeOfflineFileSegment(sourceId)
+    val albumKey = albumRatingKey?.trim()?.takeIf { it.isNotEmpty() }
+    return if (albumKey != null) {
+        "album_${safeSource}_${sanitizeOfflineFileSegment(albumKey)}.cover"
+    } else {
+        "track_${safeSource}_${sanitizeOfflineFileSegment(trackRatingKey)}.cover"
+    }
+}
+
+private fun sanitizeOfflineFileSegment(raw: String): String =
+    raw.replace(Regex("[^a-zA-Z0-9_-]"), "_")
 
 data class DownloadedAlbumGroup(
     val albumRatingKey: String,
@@ -60,8 +80,8 @@ fun buildAlbumGroups(tracks: List<DownloadedAudioTrack>): List<DownloadedAlbumGr
             ?: ""
         DownloadedAlbumGroup(
             albumRatingKey = albumRatingKey,
-            albumTitle = first.albumTitle?.ifBlank { null } ?: "未知专辑",
-            artistName = first.artistName?.ifBlank { null } ?: "未知艺人",
+            albumTitle = first.albumTitle?.ifBlank { null } ?: Strings.unknownAlbum,
+            artistName = first.artistName?.ifBlank { null } ?: Strings.unknownArtist,
             thumbPath = albumTracks.firstNotNullOfOrNull { it.localThumbPath },
             sourceId = first.sourceId,
             tracks = albumTracks.sortedWith(
@@ -120,17 +140,19 @@ class OfflineDownloadManager(
             // Verify physical files and filter out orphan records
             val all = albumLocalStore.getAllDownloadedTracks()
             val valid = mutableListOf<DownloadedAudioTrack>()
+            val orphanThumbPaths = linkedSetOf<String>()
             all.forEach { track ->
                 val file = File(track.localAudioPath)
                 if (file.exists() && file.length() > 0L) {
                     valid.add(track)
                 } else {
                     // Clean up physical orphan companions if audio is missing
-                    track.localThumbPath?.let { runCatching { File(it).delete() } }
                     track.localLyricPath?.let { runCatching { File(it).delete() } }
+                    track.localThumbPath?.takeIf { it.isNotBlank() }?.let(orphanThumbPaths::add)
                     albumLocalStore.deleteDownloadedTrack(track.sourceId, track.ratingKey)
                 }
             }
+            orphanThumbPaths.forEach(::deleteCoverIfUnused)
             valid
         }
         val byKey = validTracks.associateBy { downloadedTrackKey(it.sourceId, it.ratingKey) }
@@ -182,10 +204,10 @@ class OfflineDownloadManager(
         scope.launch(Dispatchers.IO) {
             val record = albumLocalStore.getDownloadedTrack(sourceId, ratingKey)
             if (record != null) {
-                runCatching { File(record.localAudioPath).delete() }
-                record.localThumbPath?.let { runCatching { File(it).delete() } }
-                record.localLyricPath?.let { runCatching { File(it).delete() } }
                 albumLocalStore.deleteDownloadedTrack(sourceId, ratingKey)
+                runCatching { File(record.localAudioPath).delete() }
+                record.localLyricPath?.let { runCatching { File(it).delete() } }
+                deleteCoverIfUnused(record.localThumbPath)
                 refreshDownloadedKeys()
             }
         }
@@ -195,16 +217,18 @@ class OfflineDownloadManager(
         if (tracks.isEmpty()) return
         scope.launch(Dispatchers.IO) {
             var changed = false
+            val candidateThumbs = linkedSetOf<String>()
             tracks.forEach { track ->
                 val record = albumLocalStore.getDownloadedTrack(track.sourceId, track.ratingKey)
                 if (record != null) {
-                    runCatching { File(record.localAudioPath).delete() }
-                    record.localThumbPath?.let { runCatching { File(it).delete() } }
-                    record.localLyricPath?.let { runCatching { File(it).delete() } }
                     albumLocalStore.deleteDownloadedTrack(track.sourceId, track.ratingKey)
+                    runCatching { File(record.localAudioPath).delete() }
+                    record.localLyricPath?.let { runCatching { File(it).delete() } }
+                    record.localThumbPath?.takeIf { it.isNotBlank() }?.let(candidateThumbs::add)
                     changed = true
                 }
             }
+            candidateThumbs.forEach(::deleteCoverIfUnused)
             if (changed) refreshDownloadedKeys()
         }
     }
@@ -212,12 +236,21 @@ class OfflineDownloadManager(
     fun deleteAlbumDownload(sourceId: String, albumRatingKey: String) {
         scope.launch(Dispatchers.IO) {
             val deletedTracks = albumLocalStore.deleteDownloadedAlbum(sourceId, albumRatingKey)
+            val candidateThumbs = linkedSetOf<String>()
             deletedTracks.forEach { track ->
                 runCatching { File(track.localAudioPath).delete() }
-                track.localThumbPath?.let { runCatching { File(it).delete() } }
                 track.localLyricPath?.let { runCatching { File(it).delete() } }
+                track.localThumbPath?.takeIf { it.isNotBlank() }?.let(candidateThumbs::add)
             }
+            candidateThumbs.forEach(::deleteCoverIfUnused)
             refreshDownloadedKeys()
+        }
+    }
+
+    private fun deleteCoverIfUnused(localThumbPath: String?) {
+        val path = localThumbPath?.takeIf { it.isNotBlank() } ?: return
+        if (albumLocalStore.countDownloadedTracksByThumbPath(path) == 0) {
+            runCatching { File(path).delete() }
         }
     }
 
@@ -300,48 +333,47 @@ class OfflineDownloadManager(
 
         // 2. If not in cache or promotion failed, download via HTTP
         if (!audioDownloaded) {
-            var connection: HttpURLConnection? = null
             try {
-                val url = URL(track.streamUrl)
-                connection = (url.openConnection() as HttpURLConnection).apply {
-                    connectTimeout = 15_000
-                    readTimeout = 30_000
-                    instanceFollowRedirects = true
-                    setRequestProperty("User-Agent", "MusicBridge-Offline/1.0")
-                }
-                val responseCode = connection.responseCode
-                if (responseCode !in 200..299) {
-                    Log.w(TAG, "HTTP $responseCode downloading ${track.title}")
-                    return@withContext false
-                }
-                val totalLength = connection.contentLengthLong
-                if (totalLength > 0L && baseDir.usableSpace < totalLength + MIN_FREE_SPACE_BYTES) {
-                    return@withContext false
-                }
+                val request = Request.Builder()
+                    .url(track.streamUrl)
+                    .get()
+                    .header("User-Agent", "MusicBridge-Offline/1.0")
+                    .build()
+                AppHttpClient.defaultClient.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) {
+                        Log.w(TAG, "HTTP ${response.code} downloading ${track.title}")
+                        return@withContext false
+                    }
+                    val body = response.body ?: return@withContext false
+                    val totalLength = body.contentLength()
+                    if (totalLength > 0L && baseDir.usableSpace < totalLength + MIN_FREE_SPACE_BYTES) {
+                        return@withContext false
+                    }
 
-                var bytesReadSoFar = 0L
-                connection.inputStream.buffered().use { input ->
-                    tmpAudioFile.outputStream().buffered().use { output ->
-                        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                        while (true) {
-                            val read = input.read(buffer)
-                            if (read == -1) break
-                            output.write(buffer, 0, read)
-                            bytesReadSoFar += read
-                            if (totalLength > 0L) {
-                                onProgress((bytesReadSoFar.toFloat() / totalLength).coerceIn(0f, 1f))
+                    var bytesReadSoFar = 0L
+                    body.byteStream().buffered().use { input ->
+                        tmpAudioFile.outputStream().buffered().use { output ->
+                            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                            while (true) {
+                                val read = input.read(buffer)
+                                if (read == -1) break
+                                output.write(buffer, 0, read)
+                                bytesReadSoFar += read
+                                if (totalLength > 0L) {
+                                    onProgress((bytesReadSoFar.toFloat() / totalLength).coerceIn(0f, 1f))
+                                }
                             }
                         }
                     }
-                }
 
-                if (!isDownloadComplete(bytesReadSoFar, totalLength) || tmpAudioFile.length() != bytesReadSoFar) {
-                    Log.w(
-                        TAG,
-                        "Incomplete download for ${track.title}: read=$bytesReadSoFar expected=$totalLength file=${tmpAudioFile.length()}",
-                    )
-                    tmpAudioFile.delete()
-                    return@withContext false
+                    if (!isDownloadComplete(bytesReadSoFar, totalLength) || tmpAudioFile.length() != bytesReadSoFar) {
+                        Log.w(
+                            TAG,
+                            "Incomplete download for ${track.title}: read=$bytesReadSoFar expected=$totalLength file=${tmpAudioFile.length()}",
+                        )
+                        tmpAudioFile.delete()
+                        return@withContext false
+                    }
                 }
                 if (targetAudioFile.exists()) targetAudioFile.delete()
                 if (!tmpAudioFile.renameTo(targetAudioFile)) {
@@ -354,15 +386,14 @@ class OfflineDownloadManager(
                 Log.w(TAG, "Network download failed for ${track.title}", e)
                 tmpAudioFile.delete()
                 return@withContext false
-            } finally {
-                connection?.disconnect()
             }
         }
 
-        // 3. Companion Artwork download (best-effort)
+        // 3. Companion Artwork download (deduplicated per sourceId + albumRatingKey)
         var localThumbPath: String? = null
         if (!track.thumbUrl.isNullOrBlank()) {
-            val thumbFile = File(coversDir, "${track.sourceId}_${track.ratingKey}.cover")
+            val coverFileName = offlineCoverFileName(track.sourceId, track.albumRatingKey, track.ratingKey)
+            val thumbFile = File(coversDir, coverFileName)
             if (downloadCompanionAsset(track.thumbUrl, thumbFile)) {
                 localThumbPath = thumbFile.absolutePath
             }
@@ -410,42 +441,42 @@ class OfflineDownloadManager(
     private fun downloadCompanionAsset(sourceUrl: String, destFile: File): Boolean {
         if (destFile.exists() && destFile.length() > 0L) return true
         val tmp = File(destFile.parentFile, "${destFile.name}.tmp")
-        var connection: HttpURLConnection? = null
         return try {
-            connection = (URL(sourceUrl).openConnection() as HttpURLConnection).apply {
-                connectTimeout = 10_000
-                // 032 lyrics.lrc may look lyrics up online first (up to ~20 s).
-                readTimeout = 30_000
-                instanceFollowRedirects = true
-            }
-            if (connection.responseCode !in 200..299) {
-                return false
-            }
-            val expectedLength = connection.contentLengthLong
-            var bytesRead = 0L
-            connection.inputStream.buffered().use { input ->
-                tmp.outputStream().buffered().use { output ->
-                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                    while (true) {
-                        val read = input.read(buffer)
-                        if (read == -1) break
-                        output.write(buffer, 0, read)
-                        bytesRead += read
+            val request = Request.Builder()
+                .url(sourceUrl)
+                .get()
+                .build()
+            // 032 lyrics.lrc may look lyrics up online first (up to ~20 s).
+            val client = AppHttpClient.withReadTimeout(readTimeoutMillis = 30_000L, connectTimeoutMillis = 10_000L)
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    return false
+                }
+                val body = response.body ?: return false
+                val expectedLength = body.contentLength()
+                var bytesRead = 0L
+                body.byteStream().buffered().use { input ->
+                    tmp.outputStream().buffered().use { output ->
+                        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                        while (true) {
+                            val read = input.read(buffer)
+                            if (read == -1) break
+                            output.write(buffer, 0, read)
+                            bytesRead += read
+                        }
                     }
                 }
-            }
-            if (isDownloadComplete(bytesRead, expectedLength) && tmp.length() == bytesRead) {
-                if (destFile.exists()) destFile.delete()
-                tmp.renameTo(destFile)
-            } else {
-                tmp.delete()
-                false
+                if (isDownloadComplete(bytesRead, expectedLength) && tmp.length() == bytesRead) {
+                    if (destFile.exists()) destFile.delete()
+                    tmp.renameTo(destFile)
+                } else {
+                    tmp.delete()
+                    false
+                }
             }
         } catch (e: Exception) {
             tmp.delete()
             false
-        } finally {
-            connection?.disconnect()
         }
     }
 

@@ -1,11 +1,11 @@
 package com.lux032.musicbridge.lyrics
 
 import android.util.Log
+import com.lux032.musicbridge.core.AppHttpClient
 import java.io.File
-import java.net.HttpURLConnection
-import java.net.URL
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.Request
 
 data class LyricLine(
     val timeMillis: Long,
@@ -70,19 +70,13 @@ private fun downloadText(url: String): String {
         val path = if (url.startsWith("file://")) url.removePrefix("file://") else url.removePrefix("file:")
         return File(path).readText(Charsets.UTF_8)
     }
-    var connection: HttpURLConnection? = null
-    try {
-        connection = (URL(url).openConnection() as HttpURLConnection).apply {
-            requestMethod = "GET"
-            instanceFollowRedirects = true
-            connectTimeout = 15_000
-            readTimeout = 30_000
-            setRequestProperty("Accept", "text/plain, application/octet-stream")
-        }
-        val status = connection.responseCode
-        if (status !in 200..299) error("HTTP $status while loading lyrics")
-        return connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
-    } finally {
-        connection?.disconnect()
+    val request = Request.Builder()
+        .url(url)
+        .get()
+        .header("Accept", "text/plain, application/octet-stream")
+        .build()
+    return AppHttpClient.defaultClient.newCall(request).execute().use { response ->
+        if (!response.isSuccessful) error("HTTP ${response.code} while loading lyrics")
+        response.body?.string().orEmpty()
     }
 }

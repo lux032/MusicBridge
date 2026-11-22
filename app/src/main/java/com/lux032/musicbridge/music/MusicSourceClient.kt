@@ -29,12 +29,4 @@ interface MusicSourceClient {
     suspend fun fetchTrackStream(ratingKey: String): MusicTrack? = null
     suspend fun fetchArtistTracks(artist: MusicArtist): List<MusicTrack>
     suspend fun fetchArtistAlbums(artistRatingKey: String): List<MusicAlbum> = emptyList()
-    suspend fun reportTimeline(
-        ratingKey: String,
-        state: String,
-        timeMillis: Long,
-        durationMillis: Long?,
-        continuing: Boolean = false,
-    )
-    suspend fun scrobble(ratingKey: String, positionMillis: Long = 0L, durationMillis: Long? = null)
 }

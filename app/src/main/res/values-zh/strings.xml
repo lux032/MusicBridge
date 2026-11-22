@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">MusicBridge</string>
+    <string name="notification_channel_playback">播放控制</string>
+    <string name="notification_channel_playback_desc">MusicBridge 推流到音箱时保持后台运行</string>
+</resources>

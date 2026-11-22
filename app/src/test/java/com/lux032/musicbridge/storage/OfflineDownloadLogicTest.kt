@@ -27,4 +27,19 @@ class OfflineDownloadLogicTest {
         assertTrue(isDownloadComplete(bytesRead = 1024L, expectedContentLength = 1024L))
         assertTrue(isDownloadComplete(bytesRead = 1024L, expectedContentLength = -1L))
     }
+
+    @Test
+    fun offlineCoverFileNameDeduplicatesPerSourceAndAlbum() {
+        val track1 = offlineCoverFileName(sourceId = "srv-1", albumRatingKey = "alb-99", trackRatingKey = "trk-1")
+        val track2 = offlineCoverFileName(sourceId = "srv-1", albumRatingKey = "alb-99", trackRatingKey = "trk-2")
+        val otherServer = offlineCoverFileName(sourceId = "srv-2", albumRatingKey = "alb-99", trackRatingKey = "trk-1")
+        val noAlbum1 = offlineCoverFileName(sourceId = "srv-1", albumRatingKey = null, trackRatingKey = "trk-1")
+        val noAlbum2 = offlineCoverFileName(sourceId = "srv-1", albumRatingKey = " ", trackRatingKey = "trk-2")
+
+        org.junit.Assert.assertEquals(track1, track2)
+        org.junit.Assert.assertNotEquals(track1, otherServer)
+        org.junit.Assert.assertNotEquals(noAlbum1, noAlbum2)
+        assertTrue(track1.startsWith("album_"))
+        assertTrue(noAlbum1.startsWith("track_"))
+    }
 }

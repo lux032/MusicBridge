@@ -118,6 +118,11 @@ class MainActivity : ComponentActivity() {
         handlePlaybackIntent(intent)
     }
 
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        Strings.init(this)
+    }
+
     private fun handlePlaybackIntent(intent: Intent?) {
         if (intent?.action != ACTION_OPEN_PLAYBACK_DETAIL) return
         // Consume this command so Activity recreation does not reopen the player.
@@ -1017,6 +1022,7 @@ fun MusicBridgeApp(
                             onClearLocalCache = state::clearLocalAudioCache,
                             onClearAllDownloads = state::clearAllDownloads,
                             onSaveServer = state::saveServerProfile,
+                            onTestServerConnection = state::testServerConnection,
                             onSwitchServer = state::switchServer,
                             onDeleteServer = state::deleteServer,
                             onRefreshHome = { scope.launch { state.refreshAlbums() } },

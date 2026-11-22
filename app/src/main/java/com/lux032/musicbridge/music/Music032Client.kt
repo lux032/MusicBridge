@@ -1,34 +1,22 @@
 package com.lux032.musicbridge.music
 
-import android.util.Log
 import com.lux032.musicbridge.MusicServerProfile
-import com.lux032.musicbridge.music.MusicAlbum
-import com.lux032.musicbridge.music.AlbumTracksResult
-import com.lux032.musicbridge.music.AlbumsResult
-import com.lux032.musicbridge.music.MusicArtist
-import com.lux032.musicbridge.music.ArtistsResult
-import com.lux032.musicbridge.music.MusicPlaylist
-import com.lux032.musicbridge.music.PlaylistTracksResult
-import com.lux032.musicbridge.music.PlaylistsResult
-import com.lux032.musicbridge.music.LibrarySection
-import com.lux032.musicbridge.music.MusicTrack
+import com.lux032.musicbridge.core.AppHttpClient
+import com.lux032.musicbridge.core.awaitResponse
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
-import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicLong
-import java.util.concurrent.atomic.AtomicReference
-import kotlin.coroutines.resume
 
 class Music032Client(
     private val profile: MusicServerProfile,
@@ -218,33 +206,20 @@ class Music032Client(
         return Music032WorksJson.tracks(JSONObject(cancellableGet("/api/v1/series/$id/tracks")), ::parseTrack).uniqueStreams()
     }
 
-    private suspend fun cancellableGet(path: String): String = suspendCancellableCoroutine { continuation ->
-        val reference = AtomicReference<HttpURLConnection?>()
-        continuation.invokeOnCancellation { reference.get()?.disconnect() }
-        requestExecutor.execute {
-            var connection: HttpURLConnection? = null
-            try {
-                connection = (URL("$baseUrl$path").openConnection() as HttpURLConnection).apply {
-                    connectTimeout = 15_000
-                    readTimeout = 30_000
-                    setRequestProperty("Accept", "application/json")
-                    setRequestProperty("Authorization", "Bearer $apiToken")
-                }
-                reference.set(connection)
-                if (!continuation.isActive) return@execute
-                val status = connection.responseCode
-                val response = (if (status in 200..299) connection.inputStream else connection.errorStream)
-                    ?.bufferedReader(StandardCharsets.UTF_8)?.use { it.readText() }.orEmpty()
-                if (status !in 200..299) {
-                    val message = runCatching { JSONObject(response).optJSONObject("error")?.optString("message") }.getOrNull()
-                    throw Music032HttpException(status, message.orEmpty().ifBlank { "HTTP $status" })
-                }
-                continuation.resumeWith(Result.success(response))
-            } catch (error: Exception) {
-                continuation.resumeWith(Result.failure(error))
-            } finally {
-                connection?.disconnect()
+    private suspend fun cancellableGet(path: String): String = withContext(Dispatchers.IO) {
+        val request = Request.Builder()
+            .url("$baseUrl$path")
+            .get()
+            .header("Accept", "application/json")
+            .header("Authorization", "Bearer $apiToken")
+            .build()
+        AppHttpClient.defaultClient.newCall(request).awaitResponse().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) {
+                val message = runCatching { JSONObject(body).optJSONObject("error")?.optString("message") }.getOrNull()
+                throw Music032HttpException(response.code, message.orEmpty().ifBlank { "HTTP ${response.code}" })
             }
+            body
         }
     }
 
@@ -292,19 +267,46 @@ class Music032Client(
     suspend fun probeMediaToken(): MediaTokenProbeResult = withContext(Dispatchers.IO) {
         try {
             val url = Music032Json.mediaUrl("/api/v1/tracks/0/stream", baseUrl, mediaToken)!!
-            val connection = URL(url).openConnection() as HttpURLConnection
-            try {
-                connection.requestMethod = "GET"
-                connection.connectTimeout = 15_000
-                connection.readTimeout = 15_000
-                connection.instanceFollowRedirects = false
-                mediaTokenProbeStatus(connection.responseCode)
-            } finally { connection.disconnect() }
+            val request = Request.Builder()
+                .url(url)
+                .get()
+                .build()
+            AppHttpClient.noRedirectClient.newCall(request).awaitResponse().use { response ->
+                mediaTokenProbeStatus(response.code)
+            }
         } catch (cancel: CancellationException) {
             throw cancel
         } catch (_: Exception) {
             MediaTokenProbeResult.UNKNOWN
         }
+    }
+
+    /**
+     * Verifies server reachability, API Token authentication, and mediaToken validity
+     * without mutating local library state.
+     */
+    suspend fun testConnection(): Music032ConnectionTestResult = withContext(Dispatchers.IO) {
+        try {
+            cancellableGet("/api/v1/albums?limit=1&offset=0")
+        } catch (cancel: CancellationException) {
+            throw cancel
+        } catch (error: Music032HttpException) {
+            if (error.status == 401 || error.status == 403) {
+                return@withContext Music032ConnectionTestResult.InvalidApiToken
+            }
+            return@withContext Music032ConnectionTestResult.Failure(
+                error.serverMessage ?: error.message ?: "HTTP ${error.status}",
+            )
+        } catch (error: Exception) {
+            return@withContext Music032ConnectionTestResult.Failure(error.message ?: error.javaClass.simpleName)
+        }
+
+        val mediaProbe = probeMediaToken()
+        if (mediaProbe == MediaTokenProbeResult.INVALID) {
+            return@withContext Music032ConnectionTestResult.InvalidMediaToken
+        }
+        runCatching { ensureCapabilities() }
+        Music032ConnectionTestResult.Success(mediaTokenVerified = mediaProbe == MediaTokenProbeResult.OK)
     }
 
     override suspend fun fetchTrackStream(ratingKey: String): MusicTrack? = withContext(Dispatchers.IO) {
@@ -524,84 +526,31 @@ class Music032Client(
         Unit
     }
 
-    /**
-     * Playback sessions (plan C, apiRevision 3): the legacy timeline/scrobble endpoints
-     * were removed server-side and answer 410. 032 playback is reported exclusively
-     * through [Music032PlaybackReporter]; this method is intentionally unsupported and
-     * must never fall back to the removed endpoints.
-     */
-    override suspend fun reportTimeline(
-        ratingKey: String,
-        state: String,
-        timeMillis: Long,
-        durationMillis: Long?,
-        continuing: Boolean,
-    ) {
-        Log.w(
-            "Music032Client",
-            "reportTimeline() is unsupported for 032 (playback sessions replaced it); call ignored",
-        )
-    }
-
-    /** See [reportTimeline]: counting is derived server-side from session events now. */
-    override suspend fun scrobble(
-        ratingKey: String,
-        positionMillis: Long,
-        durationMillis: Long?,
-    ) {
-        Log.w(
-            "Music032Client",
-            "scrobble() is unsupported for 032 (playback sessions replaced it); call ignored",
-        )
-    }
-
     /** Transport used by [Music032PlaybackReporter] to POST one playback session event. */
     internal val playbackEventTransport = PlaybackEventTransport { payload -> postPlaybackEvent(payload) }
 
     /**
      * POSTs one session event without throwing on protocol statuses: the reporter needs
      * the exact 404/409 codes to drive its recovery rules. Status 0 means the request
-     * never produced a response (network failure, cancellation or deadline). The call is
-     * genuinely cancellable: cancelling the coroutine disconnects the connection, which
-     * unblocks the worker thread instead of waiting out connect+read timeouts on the
-     * calling thread (this is what bounds app-teardown reporting). Short timeouts keep
-     * the reporter's serialized queue from stalling behind a dead connection.
+     * never produced a response (network failure, cancellation or deadline).
      */
-    internal suspend fun postPlaybackEvent(payload: JSONObject): PlaybackEventHttpResult =
-        suspendCancellableCoroutine { continuation ->
-            val connectionReference = AtomicReference<HttpURLConnection?>()
-            continuation.invokeOnCancellation {
-                connectionReference.get()?.let { connection -> runCatching { connection.disconnect() } }
+    internal suspend fun postPlaybackEvent(payload: JSONObject): PlaybackEventHttpResult = withContext(Dispatchers.IO) {
+        val request = Request.Builder()
+            .url("$baseUrl/api/v1/playback/events")
+            .post(payload.toString().toRequestBody(JSON_MEDIA_TYPE))
+            .header("Accept", "application/json")
+            .header("Authorization", "Bearer $apiToken")
+            .build()
+        try {
+            AppHttpClient.playbackEventClient.newCall(request).awaitResponse().use { response ->
+                PlaybackEventHttpResult(response.code, response.body?.string())
             }
-            playbackEventExecutor.execute {
-                var connection: HttpURLConnection? = null
-                try {
-                    connection = (URL("$baseUrl/api/v1/playback/events").openConnection() as HttpURLConnection).apply {
-                        requestMethod = "POST"
-                        connectTimeout = PLAYBACK_EVENT_CONNECT_TIMEOUT_MILLIS
-                        readTimeout = PLAYBACK_EVENT_READ_TIMEOUT_MILLIS
-                        instanceFollowRedirects = true
-                        doInput = true
-                        doOutput = true
-                        setRequestProperty("Accept", "application/json")
-                        setRequestProperty("Content-Type", "application/json; charset=utf-8")
-                        setRequestProperty("Authorization", "Bearer $apiToken")
-                    }
-                    connectionReference.set(connection)
-                    connection.outputStream.bufferedWriter(StandardCharsets.UTF_8).use { it.write(payload.toString()) }
-                    val status = connection.responseCode
-                    val body = (if (status in 200..299) connection.inputStream else connection.errorStream)
-                        ?.bufferedReader(StandardCharsets.UTF_8)
-                        ?.use { it.readText() }
-                    continuation.resume(PlaybackEventHttpResult(status, body))
-                } catch (_: Exception) {
-                    // Includes the SocketException caused by a cancellation disconnect.
-                    continuation.resume(PlaybackEventHttpResult(0, null))
-                } finally {
-                    connection?.disconnect()
-                }
-            }
+        } catch (cancel: CancellationException) {
+            throw cancel
+        } catch (_: Exception) {
+            PlaybackEventHttpResult(0, null)
         }
+    }
 
     private fun parseAlbum(value: JSONObject) = Music032Json.parseAlbum(value, baseUrl, mediaToken, section, sourceId)
     private fun parseTrack(value: JSONObject) = Music032Json.parseTrack(value, baseUrl, mediaToken, sourceId)
@@ -646,41 +595,31 @@ class Music032Client(
 
     private fun request(method: String, path: String, body: JSONObject? = null, readTimeoutMillis: Int = 30_000): String {
         val target = if (path.startsWith("http://") || path.startsWith("https://")) path else "$baseUrl$path"
-        val connection = (URL(target).openConnection() as HttpURLConnection).apply {
-            requestMethod = method
-            connectTimeout = 15_000
-            readTimeout = readTimeoutMillis
-            instanceFollowRedirects = true
-            doInput = true
-            setRequestProperty("Accept", "application/json")
-            setRequestProperty("Authorization", "Bearer $apiToken")
-            if (body != null) {
-                doOutput = true
-                setRequestProperty("Content-Type", "application/json; charset=utf-8")
-            }
+        val requestBody = when {
+            body != null -> body.toString().toRequestBody(JSON_MEDIA_TYPE)
+            method == "POST" || method == "PUT" || method == "PATCH" -> ByteArray(0).toRequestBody(null)
+            else -> null
         }
-        return try {
-            if (body != null) {
-                connection.outputStream.bufferedWriter(StandardCharsets.UTF_8).use { it.write(body.toString()) }
-            }
-            val status = connection.responseCode
-            val response = (if (status in 200..299) connection.inputStream else connection.errorStream)
-                ?.bufferedReader(StandardCharsets.UTF_8)
-                ?.use { it.readText() }
-                .orEmpty()
-            if (status !in 200..299) {
-                val error = runCatching { JSONObject(response).optJSONObject("error") }.getOrNull()
-                val message = error?.optString("message").orEmpty().ifBlank { response.take(300) }
+        val request = Request.Builder()
+            .url(target)
+            .method(method, requestBody)
+            .header("Accept", "application/json")
+            .header("Authorization", "Bearer $apiToken")
+            .build()
+        val client = AppHttpClient.withReadTimeout(readTimeoutMillis.toLong())
+        return client.newCall(request).execute().use { response ->
+            val responseBody = response.body?.string().orEmpty()
+            if (!response.isSuccessful) {
+                val error = runCatching { JSONObject(responseBody).optJSONObject("error") }.getOrNull()
+                val message = error?.optString("message").orEmpty().ifBlank { responseBody.take(300) }
                 throw Music032HttpException(
-                    status,
-                    "032 Music Server HTTP $status：$message",
+                    response.code,
+                    "032 Music Server HTTP ${response.code}：$message",
                     code = error?.optString("code")?.takeIf { it.isNotBlank() },
                     serverMessage = error?.optString("message")?.takeIf { it.isNotBlank() },
                 )
             }
-            response
-        } finally {
-            connection.disconnect()
+            responseBody
         }
     }
 
@@ -691,27 +630,23 @@ class Music032Client(
         }
     }
 
-
-
     private companion object {
-        // Process-shared daemon pools so recreating Music032Client on settings/profile changes
-        // never leaks ExecutorServices; playback events stay isolated from browsing traffic.
-        val playbackEventExecutor = Executors.newCachedThreadPool { runnable ->
-            Thread(runnable, "music032-playback-events").apply { isDaemon = true }
-        }
-        val requestExecutor = Executors.newCachedThreadPool { runnable ->
-            Thread(runnable, "music032-requests").apply { isDaemon = true }
-        }
+        val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
         const val PAGE_SIZE = 500
         const val SYNC_PAGE_SIZE = 1000
-        const val PLAYBACK_EVENT_CONNECT_TIMEOUT_MILLIS = 5_000
-        const val PLAYBACK_EVENT_READ_TIMEOUT_MILLIS = 5_000
         /** Server online lookups take up to ~20 s; AI translation of a long song takes longer. */
         const val LYRICS_READ_TIMEOUT_MILLIS = 45_000
         const val TRANSLATION_READ_TIMEOUT_MILLIS = 180_000
         /** The server bounds its model call at 30 s and then loads the library. */
         const val AI_PLAYLIST_READ_TIMEOUT_MILLIS = 60_000
     }
+}
+
+sealed interface Music032ConnectionTestResult {
+    data class Success(val mediaTokenVerified: Boolean) : Music032ConnectionTestResult
+    data object InvalidApiToken : Music032ConnectionTestResult
+    data object InvalidMediaToken : Music032ConnectionTestResult
+    data class Failure(val detail: String) : Music032ConnectionTestResult
 }
 
 internal fun shouldCacheArtistDetail(requestGeneration: Long, currentGeneration: Long): Boolean =

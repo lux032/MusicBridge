@@ -99,6 +99,7 @@ fun SettingsScreen(
                 activeServerId = state.activeServerId,
                 onSwitchServer = actions.onSwitchServer,
                 onSaveServer = actions.onSaveServer,
+                onTestServerConnection = actions.onTestServerConnection,
                 onDeleteServer = actions.onDeleteServer,
                 onRefreshHome = actions.onRefreshHome,
             )

@@ -1,18 +1,14 @@
 package com.lux032.musicbridge.music
 
+import com.lux032.musicbridge.core.AppHttpClient
+import com.lux032.musicbridge.core.awaitResponse
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
-import java.util.concurrent.atomic.AtomicReference
-import java.net.HttpURLConnection
-import java.net.URL
+import okhttp3.Request
+import okhttp3.Response
 
 internal data class WarmupStatus(val code: Int, val retryAfterSeconds: Long? = null)
 internal sealed interface WarmupResult {
@@ -22,9 +18,12 @@ internal sealed interface WarmupResult {
 
 internal object Music032Warmup {
     suspend fun probe(url: String): Boolean? = try {
-        connectionRequest(url, "HEAD", 10_000) { connection ->
-            if (connection.responseCode == 200) connection.getHeaderField("Content-Length")?.toLongOrNull()?.let { it >= 0L }
-            else null
+        executeRequest(url, method = "HEAD", readTimeoutMillis = 10_000L) { response ->
+            if (response.code == 200) {
+                response.header("Content-Length")?.toLongOrNull()?.let { it >= 0L }
+            } else {
+                null
+            }
         }
     } catch (cancel: CancellationException) { throw cancel } catch (_: Exception) { null }
 
@@ -38,41 +37,34 @@ internal object Music032Warmup {
     }
 
     suspend fun fetch(url: String, timeoutMillis: Long): WarmupStatus =
-        connectionRequest(url, "GET", timeoutMillis.coerceIn(1L, 30_000L).toInt()) { connection ->
-            connection.setRequestProperty("Range", "bytes=0-0")
-            val code = connection.responseCode
-            if (shouldDrainWarmupResponse(code)) connection.inputStream.use { input ->
-                val buffer = ByteArray(4096)
-                while (input.read(buffer) != -1) { /* Drain the Range response before disconnecting. */ }
+        executeRequest(
+            url = url,
+            method = "GET",
+            readTimeoutMillis = timeoutMillis.coerceIn(1L, 30_000L),
+            headers = mapOf("Range" to "bytes=0-0"),
+        ) { response ->
+            val code = response.code
+            if (shouldDrainWarmupResponse(code)) {
+                response.body?.byteStream()?.use { input ->
+                    val buffer = ByteArray(4096)
+                    while (input.read(buffer) != -1) { /* Drain the Range response before closing. */ }
+                }
             }
-            WarmupStatus(code, connection.getHeaderField("Retry-After")?.toLongOrNull())
+            WarmupStatus(code, response.header("Retry-After")?.toLongOrNull())
         }
 
-    private val requestScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-
-    private suspend fun <T> connectionRequest(url: String, method: String, readTimeout: Int,
-                                               action: (HttpURLConnection) -> T): T = suspendCancellableCoroutine { continuation ->
-        val active = AtomicReference<HttpURLConnection?>()
-        continuation.invokeOnCancellation { active.get()?.disconnect() }
-        requestScope.launch {
-            var connection: HttpURLConnection? = null
-            try {
-                if (!continuation.isActive) return@launch
-                connection = URL(url).openConnection() as HttpURLConnection
-                active.set(connection)
-                if (!continuation.isActive) return@launch
-                connection.requestMethod = method
-                connection.connectTimeout = 10_000
-                connection.readTimeout = readTimeout
-                val result = action(connection)
-                if (continuation.isActive) continuation.resume(result)
-            } catch (error: Exception) {
-                if (continuation.isActive) continuation.resumeWithException(error)
-            } finally {
-                active.set(null)
-                connection?.disconnect()
-            }
-        }
+    private suspend fun <T> executeRequest(
+        url: String,
+        method: String,
+        readTimeoutMillis: Long,
+        headers: Map<String, String> = emptyMap(),
+        action: (Response) -> T,
+    ): T = withContext(Dispatchers.IO) {
+        val builder = Request.Builder().url(url)
+        if (method == "HEAD") builder.head() else builder.get()
+        headers.forEach { (k, v) -> builder.header(k, v) }
+        val client = AppHttpClient.withReadTimeout(readTimeoutMillis, connectTimeoutMillis = 10_000L)
+        client.newCall(builder.build()).awaitResponse().use(action)
     }
 
     suspend fun warmup(

@@ -60,10 +60,10 @@ fun StorageSection(
     if (isConfirmClearCacheVisible) {
         AlertDialog(
             onDismissRequest = { isConfirmClearCacheVisible = false },
-            title = { Text("清空音频缓存？", color = AppColors.TextPrimary) },
+            title = { Text(Strings.confirmClearCacheTitle, color = AppColors.TextPrimary) },
             text = {
                 Text(
-                    "将删除本机已缓存的 ${formatStorageBytes(localCacheUsedBytes)} 临时音频文件。离线下载的原档不会被删除。",
+                    Strings.confirmClearCacheBody(formatStorageBytes(localCacheUsedBytes)),
                     color = AppColors.TextSecondary,
                 )
             },
@@ -74,12 +74,12 @@ fun StorageSection(
                         onClearLocalCache()
                     },
                 ) {
-                    Text("确定清空", color = AppColors.ErrorText)
+                    Text(Strings.confirmClearAction, color = AppColors.ErrorText)
                 }
             },
             dismissButton = {
                 TextButton(onClick = { isConfirmClearCacheVisible = false }) {
-                    Text("取消", color = AppColors.TextSecondary)
+                    Text(Strings.cancel, color = AppColors.TextSecondary)
                 }
             },
         )
@@ -88,10 +88,10 @@ fun StorageSection(
     if (isConfirmClearDownloadsVisible) {
         AlertDialog(
             onDismissRequest = { isConfirmClearDownloadsVisible = false },
-            title = { Text("清空已下载离线原档？", color = AppColors.TextPrimary) },
+            title = { Text(Strings.confirmClearDownloadsTitle, color = AppColors.TextPrimary) },
             text = {
                 Text(
-                    "将彻底删除保存在本机的 ${formatStorageBytes(offlineDownloadedBytes)} 离线原档歌曲。删除后需在联网状态重新下载。",
+                    Strings.confirmClearDownloadsBody(formatStorageBytes(offlineDownloadedBytes)),
                     color = AppColors.TextSecondary,
                 )
             },
@@ -102,32 +102,32 @@ fun StorageSection(
                         onClearAllDownloads()
                     },
                 ) {
-                    Text("确定删除", color = AppColors.ErrorText)
+                    Text(Strings.confirmDelete, color = AppColors.ErrorText)
                 }
             },
             dismissButton = {
                 TextButton(onClick = { isConfirmClearDownloadsVisible = false }) {
-                    Text("取消", color = AppColors.TextSecondary)
+                    Text(Strings.cancel, color = AppColors.TextSecondary)
                 }
             },
         )
     }
 
     SettingsGroup(
-        title = "存储与缓存",
-        description = "分别管理在线播放临时缓存与离线无损原档",
+        title = Strings.storageAndCacheTitle,
+        description = Strings.storageAndCacheDesc,
         modifier = modifier,
     ) {
-        // --- 1. 在线播放缓存子面板 ---
+        // --- 1. Streaming cache ---
         Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
             Text(
-                text = "在线播放缓存",
+                text = Strings.onlineCacheHeader,
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.SemiBold,
                 color = AppColors.TextPrimary,
             )
             Text(
-                text = "试听与在线播放时自动生成的临时缓存，受配额上限约束自动循环覆盖",
+                text = Strings.onlineCacheDesc,
                 style = MaterialTheme.typography.bodySmall,
                 color = AppColors.TextSecondary,
             )
@@ -142,7 +142,7 @@ fun StorageSection(
 
         SettingsItem(
             title = Strings.localCacheSizeTitle,
-            subtitle = "自动清理超过设定上限的旧缓存",
+            subtitle = Strings.localCacheSizeSubtitle,
             value = localCacheSize.megabytesLabel,
             icon = Icons.Filled.Storage,
             onClick = { isCacheSizeSheetVisible = true },
@@ -152,7 +152,7 @@ fun StorageSection(
 
         SettingsItem(
             title = Strings.clearCache,
-            subtitle = if (localCacheUsedBytes > 0L) "已缓存 ${formatStorageBytes(localCacheUsedBytes)}" else "当前无缓存",
+            subtitle = if (localCacheUsedBytes > 0L) Strings.cacheUsedSummary(formatStorageBytes(localCacheUsedBytes)) else Strings.noCacheYet,
             icon = Icons.Filled.CleaningServices,
             enabled = localCacheUsedBytes > 0L,
             onClick = { isConfirmClearCacheVisible = true },
@@ -160,16 +160,16 @@ fun StorageSection(
 
         SettingsDivider()
 
-        // --- 2. 离线无损原档子面板 ---
+        // --- 2. Offline originals ---
         Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
             Text(
-                text = "离线无损原档",
+                text = Strings.offlineOriginalHeader,
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.SemiBold,
                 color = AppColors.TextPrimary,
             )
             Text(
-                text = "手动下载的高规格完整音轨，不受缓存上限影响，支持完全脱网播放",
+                text = Strings.offlineOriginalDesc,
                 style = MaterialTheme.typography.bodySmall,
                 color = AppColors.TextSecondary,
             )
@@ -185,7 +185,7 @@ fun StorageSection(
 
         SettingsItem(
             title = Strings.clearAllDownloads,
-            subtitle = if (offlineDownloadedBytes > 0L) "已下载 ${formatStorageBytes(offlineDownloadedBytes)}" else "暂无已下载歌曲",
+            subtitle = if (offlineDownloadedBytes > 0L) Strings.downloadedBytesSummary(formatStorageBytes(offlineDownloadedBytes)) else Strings.noDownloadedTracks,
             icon = Icons.Filled.DeleteSweep,
             enabled = offlineDownloadedBytes > 0L,
             onClick = { isConfirmClearDownloadsVisible = true },

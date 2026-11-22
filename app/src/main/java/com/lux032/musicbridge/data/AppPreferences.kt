@@ -62,7 +62,12 @@ data class MusicServerProfile(
     )
 }
 
-class AppPreferences(context: Context) {
+class AppPreferences internal constructor(
+    context: Context,
+    private val credentialCipher: CredentialCipher,
+) {
+    constructor(context: Context) : this(context, AndroidKeystoreCredentialCipher())
+
     // Historical file name, kept so existing installs keep their settings.
     private val sharedPreferences =
         context.applicationContext.getSharedPreferences("plex_to_sonos_prefs", Context.MODE_PRIVATE)
@@ -77,6 +82,7 @@ class AppPreferences(context: Context) {
 
     fun loadServerProfiles(): List<MusicServerProfile> {
         val retired = mutableListOf<String>()
+        var needsCredentialMigration = false
         val stored = runCatching {
             val array = JSONArray(sharedPreferences.getString(KEY_SERVER_PROFILES, "[]").orEmpty())
             buildList {
@@ -89,13 +95,22 @@ class AppPreferences(context: Context) {
                         retired += id
                         continue
                     }
+                    val rawToken = value.optString("token")
+                    val rawMediaToken = value.optString("mediaToken")
+                    if ((rawToken.isNotBlank() && !credentialCipher.isEncrypted(rawToken)) ||
+                        (rawMediaToken.isNotBlank() && !credentialCipher.isEncrypted(rawMediaToken))
+                    ) {
+                        needsCredentialMigration = true
+                    }
+                    val decodedToken = decodeStoredSecret(rawToken)
+                    val decodedMediaToken = decodeStoredSecret(rawMediaToken)
                     add(
                         MusicServerProfile(
                             id = id,
                             name = value.optString("name"),
                             type = type,
-                            token = value.optString("token"),
-                            mediaToken = value.optString("mediaToken"),
+                            token = decodedToken,
+                            mediaToken = decodedMediaToken,
                             baseUrl = value.optString("baseUrl"),
                         )
                     )
@@ -103,7 +118,25 @@ class AppPreferences(context: Context) {
             }
         }.getOrDefault(emptyList())
         retireUnsupportedServers(retired, stored)
+        if (needsCredentialMigration && retired.isEmpty()) {
+            val active = loadActiveServerId(stored)
+            saveServerProfiles(stored, active)
+        }
         return stored
+    }
+
+    private fun encodeStoredSecret(plainText: String): String {
+        if (plainText.isBlank()) return ""
+        return credentialCipher.encrypt(plainText)
+    }
+
+    private fun decodeStoredSecret(storedValue: String): String {
+        if (storedValue.isBlank()) return ""
+        return if (credentialCipher.isEncrypted(storedValue)) {
+            credentialCipher.decrypt(storedValue).orEmpty()
+        } else {
+            storedValue
+        }
     }
 
     /** Drops state of removed features: unsupported (Plex) profiles and [RETIRED_KEYS]. */
@@ -135,8 +168,8 @@ class AppPreferences(context: Context) {
                     .put("id", profile.id)
                     .put("name", profile.name)
                     .put("type", profile.type.name)
-                    .put("token", profile.token)
-                    .put("mediaToken", profile.mediaToken)
+                    .put("token", encodeStoredSecret(profile.token))
+                    .put("mediaToken", encodeStoredSecret(profile.mediaToken))
                     .put("baseUrl", profile.baseUrl)
             )
         }

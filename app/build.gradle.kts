@@ -105,6 +105,8 @@ dependencies {
     implementation(libs.androidx.compose.material.icons.extended)
     implementation(libs.coil.compose)
     implementation(libs.coil.network.okhttp)
+    implementation(libs.okhttp)
+    implementation(libs.zxing.core)
     // Extracts dominant/vibrant colors from album artwork so the player screen can tint
     // its background and accents after the current cover.
     implementation(libs.androidx.palette.ktx)

@@ -312,7 +312,7 @@ enum class LocalPrecacheCount(val id: String, val count: Int) {
     OFF("0", 0), ONE("1", 1), TWO("2", 2), THREE("3", 3),
     FIVE("5", 5), TEN("10", 10), FIFTEEN("15", 15);
 
-    val label: String get() = if (count == 0) "关闭" else "$count 首"
+    val label: String get() = if (count == 0) Strings.precacheOff else Strings.precacheTrackCount(count)
 
     companion object {
         val DEFAULT_WIFI = THREE

@@ -2,21 +2,27 @@ package com.lux032.musicbridge.sonos
 
 import android.content.Context
 import android.net.wifi.WifiManager
+import android.util.Log
+import com.lux032.musicbridge.Strings
+import com.lux032.musicbridge.core.AppHttpClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.w3c.dom.Element
+import org.xml.sax.EntityResolver
+import org.xml.sax.InputSource
+import org.xml.sax.SAXException
 import java.io.ByteArrayInputStream
-import java.io.InputStream
+import java.io.StringReader
 import java.net.DatagramPacket
 import java.net.DatagramSocket
-import java.net.HttpURLConnection
 import java.net.InetAddress
-import java.net.InetSocketAddress
 import java.net.SocketTimeoutException
-import java.net.Socket
 import java.net.URI
-import java.net.URL
 import java.nio.charset.StandardCharsets
+import javax.xml.XMLConstants
 import javax.xml.parsers.DocumentBuilderFactory
 
 data class SonosDevice(
@@ -238,24 +244,17 @@ class SonosDiscovery(private val context: Context) {
             }
 
     private fun request(url: String): String {
-        val connection = (URL(url).openConnection() as HttpURLConnection).apply {
-            requestMethod = "GET"
-            connectTimeout = 5_000
-            readTimeout = 5_000
-            doInput = true
-            setRequestProperty("Accept", "application/xml,text/xml")
-        }
-
-        return try {
-            val status = connection.responseCode
-            val stream = if (status in 200..299) connection.inputStream else connection.errorStream
-            val body = stream?.readFully().orEmpty()
-            if (status !in 200..299) {
-                error("HTTP $status from $url: ${body.take(200)}")
+        val request = Request.Builder()
+            .url(url)
+            .get()
+            .header("Accept", "application/xml,text/xml")
+            .build()
+        return AppHttpClient.sonosClient.newCall(request).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) {
+                error("HTTP ${response.code} from $url: ${body.take(200)}")
             }
             body
-        } finally {
-            connection.disconnect()
         }
     }
 }
@@ -507,7 +506,7 @@ class SonosController {
                 ?: errors.add("RegularVolume failed at $baseUrl")
         }
 
-        error("无法读取音量。尝试的URL: ${candidateBaseUrls.joinToString()}。错误: ${errors.joinToString("; ")}")
+        error(Strings.sonosReadVolumeFailed(candidateBaseUrls.joinToString(), errors.joinToString("; ")))
     }
 
     suspend fun setVolume(room: SonosRoom, volume: Int) = withContext(Dispatchers.IO) {
@@ -643,6 +642,28 @@ private fun Int.toSonosDuration(): String {
     return "%02d:%02d:%02d".format(hours, minutes, seconds)
 }
 
+private const val SONOS_LOG_TAG = "SonosDiscovery"
+private val SOAP_XML_MEDIA_TYPE = "text/xml; charset=utf-8".toMediaType()
+private val DISALLOWED_XML_DECLARATION = Regex("<!\\s*(DOCTYPE|ENTITY)\\b", RegexOption.IGNORE_CASE)
+
+private val hardenedDocumentBuilderFactory: ThreadLocal<DocumentBuilderFactory> =
+    ThreadLocal.withInitial {
+        DocumentBuilderFactory.newInstance().apply {
+            isNamespaceAware = false
+            isExpandEntityReferences = false
+            runCatching { isXIncludeAware = false }
+            runCatching { setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true) }
+            runCatching { setFeature("http://apache.org/xml/features/disallow-doctype-decl", true) }
+            runCatching { setFeature("http://xml.org/sax/features/external-general-entities", false) }
+            runCatching { setFeature("http://xml.org/sax/features/external-parameter-entities", false) }
+            runCatching { setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false) }
+        }
+    }
+
+private val rejectingEntityResolver = EntityResolver { publicId, systemId ->
+    throw SAXException("External XML entities are disabled (publicId=$publicId, systemId=$systemId)")
+}
+
 private fun readGroupVolume(baseUrl: String): String? = runCatching {
     val response = soapRequest(
         controlUrl = "$baseUrl/MediaRenderer/GroupRenderingControl/Control",
@@ -651,7 +672,9 @@ private fun readGroupVolume(baseUrl: String): String? = runCatching {
         innerXml = """<InstanceID>0</InstanceID>""",
     )
     parseXml(response).textOfFirstTag("CurrentVolume")
-}.onFailure { println("readGroupVolume error at $baseUrl: ${it.message}") }.getOrNull()
+}.onFailure {
+    Log.w(SONOS_LOG_TAG, "readGroupVolume failed at $baseUrl: ${it.message}")
+}.getOrNull()
 
 private fun readRegularVolume(baseUrl: String): String? = runCatching {
     val response = soapRequest(
@@ -661,7 +684,9 @@ private fun readRegularVolume(baseUrl: String): String? = runCatching {
         innerXml = """<InstanceID>0</InstanceID><Channel>Master</Channel>""",
     )
     parseXml(response).textOfFirstTag("CurrentVolume")
-}.onFailure { println("readRegularVolume error at $baseUrl: ${it.message}") }.getOrNull()
+}.onFailure {
+    Log.w(SONOS_LOG_TAG, "readRegularVolume failed at $baseUrl: ${it.message}")
+}.getOrNull()
 
 private fun soapRequest(controlUrl: String, serviceType: String, action: String, innerXml: String): String {
     val body = """
@@ -674,54 +699,20 @@ private fun soapRequest(controlUrl: String, serviceType: String, action: String,
             </s:Body>
         </s:Envelope>
     """.trimIndent()
-    val requestBytes = body.toByteArray(StandardCharsets.UTF_8)
-    val uri = URI(controlUrl)
-    val host = uri.host ?: error("Invalid SOAP control URL host: $controlUrl")
-    val path = buildString {
-        append(uri.rawPath?.ifBlank { "/" } ?: "/")
-        uri.rawQuery?.let {
-            append('?')
-            append(it)
+    val request = Request.Builder()
+        .url(controlUrl)
+        .post(body.toRequestBody(SOAP_XML_MEDIA_TYPE))
+        .header("SOAPACTION", "\"$serviceType#$action\"")
+        .header("Connection", "close")
+        .build()
+
+    return AppHttpClient.sonosClient.newCall(request).execute().use { response ->
+        val responseBody = response.body?.string().orEmpty()
+        if (!response.isSuccessful) {
+            // Never log the SOAP request body here: it may contain mediaToken query parameters.
+            Log.w(SONOS_LOG_TAG, "SOAP error action=$action status=${response.code}")
+            error("HTTP ${response.code} from $controlUrl: ${responseBody.take(300)}")
         }
-    }
-    val port = if (uri.port >= 0) uri.port else 80
-
-    val httpRequest = buildString {
-        append("POST $path HTTP/1.1\r\n")
-        append("Host: $host:$port\r\n")
-        append("Content-Type: text/xml; charset=utf-8\r\n")
-        append("SOAPACTION: \"$serviceType#$action\"\r\n")
-        append("Content-Length: ${requestBytes.size}\r\n")
-        append("Connection: close\r\n")
-        append("\r\n")
-    }.toByteArray(StandardCharsets.UTF_8)
-
-    return Socket().use { socket ->
-        // Connect timeout matters as much as the read timeout: without it a dead speaker
-        // IP leaves the socket hanging in connect() for minutes, and the caller's loading
-        // flag (which gates UI) stays latched the whole time.
-        socket.connect(InetSocketAddress(host, port), 5_000)
-        socket.soTimeout = 10_000
-        val output = socket.getOutputStream()
-        output.write(httpRequest)
-        output.write(requestBytes)
-        output.flush()
-
-        val (headerText, responseBody) = splitHttpResponse(socket.getInputStream().readBytes())
-        val statusLine = headerText.lineSequence().firstOrNull().orEmpty()
-        val statusCode = statusLine
-            .split(' ')
-            .getOrNull(1)
-            ?.toIntOrNull()
-            ?: error("Invalid HTTP status from $controlUrl: $statusLine")
-
-        if (statusCode !in 200..299) {
-            println("SOAP Error Action=$action URL=$controlUrl Status=$statusCode")
-            println("SOAP Request Body:\n$body")
-            println("SOAP Response Body:\n$responseBody")
-            error("HTTP $statusCode from $controlUrl: ${responseBody.take(300)}")
-        }
-
         responseBody
     }
 }
@@ -733,52 +724,17 @@ private fun parseHeaderValue(payload: String, headerName: String): String? =
         ?.trim()
         ?.takeIf { it.isNotBlank() }
 
-/**
- * Splits a raw HTTP/1.1 response into header text and the UTF-8 body. Large replies (a
- * queue Browse) arrive with `Transfer-Encoding: chunked`; the chunk sizes count bytes, so
- * the body is de-chunked before decoding.
- */
-internal fun splitHttpResponse(raw: ByteArray): Pair<String, String> {
-    var headerEnd = -1
-    for (i in 0..raw.size - 4) {
-        if (raw[i] == '\r'.code.toByte() && raw[i + 1] == '\n'.code.toByte() &&
-            raw[i + 2] == '\r'.code.toByte() && raw[i + 3] == '\n'.code.toByte()) { headerEnd = i; break }
-    }
-    if (headerEnd < 0) return String(raw, StandardCharsets.UTF_8) to ""
-    val headers = String(raw, 0, headerEnd, StandardCharsets.ISO_8859_1)
-    val body = raw.copyOfRange(headerEnd + 4, raw.size)
-    val chunked = headers.lineSequence().any {
-        it.substringBefore(':').trim().equals("Transfer-Encoding", true) && it.substringAfter(':').contains("chunked", true)
-    }
-    return headers to String(if (chunked) dechunk(body) else body, StandardCharsets.UTF_8)
-}
-
-private fun dechunk(body: ByteArray): ByteArray {
-    val out = java.io.ByteArrayOutputStream(body.size)
-    var pos = 0
-    while (pos < body.size) {
-        var lineEnd = pos
-        while (lineEnd + 1 < body.size && !(body[lineEnd] == '\r'.code.toByte() && body[lineEnd + 1] == '\n'.code.toByte())) lineEnd++
-        if (lineEnd + 1 >= body.size) break
-        val size = String(body, pos, lineEnd - pos, StandardCharsets.ISO_8859_1).substringBefore(';').trim().toIntOrNull(16) ?: break
-        if (size == 0) break
-        val start = lineEnd + 2
-        val end = (start + size).coerceAtMost(body.size)
-        out.write(body, start, end - start)
-        pos = end + 2
-    }
-    return out.toByteArray()
-}
-
-private fun InputStream.readFully(): String =
-    bufferedReader(StandardCharsets.UTF_8).use { it.readText() }
+internal fun parseSonosXml(body: String): Element = parseXml(body)
 
 private fun parseXml(body: String): Element {
-    val factory = DocumentBuilderFactory.newInstance().apply {
-        isNamespaceAware = false
+    if (DISALLOWED_XML_DECLARATION.containsMatchIn(body)) {
+        throw SAXException("XML DOCTYPE/ENTITY declarations are forbidden")
     }
-    return factory.newDocumentBuilder()
-        .parse(ByteArrayInputStream(body.toByteArray(StandardCharsets.UTF_8)))
+    val builder = hardenedDocumentBuilderFactory.get()!!.newDocumentBuilder().apply {
+        setEntityResolver(rejectingEntityResolver)
+    }
+    return builder
+        .parse(InputSource(ByteArrayInputStream(body.toByteArray(StandardCharsets.UTF_8))))
         .documentElement
 }
 

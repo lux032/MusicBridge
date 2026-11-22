@@ -9,6 +9,7 @@ import com.lux032.musicbridge.MusicServerProfile
 import com.lux032.musicbridge.OpusTranscodeMode
 import com.lux032.musicbridge.SonosHiResTranscodeMode
 import com.lux032.musicbridge.defaultHomeLayout
+import com.lux032.musicbridge.music.Music032ConnectionTestResult
 
 /**
  * Encapsulates the UI state required by SettingsScreen.
@@ -41,7 +42,8 @@ data class SettingsActions(
     val onLocalCacheSizeChange: (LocalCacheSize) -> Unit,
     val onClearLocalCache: () -> Unit,
     val onClearAllDownloads: () -> Unit,
-    val onSaveServer: (MusicServerProfile, Boolean) -> Unit,
+    val onSaveServer: (MusicServerProfile, Boolean) -> String?,
+    val onTestServerConnection: suspend (MusicServerProfile) -> Music032ConnectionTestResult,
     val onSwitchServer: (String) -> Unit,
     val onDeleteServer: (String) -> Unit,
     val onRefreshHome: () -> Unit,

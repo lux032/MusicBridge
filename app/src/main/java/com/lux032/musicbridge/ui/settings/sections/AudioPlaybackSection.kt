@@ -96,7 +96,7 @@ fun AudioPlaybackSection(
     }
 
     SettingsGroup(
-        title = "本机播放与音质",
+        title = Strings.localPlaybackAndQualityTitle,
         description = Strings.localPlaybackSectionDesc,
         modifier = modifier,
     ) {
@@ -120,7 +120,7 @@ fun AudioPlaybackSection(
 
         SettingsItem(
             title = Strings.localOpusBitrateTitle,
-            subtitle = "非无损及转码时的 Opus 编码质量",
+            subtitle = Strings.localOpusBitrateSubtitle,
             value = localOpusBitrate.label,
             icon = Icons.Filled.Audiotrack,
             onClick = { isOpusBitrateSheetVisible = true },
@@ -129,7 +129,7 @@ fun AudioPlaybackSection(
 
         SettingsItem(
             title = Strings.wifiPrecacheTitle,
-            subtitle = "WiFi 下自动预拉取的后续曲目数",
+            subtitle = Strings.wifiPrecacheSubtitle,
             value = wifiPrecacheCount.label,
             icon = Icons.Filled.CloudDownload,
             onClick = { isWifiPrecacheSheetVisible = true },
@@ -138,7 +138,7 @@ fun AudioPlaybackSection(
 
         SettingsItem(
             title = Strings.cellularPrecacheTitle,
-            subtitle = "蜂窝移动网络下自动预拉取的曲目数",
+            subtitle = Strings.cellularPrecacheSubtitle,
             value = cellularPrecacheCount.label,
             icon = Icons.Filled.CloudDownload,
             onClick = { isCellularPrecacheSheetVisible = true },

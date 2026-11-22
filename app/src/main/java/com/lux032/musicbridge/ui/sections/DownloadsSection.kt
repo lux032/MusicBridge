@@ -191,7 +191,7 @@ internal fun DownloadsSection(
                 color = AppColors.TextPrimary,
             )
             if (albums.isNotEmpty()) {
-                val statsText = "${albums.size} 张专辑 · $totalTracks 首单曲 · 共 ${formatFileSize(totalBytes)}"
+                val statsText = Strings.offlineLibrarySummary(albums.size, totalTracks, formatFileSize(totalBytes))
                 Text(
                     text = statsText,
                     style = MaterialTheme.typography.bodyMedium,
@@ -321,7 +321,7 @@ private fun DownloadedAlbumCard(
                             append(Strings.discCountFact(discGroups.size))
                             append(" · ")
                         }
-                        append("${group.tracks.size} 首歌曲 · ${formatFileSize(group.totalSizeBytes)}")
+                        append(Strings.offlineAlbumSummary(group.tracks.size, formatFileSize(group.totalSizeBytes)))
                     }
                     Text(
                         text = summaryText,
@@ -343,7 +343,7 @@ private fun DownloadedAlbumCard(
                     )
                     BareIcon(
                         icon = if (isExpanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
-                        contentDescription = if (isExpanded) "折叠" else "展开",
+                        contentDescription = if (isExpanded) Strings.collapse else Strings.expand,
                         onClick = { isExpanded = !isExpanded },
                         size = 44.dp,
                     )
@@ -582,7 +582,7 @@ private fun DownloadedTrackItem(
         AlertDialog(
             onDismissRequest = { showTrackDeleteDialog = false },
             title = { Text(Strings.deleteDownloaded) },
-            text = { Text("确定要删除「${track.title}」的离线原档吗？") },
+            text = { Text(Strings.confirmDeleteDownloadedTrack(track.title)) },
             confirmButton = {
                 TextButton(onClick = {
                     showTrackDeleteDialog = false

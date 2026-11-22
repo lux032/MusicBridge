@@ -59,7 +59,7 @@ internal class Music032ProfileChangeHandler(
             retireReporter(previous.id, true)
             currentTrack?.ratingKey?.toLongOrNull()?.let { trackId ->
                 blockResume(previous.id, trackId)
-                notify("服务器地址已变更，当前曲目的播放上报已暂停，重新播放后恢复")
+                notify(Strings.serverUrlChangedReportingPaused)
             }
         }
     }

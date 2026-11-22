@@ -22,12 +22,12 @@
 
 ## 二、中优先级问题（安全 / 体验边界 / 国际化 / 维护性）
 
-- [ ] **敏感凭据加密存储**：将 `AppPreferences` 中的 `token` / `mediaToken` 迁移至 Android Keystore 加密存储。
-- [ ] **清理 Sonos 日志敏感信息泄漏与 XML 解析加固**：移除 `SonosDiscovery.kt` 中的 `println`（避免打印带 `mediaToken` 的 SOAP 请求体），复用并加固 `DocumentBuilderFactory`（禁用外部实体 / DTD）。
-- [ ] **服务器配置表单校验完善与连接测试**：`ServerEditSheet` 补齐 `baseUrl`（含协议头校验）与 `token` 校验，保存失败不关闭弹窗、页内显示错误，并增加「测试连接」按钮与配置导入/扫码。
-- [ ] **双语国际化补齐与 Locale 修复**：修复 `Strings.kt` 中 `isZhCN` 写死 `country == "CN"` 导致繁中回退英文的问题；清理设置页、弹窗与提示中的硬编码中文；考虑迁回 Android 资源系统以支持 Android 13+ 单应用语言。
-- [ ] **离线封面按专辑去重**：`OfflineDownloadManager` 按 `sourceId + albumRatingKey` 共享本地封面，避免整张专辑下载时每首歌重复存储相同图片。
-- [ ] **代码结构瘦身与历史债务清理**：
+- [x] **敏感凭据加密存储**：将 `AppPreferences` 中的 `token` / `mediaToken` 迁移至 Android Keystore 加密存储。
+- [x] **清理 Sonos 日志敏感信息泄漏与 XML 解析加固**：移除 `SonosDiscovery.kt` 中的 `println`（避免打印带 `mediaToken` 的 SOAP 请求体），复用并加固 `DocumentBuilderFactory`（禁用外部实体 / DTD）。
+- [x] **服务器配置表单校验完善与连接测试**：`ServerEditSheet` 补齐 `baseUrl`（含协议头校验）与 `token` 校验，保存失败不关闭弹窗、页内显示错误，并增加「测试连接」按钮与配置导入/扫码。
+- [x] **双语国际化补齐与 Locale 修复**：修复 `Strings.kt` 中 `isZhCN` 写死 `country == "CN"` 导致繁中回退英文的问题；清理设置页、弹窗与提示中的硬编码中文；考虑迁回 Android 资源系统以支持 Android 13+ 单应用语言。
+- [x] **离线封面按专辑去重**：`OfflineDownloadManager` 按 `sourceId + albumRatingKey` 共享本地封面，避免整张专辑下载时每首歌重复存储相同图片。
+- [x] **代码结构瘦身与历史债务清理**：
   - 拆分超大文件：`PlaybackSection.kt`、`AppStatePlaybackCoordinator.kt`、`LocalPlaybackEngine.kt`、`AlbumLocalStore.kt`。
   - 统一网络层到已引入的 OkHttp，减少裸 `HttpURLConnection` / 手写 `Socket` HTTP 解析。
   - 清理 Plex 移除后的残留死代码（如 `reportTimelineSafelyLocal` / `scrobbleIfNeededLocal`）并评估合并 `TABLE_TRACKS` 与 `TABLE_ALBUM_TRACKS`。

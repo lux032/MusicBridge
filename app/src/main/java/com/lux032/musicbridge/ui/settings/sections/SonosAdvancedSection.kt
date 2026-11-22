@@ -77,7 +77,7 @@ fun SonosAdvancedSection(
             },
             badge = { mode ->
                 when (mode) {
-                    SonosHiResTranscodeMode.TRANSCODE_MP3 -> "推荐"
+                    SonosHiResTranscodeMode.TRANSCODE_MP3 -> Strings.recommendedBadge
                     SonosHiResTranscodeMode.TRANSCODE_FLAC_48K -> null
                     SonosHiResTranscodeMode.DIRECT_ORIGINAL -> null
                 }
@@ -99,8 +99,8 @@ fun SonosAdvancedSection(
     }
 
     SettingsGroup(
-        title = "Sonos 与硬件转码",
-        description = "配置推送到 Sonos 音箱时的音轨兼容与转码策略",
+        title = Strings.sonosAdvancedTitle,
+        description = Strings.sonosAdvancedDesc,
         modifier = modifier,
     ) {
         SettingsItem(

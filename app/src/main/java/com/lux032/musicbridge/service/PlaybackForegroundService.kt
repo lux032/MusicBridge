@@ -29,6 +29,8 @@ import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import com.lux032.musicbridge.MainActivity
 import com.lux032.musicbridge.R
+import com.lux032.musicbridge.Strings
+import com.lux032.musicbridge.core.AppHttpClient
 import com.lux032.musicbridge.thumbnailUrl
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -37,9 +39,9 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import okhttp3.Request
+import java.io.File
 import java.io.IOException
-import java.net.HttpURLConnection
-import java.net.URL
 
 /**
  * Foreground service + media session for Sonos playback.
@@ -176,7 +178,7 @@ class PlaybackForegroundService : Service() {
         val favorite = currentIsFavorite ?: return emptyList()
         return listOf(
             CommandButton.Builder()
-                .setDisplayName(if (favorite) "取消收藏" else "收藏")
+                .setDisplayName(if (favorite) Strings.searchUnfavoriteAction else Strings.searchFavoriteAction)
                 .setIconResId(if (favorite) R.drawable.ic_favorite else R.drawable.ic_favorite_border)
                 .setSessionCommand(TOGGLE_FAVORITE_COMMAND)
                 .build()
@@ -316,18 +318,24 @@ class PlaybackForegroundService : Service() {
     private fun downloadArtwork(url: String): DownloadedArtwork {
         // Media notifications render a relatively small large icon. Requesting a
         // bounded source avoids decoding multi-megapixel artwork outside Coil's cache.
-        // 已下载专辑的封面是 file:// 本地路径，不是 HttpURLConnection。
-        val connection = URL(thumbnailUrl(url, NOTIFICATION_ARTWORK_SIZE_PX)).openConnection()
-        val bytes = try {
-            connection.connectTimeout = ARTWORK_TIMEOUT_MS
-            connection.readTimeout = ARTWORK_TIMEOUT_MS
-            if (connection is HttpURLConnection) {
-                val code = connection.responseCode
-                if (code !in 200..299) throw IOException("HTTP $code")
+        val resolvedUrl = thumbnailUrl(url, NOTIFICATION_ARTWORK_SIZE_PX)
+        val bytes = if (resolvedUrl.startsWith("file:")) {
+            val path = if (resolvedUrl.startsWith("file://")) {
+                resolvedUrl.removePrefix("file://")
+            } else {
+                resolvedUrl.removePrefix("file:")
             }
-            connection.getInputStream().use { it.readBytes() }
-        } finally {
-            (connection as? HttpURLConnection)?.disconnect()
+            File(path).readBytes()
+        } else {
+            val request = Request.Builder().url(resolvedUrl).get().build()
+            val client = AppHttpClient.withReadTimeout(
+                readTimeoutMillis = ARTWORK_TIMEOUT_MS.toLong(),
+                connectTimeoutMillis = ARTWORK_TIMEOUT_MS.toLong(),
+            )
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) throw IOException("HTTP ${response.code}")
+                response.body?.bytes() ?: throw IOException("Empty artwork response")
+            }
         }
         val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
             ?: throw IOException("Artwork could not be decoded")
@@ -364,7 +372,7 @@ class PlaybackForegroundService : Service() {
         } else {
             R.drawable.ic_pause
         }
-        val playPauseLabel = if (currentIsPaused) "播放" else "暂停"
+        val playPauseLabel = if (currentIsPaused) Strings.play else Strings.pause
 
         // Android 13+ 与 HyperOS 的媒体卡按 Session 渲染（元数据、封面、进度、按钮）；
         // 下面这些 action 和 large icon 留给不读 Session 的旧系统。
@@ -379,13 +387,13 @@ class PlaybackForegroundService : Service() {
             .setOngoing(true)
             .setVisibility(Notification.VISIBILITY_PUBLIC)
             .addAction(Notification.Action.Builder(
-                R.drawable.ic_skip_previous, "上一首", prevPendingIntent
+                R.drawable.ic_skip_previous, Strings.previous, prevPendingIntent
             ).build())
             .addAction(Notification.Action.Builder(
                 playPauseIcon, playPauseLabel, togglePausePendingIntent
             ).build())
             .addAction(Notification.Action.Builder(
-                R.drawable.ic_skip_next, "下一首", nextPendingIntent
+                R.drawable.ic_skip_next, Strings.next, nextPendingIntent
             ).build())
             .setStyle(style)
 
@@ -401,9 +409,11 @@ class PlaybackForegroundService : Service() {
             val manager = getSystemService(NotificationManager::class.java)
             if (manager.getNotificationChannel(CHANNEL_ID) == null) {
                 val channel = NotificationChannel(
-                    CHANNEL_ID, "播放控制", NotificationManager.IMPORTANCE_LOW
+                    CHANNEL_ID,
+                    getString(R.string.notification_channel_playback),
+                    NotificationManager.IMPORTANCE_LOW,
                 ).apply {
-                    description = "MusicBridge 推流到音箱时保持后台运行"
+                    description = getString(R.string.notification_channel_playback_desc)
                     setShowBadge(false)
                 }
                 manager.createNotificationChannel(channel)

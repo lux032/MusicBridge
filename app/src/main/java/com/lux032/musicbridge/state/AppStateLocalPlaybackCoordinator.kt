@@ -114,7 +114,7 @@ internal class AppStateLocalPlaybackCoordinator(
                         currentPositionMillis = state.localPlaybackEngine.currentPositionMillis,
                         durationMillis = track.durationMillis,
                     )
-                    state.actionMessage = "正在播放：${track.title}"
+                    state.actionMessage = Strings.playingTrack(track.title)
                 }
             }
 
@@ -179,7 +179,7 @@ internal class AppStateLocalPlaybackCoordinator(
                         isBuffering = false,
                         currentPositionMillis = 0L,
                     )
-                    state.actionMessage = "播放结束：${current.album.title}"
+                    state.actionMessage = Strings.playbackEnded(current.album.title)
                 }
             }
 
@@ -203,7 +203,7 @@ internal class AppStateLocalPlaybackCoordinator(
                     // The engine gave up on this item: close its 032 session as error; the
                     // following transition opens the next track's session.
                     sessionDriver.onTrackFailed(track)
-                    state.actionMessage = "《${track.title}》播放异常，已跳至下一首"
+                    state.actionMessage = Strings.trackPlaybackErrorSkipped(track.title)
                 }
             }
 
@@ -369,7 +369,7 @@ internal class AppStateLocalPlaybackCoordinator(
         PlaybackForegroundService.stop(state.context)
         LocalPlaybackService.start(state.context)
         val initialTrack = resolvedTracks[safeIndex]
-        state.actionMessage = "正在本机播放：${initialTrack.title}"
+        state.actionMessage = Strings.playingLocally(initialTrack.title)
         // Explicit starts open a fresh chain; only a renderer switch (Sonos -> this
         // device) takes the open session over.
         sessionDriver.onExplicitStart(
@@ -485,7 +485,7 @@ internal class AppStateLocalPlaybackCoordinator(
         if (engine.isPlaying) {
             engine.pause()
             state.miniPlayerState = state.miniPlayerState?.copy(isPaused = true, isBuffering = false)
-            state.actionMessage = "已暂停播放"
+            state.actionMessage = Strings.playbackPausedNotice
         } else {
             // ExoPlayer ignores play() once the queue ran to STATE_ENDED — restart the
             // current track instead of leaving the button dead.
@@ -498,7 +498,7 @@ internal class AppStateLocalPlaybackCoordinator(
                 isPaused = false,
                 isBuffering = engine.isBuffering,
             )
-            state.actionMessage = "已继续播放"
+            state.actionMessage = Strings.playbackResumedNotice
         }
     }
 
@@ -517,7 +517,7 @@ internal class AppStateLocalPlaybackCoordinator(
                     durationMillis = playerState.durationMillis ?: track.durationMillis ?: 0L,
                 )
             }
-        state.actionMessage = "已跳转到 ${formatDuration(effectiveTargetMillis)}"
+        state.actionMessage = Strings.seekedToNotice(formatDuration(effectiveTargetMillis))
     }
 
     /**
@@ -586,11 +586,6 @@ internal class AppStateLocalPlaybackCoordinator(
             // the loop's life; the finally never reads shared driver state.
             var ownedSession: Pair<String, String>? = null
             try {
-                val scrobbledTrackKeys = mutableSetOf<String>()
-                var reportedTrack: MusicTrack? = null
-                var lastReportedState: String? = null
-                var lastTimelineReportAt = 0L
-
                 while (isActive) {
                     delay(1_000)
                     val current = state.miniPlayerState ?: break
@@ -619,23 +614,7 @@ internal class AppStateLocalPlaybackCoordinator(
                         durationMillis = durationMillis,
                     )
 
-                    val trackIs032 = is032Track(track)
-                    if (reportedTrack != null &&
-                        (reportedTrack!!.ratingKey != track.ratingKey || reportedTrack!!.sourceId != track.sourceId)
-                    ) {
-                        val finished = reportedTrack!!
-                        // 032 transitions are closed by the engine transition callback with
-                        // the old session's own position; the generic timeline path covers other sources.
-                        if (!is032Track(finished)) {
-                            reportTimelineSafelyLocal(finished, "stopped", positionMillis = 0L, finished.durationMillis, continuing = true)
-                            scrobbleIfNeededLocal(scrobbledTrackKeys, finished, positionMillis, finished.durationMillis)
-                        }
-                        lastReportedState = null
-                        lastTimelineReportAt = 0L
-                    }
-                    reportedTrack = track
-
-                    if (trackIs032) {
+                    if (is032Track(track)) {
                         // Non-blocking: the reporter actor merges the observation and
                         // repairs a missing session itself (no network on this loop).
                         sessionDriver.onPoll(
@@ -648,14 +627,6 @@ internal class AppStateLocalPlaybackCoordinator(
                             durationMillis = durationMillis ?: 0L,
                         )
                         sessionDriver.captureOwnedSession()?.let { ownedSession = it }
-                    } else {
-                        val now = System.currentTimeMillis()
-                        if (playbackState != lastReportedState || now - lastTimelineReportAt >= 10_000L) {
-                            reportTimelineSafelyLocal(track, playbackState, positionMillis, durationMillis, continuing = false)
-                            lastReportedState = playbackState
-                            lastTimelineReportAt = now
-                        }
-                        scrobbleIfNeededLocal(scrobbledTrackKeys, track, positionMillis, durationMillis)
                     }
                 }
             } finally {
@@ -677,50 +648,6 @@ internal class AppStateLocalPlaybackCoordinator(
                         }
                     },
                 ).onJobFinished()
-            }
-        }
-    }
-
-    private suspend fun reportTimelineSafelyLocal(
-        track: MusicTrack,
-        stateName: String,
-        positionMillis: Long,
-        durationMillis: Long?,
-        continuing: Boolean,
-    ) {
-        runCatching {
-            state.clientFor(track.sourceId).reportTimeline(
-                ratingKey = track.ratingKey,
-                state = stateName,
-                timeMillis = positionMillis.coerceAtLeast(0L),
-                durationMillis = durationMillis,
-                continuing = continuing,
-            )
-        }
-    }
-
-    private suspend fun scrobbleIfNeededLocal(
-        scrobbledTrackKeys: MutableSet<String>,
-        track: MusicTrack,
-        positionMillis: Long,
-        durationMillis: Long?,
-    ) {
-        val playbackKey = "${track.sourceId}:${track.ratingKey}"
-        if (playbackKey in scrobbledTrackKeys) return
-        val effectiveDuration = durationMillis?.takeIf { it > 0L } ?: return
-        if (positionMillis < (effectiveDuration * 0.9f).toLong()) return
-        runCatching {
-            state.clientFor(track.sourceId).scrobble(track.ratingKey, positionMillis, durationMillis)
-        }.onSuccess {
-            scrobbledTrackKeys += playbackKey
-            recordTrackPlaybackSafely(track)
-        }
-    }
-
-    private suspend fun recordTrackPlaybackSafely(track: MusicTrack) {
-        withContext(Dispatchers.IO) {
-            runCatching {
-                state.albumLocalStore.recordTrackPlayback(track.sourceId, track.ratingKey)
             }
         }
     }

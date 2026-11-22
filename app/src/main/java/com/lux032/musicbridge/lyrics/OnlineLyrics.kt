@@ -1,8 +1,9 @@
 package com.lux032.musicbridge.lyrics
 
 import android.util.Log
+import com.lux032.musicbridge.core.AppHttpClient
 import com.lux032.musicbridge.music.MusicTrack
-import java.net.HttpURLConnection
+import okhttp3.Request
 import java.net.URL
 import java.net.URLEncoder
 import kotlin.math.abs
@@ -294,20 +295,14 @@ private fun httpGetOnce(baseUrl: String, params: Map<String, String>): String {
     val url = if (params.isEmpty()) baseUrl else baseUrl + "?" + params.entries.joinToString("&") { (key, value) ->
         "${URLEncoder.encode(key, "UTF-8")}=${URLEncoder.encode(value, "UTF-8")}"
     }
-    var connection: HttpURLConnection? = null
-    try {
-        connection = (URL(url).openConnection() as HttpURLConnection).apply {
-            requestMethod = "GET"
-            instanceFollowRedirects = true
-            connectTimeout = TIMEOUT_MS
-            readTimeout = TIMEOUT_MS
-            setRequestProperty("Accept", "application/json")
-            setRequestProperty("User-Agent", USER_AGENT)
-        }
-        val status = connection.responseCode
-        if (status !in 200..299) throw HttpStatusException(status, URL(baseUrl).host)
-        return connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
-    } finally {
-        connection?.disconnect()
+    val request = Request.Builder()
+        .url(url)
+        .get()
+        .header("Accept", "application/json")
+        .header("User-Agent", USER_AGENT)
+        .build()
+    return AppHttpClient.onlineLyricsClient.newCall(request).execute().use { response ->
+        if (!response.isSuccessful) throw HttpStatusException(response.code, URL(baseUrl).host)
+        response.body?.string().orEmpty()
     }
 }
