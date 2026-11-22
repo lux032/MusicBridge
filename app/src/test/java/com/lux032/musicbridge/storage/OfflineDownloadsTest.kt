@@ -5,6 +5,7 @@ import com.lux032.musicbridge.local.PlaybackDataSourceRoute
 import com.lux032.musicbridge.local.playbackDataSourceRoute
 import com.lux032.musicbridge.music.isFavorite
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -60,7 +61,9 @@ class OfflineDownloadsTest {
 
         val keys = store.getAllDownloadedTrackKeys()
         assertTrue("server1:track101" in keys)
-        assertTrue("track101" in keys)
+        assertFalse("track101" in keys)
+        assertTrue(keys.containsDownloadedTrack("server1", "track101"))
+        assertFalse(keys.containsDownloadedTrack("server2", "track101"))
 
         val stream = retrieved?.toTrackStream()
         assertEquals("file:///data/user/0/com.lux032.musicbridge/files/audio_downloads/song.flac", stream?.streamUrl)
@@ -89,5 +92,27 @@ class OfflineDownloadsTest {
             isFullyCached = false,
         )
         assertEquals(PlaybackDataSourceRoute.OFFLINE_FILE, route)
+    }
+
+    @Test
+    fun downloadKeyIsolationAcrossServers() {
+        val keys = setOf(downloadedTrackKey("server-a", "42"))
+        assertTrue(keys.containsDownloadedTrack("server-a", "42"))
+        assertFalse(keys.containsDownloadedTrack("server-b", "42"))
+        assertFalse(keys.containsDownloadedTrack("", "42"))
+
+        val legacyKeys = setOf(downloadedTrackKey("", "99"), "99")
+        assertTrue(legacyKeys.containsDownloadedTrack("", "99"))
+        assertFalse(legacyKeys.containsDownloadedTrack("server-a", "99"))
+    }
+
+    @Test
+    fun downloadCompletenessRejectsTruncatedAndEmptyStreams() {
+        assertFalse(isDownloadComplete(bytesRead = 0L, expectedContentLength = -1L))
+        assertFalse(isDownloadComplete(bytesRead = 0L, expectedContentLength = 1024L))
+        assertFalse(isDownloadComplete(bytesRead = 512L, expectedContentLength = 1024L))
+        assertFalse(isDownloadComplete(bytesRead = 2048L, expectedContentLength = 1024L))
+        assertTrue(isDownloadComplete(bytesRead = 1024L, expectedContentLength = 1024L))
+        assertTrue(isDownloadComplete(bytesRead = 1024L, expectedContentLength = -1L))
     }
 }

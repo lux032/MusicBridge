@@ -178,8 +178,10 @@ class AlbumLocalStore(context: Context) {
                 while (cursor.moveToNext()) {
                     val sId = cursor.getString(0)
                     val rKey = cursor.getString(1)
-                    add("$sId:$rKey")
-                    add(rKey)
+                    add(downloadedTrackKey(sId, rKey))
+                    if (sId.isBlank()) {
+                        add(rKey)
+                    }
                 }
             }
         }

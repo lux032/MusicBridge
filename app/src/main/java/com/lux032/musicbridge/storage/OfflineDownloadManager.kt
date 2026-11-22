@@ -23,6 +23,19 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.ConcurrentHashMap
 
+fun downloadedTrackKey(sourceId: String, ratingKey: String): String = "$sourceId:$ratingKey"
+
+fun Set<String>.containsDownloadedTrack(sourceId: String, ratingKey: String): Boolean {
+    if (downloadedTrackKey(sourceId, ratingKey) in this) return true
+    return sourceId.isBlank() && ratingKey in this
+}
+
+internal fun isDownloadComplete(bytesRead: Long, expectedContentLength: Long): Boolean {
+    if (bytesRead <= 0L) return false
+    if (expectedContentLength > 0L && bytesRead != expectedContentLength) return false
+    return true
+}
+
 data class DownloadedAlbumGroup(
     val albumRatingKey: String,
     val albumTitle: String,
@@ -79,6 +92,9 @@ class OfflineDownloadManager(
     private val _downloadProgress = MutableStateFlow<Map<String, Float>>(emptyMap())
     val downloadProgress: StateFlow<Map<String, Float>> = _downloadProgress.asStateFlow()
 
+    @Volatile
+    private var downloadedByKey: Map<String, DownloadedAudioTrack> = emptyMap()
+
     private val pendingKeys = ConcurrentHashMap.newKeySet<String>()
 
     private data class DownloadTask(
@@ -117,10 +133,14 @@ class OfflineDownloadManager(
             }
             valid
         }
+        val byKey = validTracks.associateBy { downloadedTrackKey(it.sourceId, it.ratingKey) }
+        downloadedByKey = byKey
         val keys = buildSet {
             validTracks.forEach { track ->
-                add("${track.sourceId}:${track.ratingKey}")
-                add(track.ratingKey)
+                add(downloadedTrackKey(track.sourceId, track.ratingKey))
+                if (track.sourceId.isBlank()) {
+                    add(track.ratingKey)
+                }
             }
         }
         _downloadedKeys.value = keys
@@ -139,10 +159,11 @@ class OfflineDownloadManager(
         }
     }
 
-    fun isTrackDownloaded(sourceId: String, ratingKey: String): Boolean {
-        val keys = _downloadedKeys.value
-        return "${sourceId}:${ratingKey}" in keys || ratingKey in keys
-    }
+    fun getDownloadedTrackSnapshot(sourceId: String, ratingKey: String): DownloadedAudioTrack? =
+        downloadedByKey[downloadedTrackKey(sourceId, ratingKey)]
+
+    fun isTrackDownloaded(sourceId: String, ratingKey: String): Boolean =
+        _downloadedKeys.value.containsDownloadedTrack(sourceId, ratingKey)
 
     fun enqueueDownload(track: MusicTrack, onComplete: ((Boolean) -> Unit)? = null) {
         val taskKey = "${track.sourceId}:${track.ratingKey}"
@@ -279,24 +300,29 @@ class OfflineDownloadManager(
 
         // 2. If not in cache or promotion failed, download via HTTP
         if (!audioDownloaded) {
+            var connection: HttpURLConnection? = null
             try {
                 val url = URL(track.streamUrl)
-                val connection = (url.openConnection() as HttpURLConnection).apply {
+                connection = (url.openConnection() as HttpURLConnection).apply {
                     connectTimeout = 15_000
                     readTimeout = 30_000
                     instanceFollowRedirects = true
                     setRequestProperty("User-Agent", "MusicBridge-Offline/1.0")
                 }
+                val responseCode = connection.responseCode
+                if (responseCode !in 200..299) {
+                    Log.w(TAG, "HTTP $responseCode downloading ${track.title}")
+                    return@withContext false
+                }
                 val totalLength = connection.contentLengthLong
                 if (totalLength > 0L && baseDir.usableSpace < totalLength + MIN_FREE_SPACE_BYTES) {
-                    connection.disconnect()
                     return@withContext false
                 }
 
+                var bytesReadSoFar = 0L
                 connection.inputStream.buffered().use { input ->
                     tmpAudioFile.outputStream().buffered().use { output ->
                         val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                        var bytesReadSoFar = 0L
                         while (true) {
                             val read = input.read(buffer)
                             if (read == -1) break
@@ -308,9 +334,12 @@ class OfflineDownloadManager(
                         }
                     }
                 }
-                connection.disconnect()
 
-                if (tmpAudioFile.length() <= 0L) {
+                if (!isDownloadComplete(bytesReadSoFar, totalLength) || tmpAudioFile.length() != bytesReadSoFar) {
+                    Log.w(
+                        TAG,
+                        "Incomplete download for ${track.title}: read=$bytesReadSoFar expected=$totalLength file=${tmpAudioFile.length()}",
+                    )
                     tmpAudioFile.delete()
                     return@withContext false
                 }
@@ -325,6 +354,8 @@ class OfflineDownloadManager(
                 Log.w(TAG, "Network download failed for ${track.title}", e)
                 tmpAudioFile.delete()
                 return@withContext false
+            } finally {
+                connection?.disconnect()
             }
         }
 
@@ -379,18 +410,31 @@ class OfflineDownloadManager(
     private fun downloadCompanionAsset(sourceUrl: String, destFile: File): Boolean {
         if (destFile.exists() && destFile.length() > 0L) return true
         val tmp = File(destFile.parentFile, "${destFile.name}.tmp")
+        var connection: HttpURLConnection? = null
         return try {
-            val connection = URL(sourceUrl).openConnection() as HttpURLConnection
-            connection.connectTimeout = 10_000
-            // 032 lyrics.lrc may look lyrics up online first (up to ~20 s).
-            connection.readTimeout = 30_000
+            connection = (URL(sourceUrl).openConnection() as HttpURLConnection).apply {
+                connectTimeout = 10_000
+                // 032 lyrics.lrc may look lyrics up online first (up to ~20 s).
+                readTimeout = 30_000
+                instanceFollowRedirects = true
+            }
+            if (connection.responseCode !in 200..299) {
+                return false
+            }
+            val expectedLength = connection.contentLengthLong
+            var bytesRead = 0L
             connection.inputStream.buffered().use { input ->
                 tmp.outputStream().buffered().use { output ->
-                    input.copyTo(output)
+                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read == -1) break
+                        output.write(buffer, 0, read)
+                        bytesRead += read
+                    }
                 }
             }
-            connection.disconnect()
-            if (tmp.length() > 0L) {
+            if (isDownloadComplete(bytesRead, expectedLength) && tmp.length() == bytesRead) {
                 if (destFile.exists()) destFile.delete()
                 tmp.renameTo(destFile)
             } else {
@@ -400,6 +444,8 @@ class OfflineDownloadManager(
         } catch (e: Exception) {
             tmp.delete()
             false
+        } finally {
+            connection?.disconnect()
         }
     }
 

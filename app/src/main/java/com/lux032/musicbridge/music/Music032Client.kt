@@ -15,6 +15,8 @@ import com.lux032.musicbridge.music.MusicTrack
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -191,8 +193,13 @@ class Music032Client(
 
     suspend fun fetchWork(id: Long): Music032WorkDetail {
         val work = fetchWorkInfo(id)
-        val tracks = fetchWorkTracks(id)
-        val albums = Music032WorksJson.albums(JSONObject(cancellableGet("/api/v1/works/$id/albums")), ::parseAlbum)
+        val (tracks, albums) = coroutineScope {
+            val tracksDeferred = async { fetchWorkTracks(id) }
+            val albumsDeferred = async {
+                Music032WorksJson.albums(JSONObject(cancellableGet("/api/v1/works/$id/albums")), ::parseAlbum)
+            }
+            tracksDeferred.await() to albumsDeferred.await()
+        }
         return Music032WorkDetail(work.copy(artworkUrl = work.artworkUrl ?: albums.firstOrNull()?.album?.thumbUrl), tracks, albums)
     }
 
@@ -214,7 +221,7 @@ class Music032Client(
     private suspend fun cancellableGet(path: String): String = suspendCancellableCoroutine { continuation ->
         val reference = AtomicReference<HttpURLConnection?>()
         continuation.invokeOnCancellation { reference.get()?.disconnect() }
-        playbackEventExecutor.execute {
+        requestExecutor.execute {
             var connection: HttpURLConnection? = null
             try {
                 connection = (URL("$baseUrl$path").openConnection() as HttpURLConnection).apply {
@@ -551,12 +558,6 @@ class Music032Client(
     /** Transport used by [Music032PlaybackReporter] to POST one playback session event. */
     internal val playbackEventTransport = PlaybackEventTransport { payload -> postPlaybackEvent(payload) }
 
-    // Daemon threads: a dying process never joins them; cancellation disconnects the
-    // in-flight connection instead of interrupting the worker.
-    private val playbackEventExecutor = Executors.newCachedThreadPool { runnable ->
-        Thread(runnable, "music032-playback-events").apply { isDaemon = true }
-    }
-
     /**
      * POSTs one session event without throwing on protocol statuses: the reporter needs
      * the exact 404/409 codes to drive its recovery rules. Status 0 means the request
@@ -573,8 +574,9 @@ class Music032Client(
                 connectionReference.get()?.let { connection -> runCatching { connection.disconnect() } }
             }
             playbackEventExecutor.execute {
+                var connection: HttpURLConnection? = null
                 try {
-                    val connection = (URL("$baseUrl/api/v1/playback/events").openConnection() as HttpURLConnection).apply {
+                    connection = (URL("$baseUrl/api/v1/playback/events").openConnection() as HttpURLConnection).apply {
                         requestMethod = "POST"
                         connectTimeout = PLAYBACK_EVENT_CONNECT_TIMEOUT_MILLIS
                         readTimeout = PLAYBACK_EVENT_READ_TIMEOUT_MILLIS
@@ -595,6 +597,8 @@ class Music032Client(
                 } catch (_: Exception) {
                     // Includes the SocketException caused by a cancellation disconnect.
                     continuation.resume(PlaybackEventHttpResult(0, null))
+                } finally {
+                    connection?.disconnect()
                 }
             }
         }
@@ -655,25 +659,29 @@ class Music032Client(
                 setRequestProperty("Content-Type", "application/json; charset=utf-8")
             }
         }
-        if (body != null) {
-            connection.outputStream.bufferedWriter(StandardCharsets.UTF_8).use { it.write(body.toString()) }
+        return try {
+            if (body != null) {
+                connection.outputStream.bufferedWriter(StandardCharsets.UTF_8).use { it.write(body.toString()) }
+            }
+            val status = connection.responseCode
+            val response = (if (status in 200..299) connection.inputStream else connection.errorStream)
+                ?.bufferedReader(StandardCharsets.UTF_8)
+                ?.use { it.readText() }
+                .orEmpty()
+            if (status !in 200..299) {
+                val error = runCatching { JSONObject(response).optJSONObject("error") }.getOrNull()
+                val message = error?.optString("message").orEmpty().ifBlank { response.take(300) }
+                throw Music032HttpException(
+                    status,
+                    "032 Music Server HTTP $status：$message",
+                    code = error?.optString("code")?.takeIf { it.isNotBlank() },
+                    serverMessage = error?.optString("message")?.takeIf { it.isNotBlank() },
+                )
+            }
+            response
+        } finally {
+            connection.disconnect()
         }
-        val status = connection.responseCode
-        val response = (if (status in 200..299) connection.inputStream else connection.errorStream)
-            ?.bufferedReader(StandardCharsets.UTF_8)
-            ?.use { it.readText() }
-            .orEmpty()
-        if (status !in 200..299) {
-            val error = runCatching { JSONObject(response).optJSONObject("error") }.getOrNull()
-            val message = error?.optString("message").orEmpty().ifBlank { response.take(300) }
-            throw Music032HttpException(
-                status,
-                "032 Music Server HTTP $status：$message",
-                code = error?.optString("code")?.takeIf { it.isNotBlank() },
-                serverMessage = error?.optString("message")?.takeIf { it.isNotBlank() },
-            )
-        }
-        return response
     }
 
     private fun JSONArray?.toObjects(): List<JSONObject> {
@@ -686,6 +694,14 @@ class Music032Client(
 
 
     private companion object {
+        // Process-shared daemon pools so recreating Music032Client on settings/profile changes
+        // never leaks ExecutorServices; playback events stay isolated from browsing traffic.
+        val playbackEventExecutor = Executors.newCachedThreadPool { runnable ->
+            Thread(runnable, "music032-playback-events").apply { isDaemon = true }
+        }
+        val requestExecutor = Executors.newCachedThreadPool { runnable ->
+            Thread(runnable, "music032-requests").apply { isDaemon = true }
+        }
         const val PAGE_SIZE = 500
         const val SYNC_PAGE_SIZE = 1000
         const val PLAYBACK_EVENT_CONNECT_TIMEOUT_MILLIS = 5_000

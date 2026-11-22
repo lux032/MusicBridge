@@ -91,8 +91,6 @@ class PlaybackForegroundService : Service() {
     override fun onCreate() {
         super.onCreate()
         instance = this
-        acquireWifiLock()
-        acquireWakeLock()
         val filter = IntentFilter().apply {
             addAction(ACTION_PREVIOUS)
             addAction(ACTION_TOGGLE_PAUSE)
@@ -192,28 +190,28 @@ class PlaybackForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_STOP) {
-            stopSelf()
+        if (intent == null || intent.action == ACTION_STOP) {
+            stopSelf(startId)
             return START_NOT_STICKY
         }
-        if (intent?.hasExtra(EXTRA_TITLE) == true) {
+        if (intent.hasExtra(EXTRA_TITLE)) {
             currentTitle = intent.getStringExtra(EXTRA_TITLE) ?: currentTitle
         }
-        if (intent?.hasExtra(EXTRA_SUBTITLE) == true) {
+        if (intent.hasExtra(EXTRA_SUBTITLE)) {
             currentSubtitle = intent.getStringExtra(EXTRA_SUBTITLE) ?: currentSubtitle
         }
-        if (intent?.hasExtra(EXTRA_IS_PAUSED) == true) {
+        if (intent.hasExtra(EXTRA_IS_PAUSED)) {
             currentIsPaused = intent.getBooleanExtra(EXTRA_IS_PAUSED, currentIsPaused)
         }
         // start() 总是带着标题描述一首曲目，此时没有封面 extra 就表示这首歌没有封面。
-        // 系统重启服务时 intent 为 null，保持原状。
-        if (intent?.hasExtra(EXTRA_TITLE) == true) {
+        if (intent.hasExtra(EXTRA_TITLE)) {
             syncArtwork(intent.getStringExtra(EXTRA_ARTWORK_URL))
             // 新推送的曲目从头开始；时长和收藏状态等轮询补上。
             sessionPlayer?.update(currentTitle, currentSubtitle, currentIsPaused, positionMs = 0L, durationMs = 0L)
         }
+        syncPowerLocks(currentIsPaused)
         startForeground(NOTIFICATION_ID, buildNotification())
-        return START_STICKY
+        return START_NOT_STICKY
     }
 
     override fun onDestroy() {
@@ -260,6 +258,7 @@ class PlaybackForegroundService : Service() {
         currentTitle = update.title
         currentSubtitle = update.subtitle
         currentIsPaused = update.isPaused
+        syncPowerLocks(currentIsPaused)
         val manager = getSystemService(NotificationManager::class.java)
         manager.notify(NOTIFICATION_ID, buildNotification())
     }
@@ -412,9 +411,28 @@ class PlaybackForegroundService : Service() {
         }
     }
 
+    private fun syncPowerLocks(isPaused: Boolean) {
+        if (isPaused) {
+            // Release CPU/Wi-Fi locks while paused so an overnight paused Sonos session does
+            // not drain the battery; the foreground notification itself keeps polling alive.
+            releaseWifiLock()
+            releaseWakeLock()
+        } else {
+            acquireWifiLock()
+            acquireWakeLock()
+        }
+    }
+
+    @Suppress("DEPRECATION")
     private fun acquireWifiLock() {
-        val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-        wifiLock = wifiManager.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "MusicBridge:Playback").apply {
+        if (wifiLock?.isHeld == true) return
+        val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return
+        val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+        } else {
+            WifiManager.WIFI_MODE_FULL_HIGH_PERF
+        }
+        wifiLock = wifiManager.createWifiLock(mode, "MusicBridge:Playback").apply {
             setReferenceCounted(false)
             acquire()
         }
@@ -426,7 +444,8 @@ class PlaybackForegroundService : Service() {
     }
 
     private fun acquireWakeLock() {
-        val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+        if (wakeLock?.isHeld == true) return
+        val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return
         wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "MusicBridge:Playback").apply {
             setReferenceCounted(false)
             acquire()
@@ -494,10 +513,14 @@ class PlaybackForegroundService : Service() {
                 putExtra(EXTRA_IS_PAUSED, isPaused)
                 artworkUrl?.let { putExtra(EXTRA_ARTWORK_URL, it) }
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            } catch (error: IllegalStateException) {
+                Log.w(TAG, "Unable to start Sonos foreground service from background", error)
             }
         }
 

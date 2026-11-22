@@ -312,6 +312,7 @@ internal class AppStateLibraryCoordinator(
             artistResolveGeneration++
             state.isResolvingArtist = false
             if (state.remoteArtist?.ratingKey != key) state.remoteArtist = null
+            state.localSelectedArtist = null
             state.artistCredits.reset()
         }
         if (state.activeSection != AppSection.ArtistAlbums) state.navigateTo(AppSection.ArtistAlbums)

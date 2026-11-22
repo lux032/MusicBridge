@@ -33,6 +33,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import com.lux032.musicbridge.storage.containsDownloadedTrack
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
@@ -1086,7 +1087,7 @@ private fun ArtistTrackRow(
 ) {
     var showQueueMenu by remember { mutableStateOf(false) }
     val isDownloaded = remember(track.sourceId, track.ratingKey, downloadedTrackKeys) {
-        "${track.sourceId}:${track.ratingKey}" in downloadedTrackKeys || track.ratingKey in downloadedTrackKeys
+        downloadedTrackKeys.containsDownloadedTrack(track.sourceId, track.ratingKey)
     }
     val progress = downloadProgress["${track.sourceId}:${track.ratingKey}"]
 

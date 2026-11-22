@@ -30,6 +30,7 @@ import com.lux032.musicbridge.music.MusicPlaylist
 import com.lux032.musicbridge.music.PlaylistTracksResult
 import com.lux032.musicbridge.music.MusicTrack
 import com.lux032.musicbridge.music.isFavorite
+import com.lux032.musicbridge.storage.containsDownloadedTrack
 
 @Composable
 internal fun PlaylistsSection(
@@ -729,7 +730,7 @@ private fun PlaylistDetailTrackRow(
     val menuState = rememberContextualMenuState()
     val isCurrent = nowPlaying != null
     val isDownloaded = remember(track.sourceId, track.ratingKey, downloadedTrackKeys) {
-        "${track.sourceId}:${track.ratingKey}" in downloadedTrackKeys || track.ratingKey in downloadedTrackKeys
+        downloadedTrackKeys.containsDownloadedTrack(track.sourceId, track.ratingKey)
     }
     val progress = downloadProgress["${track.sourceId}:${track.ratingKey}"]
     val palette = LocalArtworkPalette.current

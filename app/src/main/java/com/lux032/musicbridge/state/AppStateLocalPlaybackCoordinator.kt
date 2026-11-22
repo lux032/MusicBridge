@@ -276,9 +276,14 @@ internal class AppStateLocalPlaybackCoordinator(
         state.localPlaybackEngine.replaceQueueItems(replacements, policy.precacheCount.count)
     }
 
+    /**
+     * Resolves a track against the in-memory downloaded snapshot so starting/enqueuing a
+     * large queue never runs synchronous SQLite or File.exists() I/O on the main thread.
+     * Physical file verification still happens on Dispatchers.IO inside [toLocalQueueItem].
+     */
     private fun resolveTrackWithLocalDownload(track: MusicTrack): MusicTrack {
-        val downloaded = state.albumLocalStore.getDownloadedTrack(track.sourceId, track.ratingKey)
-        if (downloaded != null && java.io.File(downloaded.localAudioPath).exists()) {
+        val downloaded = state.offlineDownloadManager.getDownloadedTrackSnapshot(track.sourceId, track.ratingKey)
+        if (downloaded != null) {
             val effectiveRating = track.userRating ?: downloaded.userRating
             return downloaded.toTrackStream().copy(userRating = effectiveRating)
         }

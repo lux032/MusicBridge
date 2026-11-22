@@ -1,11 +1,16 @@
 package com.lux032.musicbridge.local
 
 import android.app.PendingIntent
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.util.Log
 import androidx.media3.session.DefaultMediaNotificationProvider
+import androidx.media3.session.MediaController
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
+import androidx.media3.session.SessionToken
+import com.google.common.util.concurrent.ListenableFuture
 import com.lux032.musicbridge.MainActivity
 import com.lux032.musicbridge.R
 import com.lux032.musicbridge.service.PlaybackForegroundService.Companion.ACTION_OPEN_PLAYBACK_DETAIL
@@ -58,10 +63,15 @@ class LocalPlaybackService : MediaSessionService() {
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = mediaSession
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val session = mediaSession
+        if (session == null) {
+            stopSelf(startId)
+            return START_NOT_STICKY
+        }
         // media3 only registers a session with its MediaNotificationManager when a media
         // action intent arrives or a controller binds. Our start intent is a plain one, so
         // register explicitly — without this no media notification is ever posted.
-        mediaSession?.let { addSession(it) }
+        addSession(session)
         return super.onStartCommand(intent, flags, startId)
     }
 
@@ -73,15 +83,41 @@ class LocalPlaybackService : MediaSessionService() {
     }
 
     companion object {
+        private const val TAG = "LocalPlaybackService"
+        private var backgroundStarterController: ListenableFuture<MediaController>? = null
+
         fun start(context: Context) {
+            val appContext = context.applicationContext
             // Plain startService (not startForegroundService): media3 promotes the service
             // to foreground itself once playback is active, and a foreground-start would
             // crash if the player isn't playing within the 5s window.
-            context.startService(Intent(context, LocalPlaybackService::class.java))
+            // If called while the app is backgrounded on Android 8+, startService throws
+            // IllegalStateException; fall back to binding a MediaController, which is always
+            // allowed and lets media3 register the session & promote to foreground safely.
+            try {
+                appContext.startService(Intent(appContext, LocalPlaybackService::class.java))
+            } catch (error: IllegalStateException) {
+                Log.w(TAG, "Background startService blocked; falling back to MediaController bind", error)
+                releaseStarterController()
+                runCatching {
+                    val token = SessionToken(appContext, ComponentName(appContext, LocalPlaybackService::class.java))
+                    backgroundStarterController = MediaController.Builder(appContext, token).buildAsync()
+                }.onFailure { bindError ->
+                    Log.w(TAG, "Fallback MediaController bind failed", bindError)
+                }
+            }
         }
 
         fun stop(context: Context) {
-            context.stopService(Intent(context, LocalPlaybackService::class.java))
+            releaseStarterController()
+            context.applicationContext.stopService(Intent(context.applicationContext, LocalPlaybackService::class.java))
+        }
+
+        private fun releaseStarterController() {
+            backgroundStarterController?.let { future ->
+                runCatching { MediaController.releaseFuture(future) }
+            }
+            backgroundStarterController = null
         }
     }
 }

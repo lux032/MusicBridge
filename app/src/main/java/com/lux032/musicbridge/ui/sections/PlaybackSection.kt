@@ -33,6 +33,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.ui.graphics.graphicsLayer
+import com.lux032.musicbridge.storage.containsDownloadedTrack
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.rememberScrollState
@@ -1760,7 +1761,7 @@ private fun AlbumDiscHeaderRow(
     var showDeleteDialog by remember { mutableStateOf(false) }
     val isDiscDownloaded = remember(discGroup.tracks, downloadedTrackKeys) {
         discGroup.tracks.isNotEmpty() && discGroup.tracks.all { track ->
-            "${track.sourceId}:${track.ratingKey}" in downloadedTrackKeys || track.ratingKey in downloadedTrackKeys
+            downloadedTrackKeys.containsDownloadedTrack(track.sourceId, track.ratingKey)
         }
     }
     val metaText = remember(discGroup.tracks.size, discGroup.totalDurationMillis) {
@@ -1910,7 +1911,7 @@ private fun AlbumDetailHeroWide(
     val album = trackResult.album
     val totalTracks = trackResult.tracks.size
     val downloadedCount = trackResult.tracks.count { track ->
-        "${track.sourceId}:${track.ratingKey}" in downloadedTrackKeys || track.ratingKey in downloadedTrackKeys
+        downloadedTrackKeys.containsDownloadedTrack(track.sourceId, track.ratingKey)
     }
     val isAnyDownloading = trackResult.tracks.any { track ->
         "${track.sourceId}:${track.ratingKey}" in downloadProgress
@@ -2144,7 +2145,7 @@ private fun AlbumDetailHeroCompact(
     val album = trackResult.album
     val totalTracks = trackResult.tracks.size
     val downloadedCount = trackResult.tracks.count { track ->
-        "${track.sourceId}:${track.ratingKey}" in downloadedTrackKeys || track.ratingKey in downloadedTrackKeys
+        downloadedTrackKeys.containsDownloadedTrack(track.sourceId, track.ratingKey)
     }
     val isAnyDownloading = trackResult.tracks.any { track ->
         "${track.sourceId}:${track.ratingKey}" in downloadProgress
@@ -2318,7 +2319,7 @@ private fun AlbumTrackRow(
     // when play/pause toggles.
     val isCurrent = nowPlaying != null
     val isDownloaded = remember(track.sourceId, track.ratingKey, downloadedTrackKeys) {
-        "${track.sourceId}:${track.ratingKey}" in downloadedTrackKeys || track.ratingKey in downloadedTrackKeys
+        downloadedTrackKeys.containsDownloadedTrack(track.sourceId, track.ratingKey)
     }
     val progress = downloadProgress["${track.sourceId}:${track.ratingKey}"]
     val performerSummary = remember(album, track) { track.albumTrackRowPerformerSummary(album) }

@@ -50,6 +50,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.UUID
@@ -254,6 +255,8 @@ class AppState(
     var isResolvingArtist by mutableStateOf(false)
     /** Online artist page used when the local sync model has no releases for the id. */
     var remoteArtist by mutableStateOf<ArtistSummary?>(null)
+    /** Locally resolved artist summary loaded off the main thread for [selectedArtist]. */
+    internal var localSelectedArtist by mutableStateOf<ArtistSummary?>(null)
     /** Multi-artist link awaiting the user's pick (e.g. "A, B" duet credits). */
     var artistChoices by mutableStateOf<List<ArtistRef>>(emptyList())
     var artistTracks by mutableStateOf<List<MusicTrack>>(emptyList())
@@ -408,34 +411,73 @@ class AppState(
         const val RECENT_ADDED_PAGE_SIZE = 60
     }
 
-    // Reads selectedArtistName + artists (snapshot state); re-queries the local store
-    // only when either changes. A library sync rebuilds `artists`, which keeps the
-    // cached album list in step with the underlying database.
+    // Combines in-memory artist/remote state with the asynchronously loaded local discography
+    // ([localSelectedArtist]) so Compose never performs synchronous SQLite I/O on the UI thread.
     val selectedArtist: ArtistSummary? by derivedStateOf {
-        val selectedName = (selectedArtistName to artistAlbumsRevision).first
+        val sourceId = connectionPreferences.id
+        val selectedName = selectedArtistName
         val selectedKey = selectedArtistKey
         if (selectedKey != null) {
-            // 032: identity is the artist id. Local sync data wins when it has releases;
-            // otherwise the server detail (fresh install, stale id after a merge) fills in.
-            val local = libraryCoordinator.localArtistSummary(connectionPreferences.id, selectedKey, artists)
+            val local = localSelectedArtist?.takeIf {
+                it.ratingKey == selectedKey && (it.sourceId.isBlank() || it.sourceId == sourceId)
+            }
+            val fallback = artists.firstOrNull {
+                it.ratingKey == selectedKey && (it.sourceId.isBlank() || it.sourceId == sourceId)
+            }
             return@derivedStateOf remoteArtist?.takeIf { it.ratingKey == selectedKey }
                 ?: local?.takeIf { it.albums.isNotEmpty() }
                 ?: local
+                ?: fallback
         }
-        selectedName?.let {
-            val albums = albumLocalStore.getAlbumsByArtist(connectionPreferences.id, selectedName)
-            val summary = artists.firstOrNull { it.name == selectedName }
-            summary?.let {
-                ArtistSummary(
-                    name = it.name,
-                    coverUrl = it.coverUrl,
-                    albumCount = it.albumCount,
-                    albums = albums,
-                    ratingKey = it.ratingKey,
-                    sourceId = it.sourceId,
-                    userRating = it.userRating,
-                )
+        selectedName?.let { name ->
+            localSelectedArtist?.takeIf {
+                it.ratingKey == null && it.name == name && (it.sourceId.isBlank() || it.sourceId == sourceId)
+            } ?: artists.firstOrNull { it.name == name }
+        }
+    }
+
+    private data class LocalArtistQuery(
+        val sourceId: String,
+        val artistKey: String?,
+        val artistName: String?,
+        val revision: Int,
+        val artists: List<ArtistSummary>,
+    )
+
+    private suspend fun observeSelectedArtistLocalStore() {
+        snapshotFlow {
+            LocalArtistQuery(
+                sourceId = connectionPreferences.id,
+                artistKey = selectedArtistKey,
+                artistName = selectedArtistName,
+                revision = artistAlbumsRevision,
+                artists = artists,
+            )
+        }.collectLatest { query ->
+            if (query.artistKey == null && query.artistName == null) {
+                localSelectedArtist = null
+                return@collectLatest
             }
+            val loaded = withContext(Dispatchers.IO) {
+                val key = query.artistKey
+                if (key != null) {
+                    libraryCoordinator.localArtistSummary(query.sourceId, key, query.artists)
+                } else {
+                    val name = query.artistName ?: return@withContext null
+                    val summary = query.artists.firstOrNull { it.name == name } ?: return@withContext null
+                    val albums = albumLocalStore.getAlbumsByArtist(query.sourceId, name)
+                    ArtistSummary(
+                        name = summary.name,
+                        coverUrl = summary.coverUrl,
+                        albumCount = summary.albumCount,
+                        albums = albums,
+                        ratingKey = null,
+                        sourceId = summary.sourceId.ifBlank { query.sourceId },
+                        userRating = summary.userRating,
+                    )
+                }
+            }
+            localSelectedArtist = loaded
         }
     }
 
@@ -815,6 +857,7 @@ class AppState(
         selectedArtistName = null
         selectedArtistKey = null
         remoteArtist = null
+        localSelectedArtist = null
         artistChoices = emptyList()
         isResolvingArtist = false
         selectedPlaylist = null
@@ -1104,6 +1147,7 @@ class AppState(
         appPreferences.retiredServerIds.takeIf { it.isNotEmpty() }?.let { retired ->
             scope.launch(Dispatchers.IO) { retired.forEach(albumLocalStore::deleteServerData) }
         }
+        scope.launch { observeSelectedArtistLocalStore() }
         scope.launch {
             val saved = withContext(playbackSessionIo) { playbackSessionStore.load() }
             // Only if the user has not started something in the meantime.
@@ -1209,6 +1253,7 @@ class AppState(
         }
         LocalPlaybackService.stop(context)
         PlaybackForegroundService.stop(context)
+        networkQualityMonitor.unregister()
         localPlaybackEngine.release()
         scope.cancel()
         super.onCleared()

@@ -894,11 +894,22 @@ class NetworkQualityMonitor(context: Context) {
         }
     }
 
+    @Volatile private var registered = false
+
     init {
         PlaybackDiagnostics.initialize(context)
         PlaybackDiagnostics.updateNetworkCapabilities(readCapabilities())
         runCatching {
             connectivityManager.registerDefaultNetworkCallback(callback)
+            registered = true
+        }
+    }
+
+    fun unregister() {
+        if (!registered) return
+        registered = false
+        runCatching {
+            connectivityManager.unregisterNetworkCallback(callback)
         }
     }
 
