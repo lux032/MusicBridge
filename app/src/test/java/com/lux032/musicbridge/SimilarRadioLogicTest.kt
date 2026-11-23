@@ -130,10 +130,25 @@ class SimilarRadioLogicTest {
     }
 
     @Test
-    fun selectRollingSimilarSeedPicksTailEligibleTrack() {
+    fun selectRollingSimilarSeedPicksTailEligibleTrackAndSkipsAccompaniment() {
         val queue = listOf(track(1), track(2), track(3, sourceId = "other"))
         val seed = selectRollingSimilarSeed(queue, currentIndex = 0) { it.sourceId == "s1" }
         assertEquals("2", seed?.ratingKey)
+
+        // Single CD pattern: [Main song, Main song (instrumental)] -> must seed from Main song, not instrumental.
+        val singleCd = listOf(
+            track(10).copy(title = "リスポーン!!"),
+            track(11).copy(title = "リスポーン!! (instrumental)"),
+            track(12).copy(title = "リスポーン!! (Off Vocal)"),
+        )
+        val singleSeed = selectRollingSimilarSeed(singleCd, currentIndex = 0) { it.sourceId == "s1" }
+        assertEquals("10", singleSeed?.ratingKey)
+
+        // Word starting with "Inst" like "Instinct" must not be treated as accompaniment.
+        assertFalse(isLikelyAccompanimentTitle("Hero (Instinct)"))
+        assertTrue(isLikelyAccompanimentTitle("花になって (INSTRUMENTAL)"))
+        assertTrue(isLikelyAccompanimentTitle("赤い罠(who loves it?) -Instrumental-"))
+        assertTrue(isLikelyAccompanimentTitle("星屑（オフボーカル）"))
     }
 
     @Test

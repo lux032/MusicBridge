@@ -88,9 +88,33 @@ internal fun shouldTriggerSimilarAutoContinue(
     return remainingAfterCurrent <= remainingThreshold
 }
 
+private val ACCOMPANIMENT_TITLE_REGEX = Regex(
+    """(?i)(off[\s._-]*(vocal|vo\.?)|オフ[\s・._-]*(ボーカル|ヴォーカル)|karaoke|カラオケ|からおけ|backing[\s._-]*track|minus[\s._-]*one|(less|without|no|w/o)[\s._-]*vocal|vocal[\s._-]*less|ボーカル(なし|レス)|歌なし|伴奏|\binstrumentals?\b|(^|[\s(\[【「\-–—~～])inst\.?(\s*(ver\.?|version|mix|edit))?($|[\s)\]】」\-–—~～.])|インスト(ゥルメンタル|ルメンタル)?|纯音乐版|純音楽版)""",
+)
+
 /**
- * Selects the next rolling seed track for auto-continue: prefers the tail of the queue
- * so endless playback smoothly drifts forward instead of hammering the original seed.
+ * Returns true when a track's title looks like an accompaniment / off-vocal / instrumental
+ * bonus track (common as the final track(s) on J-Pop / ACG single CDs).
+ */
+internal fun isLikelyAccompanimentTitle(title: String): Boolean {
+    if (title.isBlank()) return false
+    val folded = buildString(title.length) {
+        for (ch in title) {
+            when {
+                ch in '\uFF01'..'\uFF5E' -> append((ch.code - 0xFEE0).toChar())
+                ch == '\u3000' -> append(' ')
+                else -> append(ch.lowercaseChar())
+            }
+        }
+    }
+    return ACCOMPANIMENT_TITLE_REGEX.containsMatchIn(folded)
+}
+
+/**
+ * Selects the next rolling seed track for auto-continue: prefers the last non-accompaniment
+ * track in the queue so single CDs ending with "(instrumental)" / "(Off Vocal)" still seed
+ * from the main vocal track instead of the backing track. Falls back to the tail track only
+ * when every eligible track in the queue is instrumental/accompaniment.
  */
 internal fun selectRollingSimilarSeed(
     tracks: List<MusicTrack>,
@@ -98,7 +122,14 @@ internal fun selectRollingSimilarSeed(
     isEligible: (MusicTrack) -> Boolean,
 ): MusicTrack? {
     if (tracks.isEmpty()) return null
-    // Prefer the last track in the queue (newest vibe), falling back toward currentIndex.
+    // First pass: prefer the latest eligible non-accompaniment track.
+    for (i in tracks.lastIndex downTo 0) {
+        val candidate = tracks[i]
+        if (isEligible(candidate) && !isLikelyAccompanimentTitle(candidate.title)) {
+            return candidate
+        }
+    }
+    // Second pass: all eligible tracks look instrumental; fall back to the tail track.
     for (i in tracks.lastIndex downTo 0) {
         val candidate = tracks[i]
         if (isEligible(candidate)) return candidate
