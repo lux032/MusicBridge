@@ -13,7 +13,7 @@ import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LibraryAdd
-import androidx.compose.material.icons.filled.Radio
+import androidx.compose.material.icons.filled.WifiTethering
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -156,7 +156,7 @@ internal fun PlaybackMoreContent(
                         .background(KeyColors.Tonal),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Icon(Icons.Filled.Radio, contentDescription = null, tint = accent, modifier = Modifier.size(20.dp))
+                    Icon(Icons.Filled.WifiTethering, contentDescription = null, tint = accent, modifier = Modifier.size(20.dp))
                 }
                 Column(
                     modifier = Modifier.weight(1f),

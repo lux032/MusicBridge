@@ -39,7 +39,7 @@ import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.DownloadDone
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.LibraryAdd
-import androidx.compose.material.icons.filled.Radio
+import androidx.compose.material.icons.filled.WifiTethering
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
@@ -1392,7 +1392,7 @@ private fun SearchTrackActionMenu(
         if (startSimilarRadio != null) {
             DropdownMenuItem(
                 text = { Text(Strings.startSimilarRadio, color = accent, fontWeight = FontWeight.SemiBold) },
-                leadingIcon = { Icon(Icons.Filled.Radio, contentDescription = null, tint = accent) },
+                leadingIcon = { Icon(Icons.Filled.WifiTethering, contentDescription = null, tint = accent) },
                 onClick = { onDismiss(); startSimilarRadio() },
             )
         }

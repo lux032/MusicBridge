@@ -49,15 +49,6 @@ internal class AppStateSimilarRadioCoordinator(
         return canStartSimilarRadio(current)
     }
 
-    fun isAutoContinueArmed(): Boolean {
-        val radio = state.similarRadioState
-        if (!radio.autoPlayEnabled || !isCurrentQueueSupported()) return false
-        if (state.playbackMode == PlaybackMode.RepeatOne || state.playbackMode == PlaybackMode.RepeatAll) return false
-        if (SleepTimerController.state.value.stopAfterCurrentTrack) return false
-        if (radio.errorKind == SimilarRadioErrorKind.OfflineOrFailed) return false
-        return true
-    }
-
     /** Called when a normal (non-radio) playback queue starts or is restored. */
     fun onManualQueueStarted(tracks: List<MusicTrack>, startIndex: Int) {
         nextGeneration()

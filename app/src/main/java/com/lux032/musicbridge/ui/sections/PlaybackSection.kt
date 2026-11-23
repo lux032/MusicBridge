@@ -130,7 +130,6 @@ internal fun PlaybackDetailSection(
     onConsumeQueueNotice: (Long) -> Unit = {},
     similarRadioState: SimilarRadioState = SimilarRadioState(),
     isSimilarRadioSupported: Boolean = false,
-    isAutoContinueArmed: Boolean = false,
     onStartSimilarRadioFromCurrent: () -> Unit = {},
     onToggleAutoPlaySimilar: (Boolean) -> Unit = {},
     onRefreshAutoSimilarBatch: () -> Unit = {},
@@ -720,7 +719,6 @@ internal fun PlaybackDetailSection(
             PlayerToolButton(
                 icon = Icons.Filled.QueueMusic,
                 label = Strings.queueShort,
-                showBadgeDot = isAutoContinueArmed,
                 onClick = { isPlaylistSheetVisible = true },
             )
             PlayerToolButton(
@@ -1412,11 +1410,9 @@ private fun PlayerToolButton(
     label: String,
     onClick: () -> Unit,
     selected: Boolean = false,
-    showBadgeDot: Boolean = false,
 ) {
-    val palette = LocalArtworkPalette.current
     val tint by animateColorAsState(
-        targetValue = if (selected) palette.accent else AppColors.TextSecondary,
+        targetValue = if (selected) LocalArtworkPalette.current.accent else AppColors.TextSecondary,
         label = "player_tool_tint",
     )
     Column(
@@ -1428,19 +1424,7 @@ private fun PlayerToolButton(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Box {
-            Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(22.dp))
-            if (showBadgeDot) {
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .offset(x = 3.dp, y = (-2).dp)
-                        .size(6.dp)
-                        .clip(CircleShape)
-                        .background(palette.accent),
-                )
-            }
-        }
+        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(22.dp))
         Text(
             text = label,
             color = tint,

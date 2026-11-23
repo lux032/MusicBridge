@@ -634,7 +634,7 @@ internal fun QueueActionMenu(
             val accent = LocalArtworkPalette.current.accent
             DropdownMenuItem(
                 text = { Text(Strings.startSimilarRadio, color = accent, fontWeight = FontWeight.SemiBold) },
-                leadingIcon = { Icon(Icons.Filled.Radio, contentDescription = null, tint = accent) },
+                leadingIcon = { Icon(Icons.Filled.WifiTethering, contentDescription = null, tint = accent) },
                 onClick = {
                     onDismiss()
                     onStartSimilarRadio()

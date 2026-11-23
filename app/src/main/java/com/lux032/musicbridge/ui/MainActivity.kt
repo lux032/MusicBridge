@@ -701,7 +701,6 @@ fun MusicBridgeApp(
                             onConsumeQueueNotice = state::consumeQueueNotice,
                             similarRadioState = state.similarRadioState,
                             isSimilarRadioSupported = state.isSimilarRadioSupportedForCurrentQueue,
-                            isAutoContinueArmed = state.isAutoContinueArmed,
                             onStartSimilarRadioFromCurrent = state::startSimilarRadioFromCurrentTrack,
                             onToggleAutoPlaySimilar = { enabled ->
                                 state.setAutoPlaySimilarEnabled(enabled, announceInQueue = true)

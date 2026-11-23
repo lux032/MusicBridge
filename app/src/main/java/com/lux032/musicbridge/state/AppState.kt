@@ -1250,9 +1250,6 @@ class AppState(
     val isSimilarRadioSupportedForCurrentQueue: Boolean
         get() = similarRadioCoordinator.isCurrentQueueSupported()
 
-    val isAutoContinueArmed: Boolean
-        get() = similarRadioCoordinator.isAutoContinueArmed()
-
     fun setAutoPlaySimilarEnabled(enabled: Boolean, announceInQueue: Boolean = false) =
         similarRadioCoordinator.setAutoPlayEnabled(enabled, announceInQueue = announceInQueue)
 

@@ -38,9 +38,9 @@ import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.MyLocation
-import androidx.compose.material.icons.filled.Radio
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Shuffle
+import androidx.compose.material.icons.filled.WifiTethering
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -321,7 +321,7 @@ internal fun PlaybackQueueSheet(
                         )
                         if (isSimilarRadioSupported && similarRadioState.radioSeed != null) {
                             QueueMetaBadge(
-                                icon = Icons.Filled.Radio,
+                                icon = Icons.Filled.WifiTethering,
                                 label = Strings.queueRadioSeedBadge(similarRadioState.radioSeed.title),
                                 accent = palette.accent,
                             )
