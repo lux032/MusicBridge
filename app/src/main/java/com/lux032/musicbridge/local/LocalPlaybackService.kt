@@ -400,7 +400,7 @@ class LocalPlaybackService : MediaSessionService() {
 
     companion object {
         private const val TAG = "LocalPlaybackService"
-        private val mainHandler = Handler(Looper.getMainLooper())
+        private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
         private var backgroundStarterController: ListenableFuture<MediaController>? = null
 
         internal var instance: LocalPlaybackService? = null

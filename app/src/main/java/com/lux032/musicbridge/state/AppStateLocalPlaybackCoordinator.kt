@@ -239,6 +239,14 @@ internal class AppStateLocalPlaybackCoordinator(
             }
         }
         state.localPlaybackEngine.setNetworkIsWifi(state.currentNetworkIsWifi)
+    }
+
+    /**
+     * Starts reactive observers after [AppState] finishes constructing all of its Compose
+     * `mutableStateOf` delegates (e.g. `miniPlayerState`). Launching `snapshotFlow` on
+     * `Dispatchers.Main.immediate` inside `init` would read uninitialized delegates and crash.
+     */
+    internal fun startObservers() {
         LocalPlaybackService.onToggleFavorite = ::toggleCurrentLocalTrackFavorite
         state.scope.launch {
             snapshotFlow { currentLocalTrackFavoriteState() }

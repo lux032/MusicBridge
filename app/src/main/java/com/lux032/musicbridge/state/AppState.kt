@@ -1247,6 +1247,7 @@ class AppState(
                 adoptColdStartedSession(coldStart)
             }
         }
+        localPlaybackCoordinator.startObservers()
         scope.launch { observeSelectedArtistLocalStore() }
         scope.launch {
             val saved = withContext(playbackSessionIo) { playbackSessionStore.load() }
