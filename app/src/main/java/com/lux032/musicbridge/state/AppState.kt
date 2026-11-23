@@ -1340,6 +1340,7 @@ class AppState(
         music032Reporters.values.forEach { reporter ->
             reporter.requestShutdown(ReporterEndReason.ClientClosed)
         }
+        LocalPlaybackService.onToggleFavorite = null
         LocalPlaybackService.stop(context)
         PlaybackForegroundService.stop(context)
         networkQualityMonitor.unregister()

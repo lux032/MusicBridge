@@ -1,5 +1,6 @@
 package com.lux032.musicbridge
 
+import androidx.compose.runtime.snapshotFlow
 import androidx.media3.common.Player
 import com.lux032.musicbridge.local.LocalAudioCache
 import com.lux032.musicbridge.local.LocalPlaybackEngine
@@ -13,6 +14,7 @@ import com.lux032.musicbridge.music.ReporterEndReason
 import com.lux032.musicbridge.music.ReporterPlayState
 import com.lux032.musicbridge.music.MusicAlbum
 import com.lux032.musicbridge.music.MusicTrack
+import com.lux032.musicbridge.music.isFavorite
 import com.lux032.musicbridge.service.PlaybackForegroundService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancelAndJoin
@@ -237,6 +239,11 @@ internal class AppStateLocalPlaybackCoordinator(
             }
         }
         state.localPlaybackEngine.setNetworkIsWifi(state.currentNetworkIsWifi)
+        LocalPlaybackService.onToggleFavorite = ::toggleCurrentLocalTrackFavorite
+        state.scope.launch {
+            snapshotFlow { currentLocalTrackFavoriteState() }
+                .collect(LocalPlaybackService::updateFavoriteState)
+        }
         state.scope.launch {
             var previousIsWifi = state.networkQualityMonitor.currentIsWifi()
             state.networkQualityMonitor.isWifi.collect { isWifi ->
@@ -248,6 +255,20 @@ internal class AppStateLocalPlaybackCoordinator(
                 if (switchedToCellular) LocalAudioCache.cancelPrecache()
                 reEvaluateQueueForNetworkChange()
             }
+        }
+    }
+
+    private fun currentLocalTrackFavoriteState(): Boolean? {
+        val current = state.miniPlayerState ?: return null
+        if (current.target != PlaybackTarget.LocalDevice) return null
+        return current.tracks.getOrNull(current.currentIndex)?.isFavorite
+    }
+
+    private fun toggleCurrentLocalTrackFavorite() {
+        val current = state.miniPlayerState
+        if (current != null && current.target == PlaybackTarget.LocalDevice) {
+            current.tracks.getOrNull(current.currentIndex)?.let(state::toggleTrackFavorite)
+            LocalPlaybackService.updateFavoriteState(currentLocalTrackFavoriteState())
         }
     }
 
@@ -363,6 +384,8 @@ internal class AppStateLocalPlaybackCoordinator(
         // The Sonos reporting job's cleanup is job-identity guarded (P1-1), so the old
         // job will not stop its foreground notification when we take over: do it here.
         PlaybackForegroundService.stop(state.context)
+        LocalPlaybackService.onToggleFavorite = ::toggleCurrentLocalTrackFavorite
+        LocalPlaybackService.updateFavoriteState(resolvedTracks[safeIndex].isFavorite)
         LocalPlaybackService.start(state.context)
         val initialTrack = resolvedTracks[safeIndex]
         state.actionMessage = Strings.playingLocally(initialTrack.title)
@@ -413,6 +436,8 @@ internal class AppStateLocalPlaybackCoordinator(
      */
     fun adoptColdStartedSession() {
         SleepTimerController.attachRoom(null)
+        LocalPlaybackService.onToggleFavorite = ::toggleCurrentLocalTrackFavorite
+        LocalPlaybackService.updateFavoriteState(currentLocalTrackFavoriteState())
         LocalPlaybackService.start(state.context)
         startReporting()
     }

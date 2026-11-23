@@ -4,6 +4,9 @@ import android.app.PendingIntent
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import androidx.annotation.OptIn
 import androidx.media3.common.util.UnstableApi
@@ -11,14 +14,26 @@ import androidx.media3.session.DefaultMediaNotificationProvider
 import androidx.media3.session.MediaController
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
+import androidx.media3.session.SessionCommand
+import androidx.media3.session.SessionResult
 import androidx.media3.session.SessionToken
+import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.SettableFuture
 import com.lux032.musicbridge.AppPreferences
 import com.lux032.musicbridge.MainActivity
+import com.lux032.musicbridge.MusicServerType
 import com.lux032.musicbridge.R
 import com.lux032.musicbridge.Strings
+import com.lux032.musicbridge.hasCredentials
+import com.lux032.musicbridge.music.Music032Client
+import com.lux032.musicbridge.music.MusicTrack
+import com.lux032.musicbridge.music.isFavorite
 import com.lux032.musicbridge.service.PlaybackForegroundService.Companion.ACTION_OPEN_PLAYBACK_DETAIL
+import com.lux032.musicbridge.service.PlaybackForegroundService.Companion.TOGGLE_FAVORITE_ACTION
+import com.lux032.musicbridge.service.PlaybackForegroundService.Companion.TOGGLE_FAVORITE_COMMAND
+import com.lux032.musicbridge.service.PlaybackForegroundService.Companion.buildFavoriteCustomLayout
+import com.lux032.musicbridge.storage.AlbumLocalStore
 import com.lux032.musicbridge.storage.PlaybackSessionStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -44,14 +59,20 @@ import kotlinx.coroutines.withContext
 class LocalPlaybackService : MediaSessionService() {
 
     private var mediaSession: MediaSession? = null
+    internal var sessionCallback: MediaSession.Callback? = null
+        private set
     private var serviceCreatedEngine: Boolean = false
     private var attachedEngine: LocalPlaybackEngine? = null
     private var coldStartSession: ColdStartSessionState? = null
+    /** null: current track favorite state unknown/unavailable, hide button on media card. */
+    private var currentIsFavorite: Boolean? = null
+    private var isColdStartFavoriteLoading: Boolean = false
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     private val coldStartEngineListener = object : LocalPlaybackEngine.Listener {
         override fun onTrackChanged(index: Int) {
             flushColdStartCursor()
+            setFavorite(coldStartSession?.resolvedTracks?.getOrNull(index)?.isFavorite)
         }
 
         override fun onIsPlayingChanged(isPlaying: Boolean) {
@@ -92,6 +113,8 @@ class LocalPlaybackService : MediaSessionService() {
             return
         }
         attachedEngine = engine
+        instance = this
+        currentIsFavorite = pendingIsFavorite
 
         setMediaNotificationProvider(
             DefaultMediaNotificationProvider.Builder(this).build().apply {
@@ -110,9 +133,12 @@ class LocalPlaybackService : MediaSessionService() {
             launchIntent,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
+        val callback = SessionCallback(engine)
+        sessionCallback = callback
         mediaSession = MediaSession.Builder(this, engine.mediaSessionPlayer)
             .setSessionActivity(sessionActivity)
-            .setCallback(SessionCallback(engine))
+            .setCustomLayout(buildFavoriteCustomLayout(currentIsFavorite))
+            .setCallback(callback)
             .build()
     }
 
@@ -138,11 +164,15 @@ class LocalPlaybackService : MediaSessionService() {
     }
 
     override fun onDestroy() {
+        if (instance === this) {
+            instance = null
+        }
         flushColdStartCursor()
         serviceScope.cancel()
         // Release the session wrapper first.
         mediaSession?.release()
         mediaSession = null
+        sessionCallback = null
 
         val engine = attachedEngine
         attachedEngine = null
@@ -178,9 +208,159 @@ class LocalPlaybackService : MediaSessionService() {
         )
     }
 
+    internal fun setFavorite(favorite: Boolean?) {
+        if (favorite == currentIsFavorite) return
+        currentIsFavorite = favorite
+        mediaSession?.setCustomLayout(buildFavoriteCustomLayout(favorite))
+    }
+
+    private fun toggleColdStartFavorite(): Boolean {
+        val session = coldStartSession ?: return false
+        val engine = attachedEngine ?: return false
+        val index = engine.currentIndex.takeIf { it in session.resolvedTracks.indices } ?: return false
+        if (isColdStartFavoriteLoading) return true
+
+        val track = session.resolvedTracks[index]
+        val targetFavorite = !track.isFavorite
+        val updatedTrack = track.copy(userRating = if (targetFavorite) 10f else null)
+        val updatedTracks = session.resolvedTracks.toMutableList().apply { this[index] = updatedTrack }
+        val updatedSession = session.copy(resolvedTracks = updatedTracks)
+        coldStartSession = updatedSession
+        ColdStartLocalPlaybackHolder.updateColdStartSession(engine, updatedSession)
+        setFavorite(targetFavorite)
+
+        isColdStartFavoriteLoading = true
+        serviceScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    persistColdStartFavorite(updatedSession, updatedTrack, targetFavorite)
+                }
+            } finally {
+                isColdStartFavoriteLoading = false
+            }
+        }
+        return true
+    }
+
+    private suspend fun persistColdStartFavorite(
+        updatedSession: ColdStartSessionState,
+        updatedTrack: MusicTrack,
+        targetFavorite: Boolean,
+    ) {
+        runCatching {
+            val store = AlbumLocalStore(applicationContext)
+            if (updatedTrack.isFavorite) {
+                store.upsertFavoriteTrack(updatedTrack)
+            } else {
+                store.deleteFavoriteTrack(updatedTrack.sourceId, updatedTrack.ratingKey)
+            }
+            store.updateAlbumTrackFavoriteStatus(
+                updatedTrack.sourceId,
+                updatedTrack.ratingKey,
+                updatedTrack.userRating,
+            )
+            store.updatePlaylistTrackFavoriteStatus(
+                updatedTrack.sourceId,
+                updatedTrack.ratingKey,
+                updatedTrack.userRating,
+            )
+            store.updateDownloadedTrackFavoriteStatus(
+                updatedTrack.sourceId,
+                updatedTrack.ratingKey,
+                updatedTrack.userRating,
+            )
+            PlaybackSessionStore(applicationContext).saveQueue(
+                updatedSession.savedSession.queueId,
+                updatedSession.savedSession.album,
+                updatedSession.resolvedTracks,
+            )
+        }.onFailure { error ->
+            Log.w(TAG, "Cold-start local favorite persistence failed", error)
+        }
+
+        val profile = AppPreferences(applicationContext)
+            .loadServerProfiles()
+            .firstOrNull { it.id == updatedTrack.sourceId }
+            ?.takeIf { it.type == MusicServerType.Music032 && it.hasCredentials() }
+            ?: return
+        runCatching {
+            Music032Client(profile).setTrackFavorite(updatedTrack.ratingKey, targetFavorite)
+        }.onFailure { error ->
+            Log.w(TAG, "Cold-start remote favorite sync failed", error)
+        }
+    }
+
+    internal fun applyColdStartResumption(
+        engine: LocalPlaybackEngine,
+        loaded: ColdStartLoadResult,
+    ): MediaSession.MediaItemsWithStartPosition {
+        val saved = loaded.sessionState.savedSession
+        engine.setNetworkIsWifi(loaded.isWifi)
+        engine.setPlaybackMode(saved.playbackMode)
+        val prepared = engine.prepareColdStartQueue(
+            items = loaded.queueItems,
+            startIndex = saved.currentIndex,
+            startPositionMillis = saved.positionMillis,
+            precacheCount = loaded.precacheCount,
+        )
+        coldStartSession = loaded.sessionState
+        setFavorite(loaded.sessionState.resolvedTracks.getOrNull(prepared.startIndex)?.isFavorite)
+        if (!ColdStartLocalPlaybackHolder.isEngineAdoptedByAppState) {
+            ColdStartLocalPlaybackHolder.registerColdStart(engine, loaded.sessionState)
+            if (engine.listener == null) {
+                engine.listener = coldStartEngineListener
+            }
+        }
+        Log.i(
+            TAG,
+            "Cold-start resumed ${loaded.queueItems.size} tracks at index=${prepared.startIndex} pos=${prepared.startPositionMillis}ms",
+        )
+        return MediaSession.MediaItemsWithStartPosition(
+            prepared.mediaItems,
+            prepared.startIndex,
+            prepared.startPositionMillis,
+        )
+    }
+
     private inner class SessionCallback(
         private val engine: LocalPlaybackEngine,
     ) : MediaSession.Callback {
+
+        override fun onConnect(
+            session: MediaSession,
+            controller: MediaSession.ControllerInfo,
+        ): MediaSession.ConnectionResult {
+            val commands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon()
+                .add(TOGGLE_FAVORITE_COMMAND)
+                .build()
+            return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
+                .setAvailableSessionCommands(commands)
+                .setCustomLayout(buildFavoriteCustomLayout(currentIsFavorite))
+                .build()
+        }
+
+        override fun onCustomCommand(
+            session: MediaSession,
+            controller: MediaSession.ControllerInfo,
+            customCommand: SessionCommand,
+            args: Bundle,
+        ): ListenableFuture<SessionResult> {
+            if (customCommand.customAction != TOGGLE_FAVORITE_ACTION) {
+                return Futures.immediateFuture(SessionResult(SessionResult.RESULT_ERROR_NOT_SUPPORTED))
+            }
+            if (currentIsFavorite == null) {
+                return Futures.immediateFuture(SessionResult(SessionResult.RESULT_ERROR_NOT_SUPPORTED))
+            }
+            val appToggleHandler = onToggleFavorite
+            if (appToggleHandler != null) {
+                appToggleHandler.invoke()
+                return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+            }
+            if (toggleColdStartFavorite()) {
+                return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+            }
+            return Futures.immediateFuture(SessionResult(SessionResult.RESULT_ERROR_NOT_SUPPORTED))
+        }
 
         override fun onPlaybackResumption(
             mediaSession: MediaSession,
@@ -212,33 +392,7 @@ class LocalPlaybackService : MediaSessionService() {
                     }
                     return@launch
                 }
-                val saved = loaded.sessionState.savedSession
-                engine.setNetworkIsWifi(loaded.isWifi)
-                engine.setPlaybackMode(saved.playbackMode)
-                val prepared = engine.prepareColdStartQueue(
-                    items = loaded.queueItems,
-                    startIndex = saved.currentIndex,
-                    startPositionMillis = saved.positionMillis,
-                    precacheCount = loaded.precacheCount,
-                )
-                coldStartSession = loaded.sessionState
-                if (!ColdStartLocalPlaybackHolder.isEngineAdoptedByAppState) {
-                    ColdStartLocalPlaybackHolder.registerColdStart(engine, loaded.sessionState)
-                    if (engine.listener == null) {
-                        engine.listener = coldStartEngineListener
-                    }
-                }
-                Log.i(
-                    TAG,
-                    "Cold-start resumed ${loaded.queueItems.size} tracks at index=${prepared.startIndex} pos=${prepared.startPositionMillis}ms",
-                )
-                future.set(
-                    MediaSession.MediaItemsWithStartPosition(
-                        prepared.mediaItems,
-                        prepared.startIndex,
-                        prepared.startPositionMillis,
-                    )
-                )
+                future.set(applyColdStartResumption(engine, loaded))
             }
             return future
         }
@@ -246,7 +400,25 @@ class LocalPlaybackService : MediaSessionService() {
 
     companion object {
         private const val TAG = "LocalPlaybackService"
+        private val mainHandler = Handler(Looper.getMainLooper())
         private var backgroundStarterController: ListenableFuture<MediaController>? = null
+
+        internal var instance: LocalPlaybackService? = null
+            private set
+
+        @Volatile
+        private var pendingIsFavorite: Boolean? = null
+
+        var onToggleFavorite: (() -> Unit)? = null
+
+        fun updateFavoriteState(isFavorite: Boolean?) {
+            pendingIsFavorite = isFavorite
+            if (Looper.myLooper() == Looper.getMainLooper()) {
+                instance?.setFavorite(isFavorite)
+            } else {
+                mainHandler.post { instance?.setFavorite(pendingIsFavorite) }
+            }
+        }
 
         fun start(context: Context) {
             val appContext = context.applicationContext
@@ -271,6 +443,7 @@ class LocalPlaybackService : MediaSessionService() {
         }
 
         fun stop(context: Context) {
+            pendingIsFavorite = null
             releaseStarterController()
             context.applicationContext.stopService(Intent(context.applicationContext, LocalPlaybackService::class.java))
         }

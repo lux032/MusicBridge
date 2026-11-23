@@ -140,6 +140,12 @@ internal object ColdStartLocalPlaybackHolder {
         isEngineAdoptedByAppState = false
     }
 
+    fun updateColdStartSession(engine: LocalPlaybackEngine, session: ColdStartSessionState) = synchronized(lock) {
+        if (ownerEngine === engine && !isEngineAdoptedByAppState) {
+            activeSession = session
+        }
+    }
+
     fun peekActiveSession(): ColdStartSessionState? = synchronized(lock) { activeSession }
 
     fun consumeForAppStateAdoption(engine: LocalPlaybackEngine): ColdStartSessionState? = synchronized(lock) {

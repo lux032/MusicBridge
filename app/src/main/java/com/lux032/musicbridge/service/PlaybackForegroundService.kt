@@ -174,16 +174,7 @@ class PlaybackForegroundService : Service() {
         }
     }
 
-    private fun customLayout(): List<CommandButton> {
-        val favorite = currentIsFavorite ?: return emptyList()
-        return listOf(
-            CommandButton.Builder()
-                .setDisplayName(if (favorite) Strings.searchUnfavoriteAction else Strings.searchFavoriteAction)
-                .setIconResId(if (favorite) R.drawable.ic_favorite else R.drawable.ic_favorite_border)
-                .setSessionCommand(TOGGLE_FAVORITE_COMMAND)
-                .build()
-        )
-    }
+    private fun customLayout(): List<CommandButton> = buildFavoriteCustomLayout(currentIsFavorite)
 
     private fun setFavorite(favorite: Boolean?) {
         if (favorite == currentIsFavorite) return
@@ -498,8 +489,19 @@ class PlaybackForegroundService : Service() {
         private const val ARTWORK_RETRY_INTERVAL_MS = 15_000L
         private const val SESSION_ID = "sonos"
         private const val MEDIA_NOTIFICATION_CONTROLLER_HINT = "androidx.media3.session.MediaNotificationManager"
-        private const val TOGGLE_FAVORITE_ACTION = "com.lux032.musicbridge.session.TOGGLE_FAVORITE"
-        private val TOGGLE_FAVORITE_COMMAND = SessionCommand(TOGGLE_FAVORITE_ACTION, Bundle.EMPTY)
+        internal const val TOGGLE_FAVORITE_ACTION = "com.lux032.musicbridge.session.TOGGLE_FAVORITE"
+        internal val TOGGLE_FAVORITE_COMMAND = SessionCommand(TOGGLE_FAVORITE_ACTION, Bundle.EMPTY)
+
+        internal fun buildFavoriteCustomLayout(isFavorite: Boolean?): List<CommandButton> {
+            val favorite = isFavorite ?: return emptyList()
+            return listOf(
+                CommandButton.Builder()
+                    .setDisplayName(if (favorite) Strings.searchUnfavoriteAction else Strings.searchFavoriteAction)
+                    .setIconResId(if (favorite) R.drawable.ic_favorite else R.drawable.ic_favorite_border)
+                    .setSessionCommand(TOGGLE_FAVORITE_COMMAND)
+                    .build()
+            )
+        }
         const val ACTION_OPEN_PLAYBACK_DETAIL =
             "com.lux032.musicbridge.action.OPEN_PLAYBACK_DETAIL"
         const val ACTION_STOP = "com.lux032.musicbridge.STOP_PLAYBACK"
