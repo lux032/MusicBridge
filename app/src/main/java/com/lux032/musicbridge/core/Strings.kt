@@ -729,5 +729,44 @@ object Strings {
     val playbackPausedNotice get() = if (isZhCN) "已暂停播放" else "Paused"
     val playbackResumedNotice get() = if (isZhCN) "已继续播放" else "Resumed"
     fun seekedToNotice(formattedTime: String) = if (isZhCN) "已跳转到 $formattedTime" else "Seeked to $formattedTime"
+
+    // Playback queue editing
+    val playbackQueueTitle get() = if (isZhCN) "播放队列" else "Playing Queue"
+    fun queuePositionSummary(currentOneBased: Int, total: Int) =
+        if (isZhCN) "第 $currentOneBased / $total 首" else "Track $currentOneBased of $total"
+    fun queueRemainingDuration(formatted: String) =
+        if (isZhCN) "剩余 $formatted" else "$formatted left"
+    fun queueDurationHoursMinutes(hours: Long, minutes: Long) =
+        if (isZhCN) {
+            if (minutes > 0L) "$hours 小时 $minutes 分钟" else "$hours 小时"
+        } else {
+            if (minutes > 0L) "${hours}h ${minutes}m" else "${hours}h"
+        }
+    fun queueDurationMinutes(minutes: Long) =
+        if (isZhCN) "$minutes 分钟" else "${minutes} min"
+    val queueSaveAsPlaylist get() = if (isZhCN) "存为歌单" else "Save as playlist"
+    val queueClearAction get() = if (isZhCN) "清空队列" else "Clear queue"
+    val queueRemoveTrack get() = if (isZhCN) "从队列移除" else "Remove from queue"
+    val queueReorderHandle get() = if (isZhCN) "拖拽调整顺序" else "Drag to reorder"
+    val queueJumpToCurrent get() = if (isZhCN) "回到正在播放" else "Jump to now playing"
+    val queueShuffleBadge get() = if (isZhCN) "随机" else "Shuffle"
+    val queueClearDialogTitle get() = if (isZhCN) "清空播放队列" else "Clear Playing Queue"
+    val queueClearSingleDialogTitle get() = if (isZhCN) "停止并清空队列" else "Stop and Clear Queue"
+    val queueClearDialogBody get() = if (isZhCN) "选择仅清空其余曲目并保持当前播放，或清空全部曲目并停止播放。" else "Keep only the current track playing, or clear the entire queue and stop playback."
+    val queueClearSingleDialogBody get() = if (isZhCN) "当前队列仅剩 1 首正在播放的曲目，确认后将停止播放并清空队列。" else "Only the currently playing track remains. Clearing will stop playback."
+    val queueClearUpcomingOnly get() = if (isZhCN) "仅清空待播（保留当前）" else "Clear others (keep current)"
+    fun queueClearUpcomingOnlyDesc(otherCount: Int) =
+        if (isZhCN) "清除其余 $otherCount 首，当前播放不中断" else "Removes $otherCount other tracks without interrupting playback"
+    val queueClearAllAndStop get() = if (isZhCN) "清空全部并停止播放" else "Clear all and stop playback"
+    val queueClearAllAndStopDesc get() = if (isZhCN) "清空队列并收起播放器" else "Clears the queue and dismisses the player"
+    fun queueRemovedTrack(title: String) = if (isZhCN) "已移除「$title」" else "Removed \"$title\""
+    fun queueRemovedCurrentSwitched(nextTitle: String) =
+        if (isZhCN) "已移除当前曲目，切换至「$nextTitle」" else "Removed current track, switched to \"$nextTitle\""
+    fun queueClearedOthers(count: Int) =
+        if (isZhCN) "已清空其余 $count 首，保留当前播放" else "Cleared $count other tracks, keeping current"
+    val queueClearedAll get() = if (isZhCN) "已清空播放队列并停止播放" else "Queue cleared and playback stopped"
+    val queueReorderExitedShuffle get() = if (isZhCN) "已调整顺序，自动切换为顺序播放" else "Order updated; switched to sequential playback"
+    val queueSonosSyncFailedRestored get() = if (isZhCN) "Sonos 队列同步失败，已恢复原队列" else "Failed to sync Sonos queue; restored previous order"
+    val queueCrossServerBlocked get() = if (isZhCN) "当前队列属于其他服务器，请重新开始播放" else "Current queue belongs to another server; start playback instead"
 }
 

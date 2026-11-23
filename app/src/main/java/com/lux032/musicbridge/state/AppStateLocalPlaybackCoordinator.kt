@@ -422,7 +422,7 @@ internal class AppStateLocalPlaybackCoordinator(
     }
 
     /** Inserts tracks into the live engine queue so its indices stay aligned with
-     *  [MiniPlayerState.tracks] after an enqueue. */
+     *  [MiniPlayerState.tracks] after an enqueue or undo. */
     fun insertIntoLocalQueue(insertIndex: Int, tracks: List<MusicTrack>) {
         val policy = state.currentLocalPlaybackPolicy()
         val resolvedTracks = tracks.map(::resolveTrackWithLocalDownload)
@@ -431,6 +431,38 @@ internal class AppStateLocalPlaybackCoordinator(
             state.cachedOriginalTrackKeys = state.cachedOriginalTrackKeys + items.filter(LocalQueueItem::isCachedOriginal).map { it.cacheKey }
             state.localPlaybackEngine.insertQueueItems(insertIndex, items)
         }
+    }
+
+    fun moveLocalQueueItem(fromIndex: Int, toIndex: Int) {
+        state.localPlaybackEngine.moveQueueItem(fromIndex, toIndex)
+    }
+
+    fun removeLocalQueueItem(
+        index: Int,
+        removedWasCurrent: Boolean,
+        nextTrack: MusicTrack?,
+    ) {
+        val engine = state.localPlaybackEngine
+        engine.removeQueueItem(index)
+        if (removedWasCurrent && nextTrack != null) {
+            state.recordPlayedAlbum(nextTrack.resolvePlaybackAlbum(state.allAlbums, state.miniPlayerState?.album))
+            sessionDriver.onEngineTransition(
+                newTrack = nextTrack,
+                reason = Player.MEDIA_ITEM_TRANSITION_REASON_SEEK,
+                positionMillis = 0L,
+                durationMillis = engine.durationMillis ?: nextTrack.durationMillis ?: 0L,
+                initialState = localReporterPlayState(engine.isPlaying, engine.isPlayRequested, engine.isBuffering),
+            )
+        }
+    }
+
+    fun clearLocalUpcomingKeepCurrent() {
+        state.localPlaybackEngine.clearUpcomingKeepCurrent()
+    }
+
+    fun clearLocalQueueAndStop() {
+        state.localPlaybackEngine.clearQueue()
+        LocalPlaybackService.stop(state.context)
     }
 
 

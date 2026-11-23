@@ -36,6 +36,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.random.Random
 
@@ -45,7 +46,12 @@ internal class AppStatePlaybackCoordinator(
     private val playbackRequestGeneration = AtomicLong(0L)
     private val seekRequestGeneration = AtomicLong(0L)
     private val playbackToggleGeneration = AtomicLong(0L)
+    private val queueNoticeSequence = AtomicLong(0L)
     private val playbackToggleMutex = Mutex()
+    private val sonosQueueMutationMutex = Mutex()
+    private val sonosQueueMutationInFlightCount = AtomicInteger(0)
+    internal val isSonosQueueMutationInFlight: Boolean
+        get() = sonosQueueMutationInFlightCount.get() > 0
     private val hydrationCache = Music032HydrationCache(state.scope)
 
     internal var pending032Plan: Pair<MusicTrack, SonosPlan>? = null
@@ -729,9 +735,12 @@ internal class AppStatePlaybackCoordinator(
         val status = controller.getPlaybackStatus(room)
         if (status.transportState !in ADOPTABLE_TRANSPORT_STATES) return null
         if (controller.getMediaUri(room)?.startsWith("x-rincon-queue:") != true) return null
-        val servers = state.serverProfiles.filter { it.type == MusicServerType.Music032 }.map { profile ->
-            Music032ServerRef(profile.id, profile.baseUrl, setOf(profile.mediaToken.trim(), profile.token.trim()).filter { it.isNotEmpty() }.toSet())
-        }
+        val activeProfile = state.connectionPreferences
+        val servers = listOf(activeProfile)
+            .filter { it.type == MusicServerType.Music032 && it.id.isNotBlank() }
+            .map { profile ->
+                Music032ServerRef(profile.id, profile.baseUrl, setOf(profile.mediaToken.trim(), profile.token.trim()).filter { it.isNotEmpty() }.toSet())
+            }
         val refs = resolveAdoptableQueue(controller.browseQueue(room, SONOS_QUEUE_MAX_TRACKS + 1), servers) ?: return null
         val index = resolveSonosQueueIndex(refs.map { it.entry() }, status) ?: return null
         val reuse = reusableTracks(refs, known)
@@ -1570,6 +1579,16 @@ internal class AppStatePlaybackCoordinator(
             return
         }
 
+        // Keep queues strictly isolated per server: never mix tracks from two databases.
+        val queueSourceId = playerState.tracks.firstOrNull { it.sourceId.isNotBlank() }?.sourceId
+            ?: playerState.album.sourceId
+        val incomingSourceId = tracks.firstOrNull { it.sourceId.isNotBlank() }?.sourceId.orEmpty()
+        if (queueSourceId.isNotBlank() && incomingSourceId.isNotBlank() && queueSourceId != incomingSourceId) {
+            state.actionMessage = null
+            state.errorMessage = Strings.queueCrossServerBlocked
+            return
+        }
+
         // A speaker-side 032 queue can only hold 032 tracks: refuse others instead of silently
         // dropping them at the end of the speaker queue.
         if (!isRestoredSessionPending && sonosQueueFor(playerState.sonosRoom, playerState.tracks) != null &&
@@ -1603,6 +1622,358 @@ internal class AppStatePlaybackCoordinator(
         state.actionMessage = when (placement) {
             QueuePlacement.Next -> Strings.queueAddedNext(displayTitle)
             QueuePlacement.End -> Strings.queueAddedEnd(displayTitle)
+        }
+    }
+
+    // --- Interactive queue editing (reorder / remove / clear / undo) ----------------------
+
+    private fun notifyQueue(
+        message: String,
+        actionLabel: String? = null,
+        isError: Boolean = false,
+        onAction: (() -> Unit)? = null,
+    ) {
+        state.queueNotice = QueueNotice(
+            id = queueNoticeSequence.incrementAndGet(),
+            message = message,
+            actionLabel = actionLabel,
+            onAction = onAction,
+            isError = isError,
+        )
+    }
+
+    /**
+     * Reorders one track from [fromIndex] to [toIndex].
+     * Playing track index follows the moved item without interrupting audio.
+     * Under Shuffle mode, automatically switches back to Sequential so the edited order applies.
+     */
+    fun moveQueueTrack(fromIndex: Int, toIndex: Int) {
+        val playerState = state.miniPlayerState ?: return
+        val moved = moveTrackInQueueState(playerState.tracks, playerState.currentIndex, fromIndex, toIndex) ?: return
+        val restoredPending = isRestoredSessionPending
+        val previousMode = state.playbackMode
+        val exitedShuffle = previousMode == PlaybackMode.Shuffle
+        val room = playerState.sonosRoom
+        val sonosSession = if (!restoredPending) sonosQueueFor(room, playerState.tracks) else null
+        val updatedPlayerState = playerState.copy(
+            tracks = moved.tracks,
+            currentIndex = moved.currentIndex,
+        )
+        state.miniPlayerState = updatedPlayerState
+        if (exitedShuffle) {
+            state.playbackMode = PlaybackMode.Sequential
+        }
+
+        if (restoredPending) {
+            restoredQueue = moved.tracks
+        } else if (playerState.target == PlaybackTarget.LocalDevice) {
+            state.localPlaybackCoordinator.moveLocalQueueItem(fromIndex, toIndex)
+            if (exitedShuffle) {
+                state.localPlaybackCoordinator.applyPlaybackMode(PlaybackMode.Sequential)
+            }
+        } else if (room != null && sonosSession != null) {
+            val reorderedEntries = sonosSession.entries.toMutableList().apply {
+                val entry = removeAt(fromIndex)
+                add(toIndex, entry)
+            }
+            val updatedSession = sonosSession.copy(entries = reorderedEntries)
+            sonosQueue = updatedSession
+            runSonosQueueMutation(
+                onRollback = {
+                    if (state.miniPlayerState?.tracks === moved.tracks) {
+                        state.miniPlayerState = playerState
+                    }
+                    if (sonosQueue === updatedSession) {
+                        sonosQueue = sonosSession
+                    }
+                    if (exitedShuffle) {
+                        state.playbackMode = previousMode
+                    }
+                    notifyQueue(Strings.queueSonosSyncFailedRestored, isError = true)
+                },
+            ) {
+                state.sonosController.reorderTrackInQueue(room, fromIndex, toIndex)
+                if (exitedShuffle) {
+                    runCatching { state.sonosController.setPlayMode(room, sonosPlayModeFor(PlaybackMode.Sequential)) }
+                }
+            }
+        }
+        if (exitedShuffle) {
+            notifyQueue(Strings.queueReorderExitedShuffle)
+        }
+    }
+
+    /**
+     * Removes the track at [index].
+     * - Sole remaining track: stops playback and clears the queue.
+     * - Non-current track: removes uninterrupted and offers Undo inside the queue sheet.
+     * - Currently playing track: advances to the next track (or previous if last) preserving play/pause state.
+     */
+    fun removeQueueTrack(index: Int) {
+        val playerState = state.miniPlayerState ?: return
+        if (index !in playerState.tracks.indices) return
+        if (playerState.tracks.size == 1) {
+            clearQueueAndStop(announce = true)
+            return
+        }
+        val result = removeTrackFromQueueState(playerState.tracks, playerState.currentIndex, index) ?: return
+        val restoredPending = isRestoredSessionPending
+        val room = playerState.sonosRoom
+        val sonosSession = if (!restoredPending) sonosQueueFor(room, playerState.tracks) else null
+        val nextTrack = result.tracks[result.currentIndex]
+        val wasPaused = playerState.isPaused
+
+        val updatedPlayerState = if (result.removedWasCurrent) {
+            playerState.copy(
+                album = resolveAlbumForTrack(nextTrack, playerState.album),
+                tracks = result.tracks,
+                currentIndex = result.currentIndex,
+                currentPositionMillis = 0L,
+                durationMillis = nextTrack.durationMillis,
+                isBuffering = !wasPaused && playerState.target == PlaybackTarget.LocalDevice,
+            )
+        } else {
+            playerState.copy(
+                tracks = result.tracks,
+                currentIndex = result.currentIndex,
+            )
+        }
+        state.miniPlayerState = updatedPlayerState
+
+        if (restoredPending) {
+            restoredQueue = result.tracks
+        } else if (playerState.target == PlaybackTarget.LocalDevice) {
+            state.localPlaybackCoordinator.removeLocalQueueItem(
+                index = index,
+                removedWasCurrent = result.removedWasCurrent,
+                nextTrack = if (result.removedWasCurrent) nextTrack else null,
+            )
+        } else if (room != null && sonosSession != null) {
+            val updatedEntries = sonosSession.entries.toMutableList().apply { removeAt(index) }
+            val updatedSession = sonosSession.copy(entries = updatedEntries)
+            sonosQueue = updatedSession
+            if (result.removedWasCurrent) {
+                if (is032Source(result.removedTrack)) {
+                    state.music032ReporterFor(result.removedTrack.sourceId)?.requestEnd(ReporterEndReason.Skipped)
+                }
+                val nextEntry = updatedEntries[result.currentIndex]
+                activeSonosPlan = ActiveSonosPlan(nextEntry.sourceId, nextEntry.ratingKey, nextEntry.kind, nextEntry.url, nextEntry.mime)
+                transcodeRestartSeek = null
+            }
+            runSonosQueueMutation(
+                onRollback = {
+                    if (state.miniPlayerState?.tracks === result.tracks) {
+                        state.miniPlayerState = playerState
+                    }
+                    if (sonosQueue === updatedSession) {
+                        sonosQueue = sonosSession
+                    }
+                    notifyQueue(Strings.queueSonosSyncFailedRestored, isError = true)
+                },
+            ) {
+                state.sonosController.removeTrackFromQueue(room, index)
+                if (result.removedWasCurrent) {
+                    val nextEntry = updatedEntries[result.currentIndex]
+                    if (nextEntry.kind == SonosPlanKind.LIVE_MP3) {
+                        val freshUrl = Music032TranscodeUrls.withOffsetMs(nextEntry.url, 0L, nextTrack.durationMillis)
+                        state.sonosController.replaceQueueItem(
+                            room,
+                            result.currentIndex,
+                            sonosQueueItem(nextTrack, nextEntry.copy(url = freshUrl), updatedPlayerState.album),
+                        )
+                        set032RestartSeek(nextTrack, 0L)
+                    }
+                    if (wasPaused) {
+                        state.sonosController.seekQueueIndex(room, result.currentIndex)
+                    } else {
+                        state.sonosController.playQueueIndex(room, result.currentIndex, 0)
+                    }
+                }
+            }
+        } else if (room != null && result.removedWasCurrent) {
+            // Non-queue Sonos push mode: start pushing the replacement track if playing.
+            if (!wasPaused) {
+                playSonosQueueIndex(
+                    playerState = updatedPlayerState,
+                    targetIndex = result.currentIndex,
+                    positionMillis = 0L,
+                    targetRoom = room,
+                    continueChain = false,
+                )
+            }
+        }
+
+        if (result.removedWasCurrent) {
+            notifyQueue(Strings.queueRemovedCurrentSwitched(nextTrack.title))
+        } else {
+            notifyQueue(
+                message = Strings.queueRemovedTrack(result.removedTrack.title),
+                actionLabel = Strings.undo,
+            ) {
+                restoreRemovedQueueTrack(index, result.removedTrack)
+            }
+        }
+    }
+
+    /** Undo for single-track removal: re-inserts [track] at [originalIndex] without interrupting audio. */
+    private fun restoreRemovedQueueTrack(originalIndex: Int, track: MusicTrack) {
+        val playerState = state.miniPlayerState ?: return
+        val insertIndex = originalIndex.coerceIn(0, playerState.tracks.size)
+        val restoredPending = isRestoredSessionPending
+        val room = playerState.sonosRoom
+        val sonosSession = if (!restoredPending) sonosQueueFor(room, playerState.tracks) else null
+        val updatedTracks = playerState.tracks.toMutableList().apply { add(insertIndex, track) }
+        val updatedCurrentIndex = if (insertIndex <= playerState.currentIndex) {
+            playerState.currentIndex + 1
+        } else {
+            playerState.currentIndex
+        }
+        state.miniPlayerState = playerState.copy(
+            tracks = updatedTracks,
+            currentIndex = updatedCurrentIndex,
+        )
+        if (restoredPending) {
+            restoredQueue = updatedTracks
+        } else if (playerState.target == PlaybackTarget.LocalDevice) {
+            state.localPlaybackCoordinator.insertIntoLocalQueue(insertIndex, listOf(track))
+        } else if (room != null && sonosSession != null) {
+            val addedEntry = sonosQueueEntryFor(track)
+            val updatedSession = sonosSession.copy(
+                entries = sonosSession.entries.toMutableList().apply { add(insertIndex, addedEntry) },
+            )
+            sonosQueue = updatedSession
+            runSonosQueueMutation(
+                onRollback = {
+                    if (state.miniPlayerState?.tracks === updatedTracks) {
+                        state.miniPlayerState = playerState
+                    }
+                    if (sonosQueue === updatedSession) {
+                        sonosQueue = sonosSession
+                    }
+                    notifyQueue(Strings.queueSonosSyncFailedRestored, isError = true)
+                },
+            ) {
+                state.sonosController.insertIntoQueue(
+                    room = room,
+                    items = listOf(sonosQueueItem(track, addedEntry, null)),
+                    atIndex = if (insertIndex >= playerState.tracks.size) -1 else insertIndex,
+                )
+            }
+        }
+    }
+
+    /** Clears every track before and after the currently playing item, leaving only the active track. */
+    fun clearUpcomingTracksKeepCurrent() {
+        val playerState = state.miniPlayerState ?: return
+        val keptTracks = clearUpcomingKeepCurrentState(playerState.tracks, playerState.currentIndex) ?: return
+        val removedCount = playerState.tracks.size - 1
+        val oldIndex = playerState.currentIndex
+        val oldSize = playerState.tracks.size
+        val restoredPending = isRestoredSessionPending
+        val room = playerState.sonosRoom
+        val sonosSession = if (!restoredPending) sonosQueueFor(room, playerState.tracks) else null
+
+        state.miniPlayerState = playerState.copy(
+            tracks = keptTracks,
+            currentIndex = 0,
+        )
+
+        if (restoredPending) {
+            restoredQueue = keptTracks
+        } else if (playerState.target == PlaybackTarget.LocalDevice) {
+            state.localPlaybackCoordinator.clearLocalUpcomingKeepCurrent()
+        } else if (room != null && sonosSession != null) {
+            val updatedSession = sonosSession.copy(entries = listOf(sonosSession.entries[oldIndex]))
+            sonosQueue = updatedSession
+            runSonosQueueMutation(
+                onRollback = {
+                    if (state.miniPlayerState?.tracks === keptTracks) {
+                        state.miniPlayerState = playerState
+                    }
+                    if (sonosQueue === updatedSession) {
+                        sonosQueue = sonosSession
+                    }
+                    notifyQueue(Strings.queueSonosSyncFailedRestored, isError = true)
+                },
+            ) {
+                // Remove items after current first so indices before current remain stable.
+                val afterCount = oldSize - oldIndex - 1
+                if (afterCount > 0) {
+                    state.sonosController.removeTrackRangeFromQueue(room, oldIndex + 1, afterCount)
+                }
+                if (oldIndex > 0) {
+                    state.sonosController.removeTrackRangeFromQueue(room, 0, oldIndex)
+                }
+            }
+        }
+        notifyQueue(Strings.queueClearedOthers(removedCount))
+    }
+
+    /**
+     * Stops playback completely, empties the renderer queue (local ExoPlayer or Sonos Q:0),
+     * tears down foreground services, clears the persisted session, and dismisses the player.
+     */
+    fun clearQueueAndStop(announce: Boolean = true) {
+        val playerState = state.miniPlayerState
+        val wasRestoredPending = isRestoredSessionPending
+        val sonosRoom = if (wasRestoredPending) null else playerState?.sonosRoom
+        val hadSonosQueue = sonosRoom != null && playerState != null && sonosQueueFor(sonosRoom, playerState.tracks) != null
+        val currentTrack = playerState?.tracks?.getOrNull(playerState.currentIndex)
+
+        restoredQueue = null
+        nextPlaybackRequestGeneration()
+        transcodeRestartSeek = null
+        state.albumPlaybackJob?.cancel()
+        state.playbackReportingJob?.cancel()
+        if (currentTrack != null && is032Source(currentTrack)) {
+            state.music032ReporterFor(currentTrack.sourceId)?.requestEnd(ReporterEndReason.Stopped)
+        }
+        state.localPlaybackCoordinator.clearLocalQueueAndStop()
+        PlaybackForegroundService.stop(state.context)
+        if (sonosRoom != null) {
+            state.scope.launch {
+                runCatching {
+                    if (hadSonosQueue) {
+                        state.sonosController.clearQueue(sonosRoom)
+                    } else {
+                        state.sonosController.pause(sonosRoom)
+                        state.sonosController.stop(sonosRoom)
+                    }
+                }
+            }
+        }
+        SleepTimerController.attachRoom(null)
+        state.isPlaybackCommandLoading = false
+        state.errorMessage = null
+        state.queueNotice = null
+        state.miniPlayerState = null
+        state.clearSavedPlaybackSession()
+        if (state.activeSection == AppSection.PlaybackDetail) {
+            state.navigateBack()
+        }
+        if (announce) {
+            state.actionMessage = Strings.queueClearedAll
+        }
+    }
+
+    private fun runSonosQueueMutation(
+        onRollback: () -> Unit,
+        block: suspend () -> Unit,
+    ) {
+        sonosQueueMutationInFlightCount.incrementAndGet()
+        state.scope.launch {
+            try {
+                sonosQueueMutationMutex.withLock {
+                    block()
+                }
+            } catch (cancel: CancellationException) {
+                throw cancel
+            } catch (error: Exception) {
+                Log.w(LOG_TAG, "sonos queue mutation failed: ${error.message}")
+                onRollback()
+            } finally {
+                sonosQueueMutationInFlightCount.decrementAndGet()
+            }
         }
     }
 

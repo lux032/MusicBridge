@@ -317,6 +317,9 @@ class AppState(
     /** Latest playlist write feedback for the global snackbar. */
     var playlistNotice by mutableStateOf<PlaylistNotice?>(null)
         internal set
+    /** Latest playback-queue edit feedback shown inside the queue bottom sheet. */
+    var queueNotice by mutableStateOf<QueueNotice?>(null)
+        internal set
     var isPlaylistMutating by mutableStateOf(false)
         internal set
     /** 032 daily mixes for the home banner. */
@@ -804,12 +807,7 @@ class AppState(
         // reporter with an open session must stop heartbeating the deleted server.
         retireMusic032Reporter(serverId, tombstone = true, forget = true)
         if (miniPlayerState?.tracks?.any { it.sourceId == serverId } == true) {
-            albumPlaybackJob?.cancel()
-            playbackReportingJob?.cancel()
-            miniPlayerState = null
-            localPlaybackEngine.stopPlayback()
-            PlaybackForegroundService.stop(context)
-            LocalPlaybackService.stop(context)
+            playbackCoordinator.clearQueueAndStop(announce = false)
         }
         serverProfiles.removeAt(index)
         musicSourceClients.remove(serverId)
@@ -831,6 +829,11 @@ class AppState(
     }
 
     private fun activateServer(profile: MusicServerProfile, refreshAfterSave: Boolean) {
+        val previousServerId = connectionPreferences.id
+        if (previousServerId != profile.id && miniPlayerState != null) {
+            // Each server is an independent library/database: switch playback cleanly too.
+            playbackCoordinator.clearQueueAndStop(announce = false)
+        }
         connectionPreferences = profile
         appPreferences.saveServerProfiles(serverProfiles, profile.id)
         clearLibraryForServerChange()
@@ -994,6 +997,10 @@ class AppState(
         if (playlistNotice?.id == id) playlistNotice = null
     }
 
+    fun consumeQueueNotice(id: Long) {
+        if (queueNotice?.id == id) queueNotice = null
+    }
+
     fun replaceAlbumInState(updatedAlbum: MusicAlbum) = libraryCoordinator.replaceAlbumInState(updatedAlbum)
 
     fun replaceTrackInState(updatedTrack: MusicTrack) = libraryCoordinator.replaceTrackInState(updatedTrack)
@@ -1137,6 +1144,18 @@ class AppState(
     fun enqueueTrack(track: MusicTrack, placement: QueuePlacement) =
         playbackCoordinator.enqueueTracks(listOf(track), placement, track.title)
 
+    fun moveQueueTrack(fromIndex: Int, toIndex: Int) =
+        playbackCoordinator.moveQueueTrack(fromIndex, toIndex)
+
+    fun removeQueueTrack(index: Int) =
+        playbackCoordinator.removeQueueTrack(index)
+
+    fun clearUpcomingTracksKeepCurrent() =
+        playbackCoordinator.clearUpcomingTracksKeepCurrent()
+
+    fun clearQueueAndStop() =
+        playbackCoordinator.clearQueueAndStop(announce = true)
+
     fun enqueueAlbum(album: MusicAlbum, placement: QueuePlacement) =
         playbackCoordinator.enqueueAlbum(album, placement)
 
@@ -1218,11 +1237,19 @@ class AppState(
         Log.i("PlaybackSession", "adopted cold-started session (${tracks.size} tracks at index $index)")
     }
 
+    internal fun clearSavedPlaybackSession() {
+        persistedTracks = null
+        persistedAlbum = null
+        scope.launch(playbackSessionIo) { playbackSessionStore.clear() }
+    }
+
     private suspend fun restorePlaybackSession(saved: SavedPlaybackSession) {
         val track = saved.tracks[saved.currentIndex]
         val sourceId = track.sourceId.ifBlank { saved.album.sourceId }
-        if (serverProfiles.none { it.id == sourceId }) {
-            // The server it belonged to was deleted: the session can never play again.
+        if (serverProfiles.none { it.id == sourceId } ||
+            (connectionPreferences.id.isNotBlank() && sourceId != connectionPreferences.id)
+        ) {
+            // The server it belonged to was deleted or is no longer the active server.
             withContext(playbackSessionIo) { playbackSessionStore.clear() }
             return
         }

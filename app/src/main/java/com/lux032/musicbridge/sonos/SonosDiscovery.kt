@@ -334,6 +334,52 @@ class SonosController {
         addToQueue(room, item, index + 1)
     }
 
+    /** Removes a single entry at 0-based [index] from the room's queue (Q:0). */
+    suspend fun removeTrackFromQueue(room: SonosRoom, index: Int) = withContext(Dispatchers.IO) {
+        avTransport(room, "RemoveTrackFromQueue", "<ObjectID>Q:0/${index + 1}</ObjectID><UpdateID>0</UpdateID>")
+    }
+
+    /** Removes [count] contiguous entries starting at 0-based [startIndex] from the room's queue. */
+    suspend fun removeTrackRangeFromQueue(room: SonosRoom, startIndex: Int, count: Int) = withContext(Dispatchers.IO) {
+        if (count <= 0) return@withContext
+        if (count == 1) {
+            avTransport(room, "RemoveTrackFromQueue", "<ObjectID>Q:0/${startIndex + 1}</ObjectID><UpdateID>0</UpdateID>")
+            return@withContext
+        }
+        avTransport(
+            room,
+            "RemoveTrackRangeFromQueue",
+            "<UpdateID>0</UpdateID><StartingIndex>${startIndex + 1}</StartingIndex><NumberOfTracks>$count</NumberOfTracks>",
+        )
+    }
+
+    /** Moves a single entry from 0-based [fromIndex] to 0-based [toIndex] without interrupting playback. */
+    suspend fun reorderTrackInQueue(room: SonosRoom, fromIndex: Int, toIndex: Int) = withContext(Dispatchers.IO) {
+        if (fromIndex == toIndex) return@withContext
+        val insertBefore = com.lux032.musicbridge.sonosInsertBeforeForMove(fromIndex, toIndex)
+        avTransport(
+            room,
+            "ReorderTracksInQueue",
+            "<StartingIndex>${fromIndex + 1}</StartingIndex><NumberOfTracks>1</NumberOfTracks>" +
+                "<InsertBefore>$insertBefore</InsertBefore><UpdateID>0</UpdateID>",
+        )
+    }
+
+    /** Seeks to 0-based queue position [index] without forcing playback to start (preserves paused state). */
+    suspend fun seekQueueIndex(room: SonosRoom, index: Int) = withContext(Dispatchers.IO) {
+        val media = parseXml(avTransport(room, "GetMediaInfo"))
+        if (media.textOfFirstTag("CurrentURI")?.startsWith("x-rincon-queue:") != true) useQueue(room)
+        retryWhileTransitioning {
+            avTransport(room, "Seek", "<Unit>TRACK_NR</Unit><Target>${index + 1}</Target>")
+        }
+    }
+
+    /** Stops playback on the room and empties its queue (Q:0). */
+    suspend fun clearQueue(room: SonosRoom) = withContext(Dispatchers.IO) {
+        runCatching { avTransport(room, "Stop") }
+        avTransport(room, "RemoveAllTracksFromQueue")
+    }
+
     /** Jumps to queue position [index] (0-based) and plays, re-selecting the queue if needed. */
     suspend fun playQueueIndex(room: SonosRoom, index: Int, positionSeconds: Int = 0) = withContext(Dispatchers.IO) {
         val media = parseXml(avTransport(room, "GetMediaInfo"))

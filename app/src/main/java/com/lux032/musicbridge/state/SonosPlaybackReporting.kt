@@ -164,7 +164,9 @@ internal fun AppStatePlaybackCoordinator.startPlaybackReporting(
             }
 
             val currentQueue = latestMiniPlayerState.tracks
+            if (isSonosQueueMutationInFlight) continue
             val status = runCatching { state.sonosController.getPlaybackStatus(room) }.getOrNull() ?: continue
+            if (isSonosQueueMutationInFlight) continue
             // Queue mode: Sonos advances on its own; map its queue position back.
             val queueSession = sonosQueueFor(room, currentQueue)
             val queueIndex = queueSession?.let { resolveSonosQueueIndex(it.entries, status) }

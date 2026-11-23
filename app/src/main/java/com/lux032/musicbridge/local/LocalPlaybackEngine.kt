@@ -1143,7 +1143,127 @@ class LocalPlaybackEngine(
         refreshCachedOriginalKeys()
         positionBaseMillis.addAll(safeIndex, List(items.size) { 0L })
         if (lastCurrentIndex >= safeIndex) lastCurrentIndex += items.size
+        if (recoveryTargetIndex != C.INDEX_UNSET && recoveryTargetIndex >= safeIndex) {
+            recoveryTargetIndex += items.size
+        }
+        pendingCachedTranscodeSeek = pendingCachedTranscodeSeek?.let { seek ->
+            if (seek.index >= safeIndex) seek.copy(index = seek.index + items.size) else seek
+        }
         player.addMediaItems(safeIndex, items.map(::buildMediaItem))
+        if (!PrecacheGate.shouldYield()) schedulePrecacheFrom(currentIndex)
+    }
+
+    /** Moves one queue item without interrupting playback; the playing index follows the track. */
+    fun moveQueueItem(fromIndex: Int, toIndex: Int): Boolean {
+        if (!isActive || fromIndex !in queueItems.indices || toIndex !in queueItems.indices || fromIndex == toIndex) {
+            return false
+        }
+        val movedItem = queueItems.removeAt(fromIndex)
+        queueItems.add(toIndex, movedItem)
+        val movedBase = positionBaseMillis.removeAt(fromIndex)
+        positionBaseMillis.add(toIndex, movedBase)
+        lastCurrentIndex = com.lux032.musicbridge.remapIndexAfterMove(lastCurrentIndex, fromIndex, toIndex)
+        if (recoveryTargetIndex != C.INDEX_UNSET) {
+            recoveryTargetIndex = com.lux032.musicbridge.remapIndexAfterMove(recoveryTargetIndex, fromIndex, toIndex)
+        }
+        pendingCachedTranscodeSeek = pendingCachedTranscodeSeek?.let { seek ->
+            seek.copy(index = com.lux032.musicbridge.remapIndexAfterMove(seek.index, fromIndex, toIndex))
+        }
+        player.moveMediaItem(fromIndex, toIndex)
+        if (!PrecacheGate.shouldYield()) schedulePrecacheFrom(currentIndex)
+        return true
+    }
+
+    /**
+     * Removes the item at [index]. Removing a non-current track leaves audio uninterrupted;
+     * removing the currently playing track advances to the next track (or previous if last)
+     * while preserving play/pause state. Removing the sole track stops and clears the engine.
+     */
+    fun removeQueueItem(index: Int): Boolean {
+        if (!isActive || index !in queueItems.indices || index !in 0 until player.mediaItemCount) {
+            return false
+        }
+        if (queueItems.size == 1) {
+            clearQueue()
+            return true
+        }
+        val wasCurrent = index == currentIndex
+        val shouldPlay = player.playWhenReady
+        queueItems.removeAt(index)
+        positionBaseMillis.removeAt(index)
+        refreshCachedOriginalKeys()
+        recoveryTargetIndex = when {
+            recoveryTargetIndex == C.INDEX_UNSET -> C.INDEX_UNSET
+            recoveryTargetIndex == index -> C.INDEX_UNSET
+            index < recoveryTargetIndex -> recoveryTargetIndex - 1
+            else -> recoveryTargetIndex
+        }
+        pendingCachedTranscodeSeek = pendingCachedTranscodeSeek?.let { seek ->
+            when {
+                seek.index == index -> null
+                index < seek.index -> seek.copy(index = seek.index - 1)
+                else -> seek
+            }
+        }
+        if (wasCurrent) {
+            resetTruncatedRestartGuard()
+            resetBufferingWatchdog()
+            recoveryBudget.resetForUserAction()
+            val targetIndex = index.coerceAtMost(queueItems.lastIndex)
+            player.removeMediaItem(index)
+            lastCurrentIndex = targetIndex
+            seekToItem(targetIndex, 0L)
+            ensurePrepared(shouldPlay)
+        } else {
+            if (lastCurrentIndex != C.INDEX_UNSET && index < lastCurrentIndex) {
+                lastCurrentIndex -= 1
+            }
+            player.removeMediaItem(index)
+        }
+        if (!PrecacheGate.shouldYield()) schedulePrecacheFrom(currentIndex)
+        return true
+    }
+
+    /** Removes every queue item before and after the currently playing track without interrupting audio. */
+    fun clearUpcomingKeepCurrent(): Boolean {
+        val cur = currentIndex
+        if (!isActive || cur !in queueItems.indices || queueItems.size <= 1) return false
+        val keepItem = queueItems[cur]
+        val keepBase = positionBaseMillis[cur]
+        val total = player.mediaItemCount
+        if (cur + 1 < total) {
+            player.removeMediaItems(cur + 1, total)
+        }
+        if (cur > 0) {
+            player.removeMediaItems(0, cur)
+        }
+        queueItems.clear()
+        queueItems.add(keepItem)
+        positionBaseMillis.clear()
+        positionBaseMillis.add(keepBase)
+        lastCurrentIndex = 0
+        recoveryTargetIndex = C.INDEX_UNSET
+        pendingCachedTranscodeSeek = pendingCachedTranscodeSeek
+            ?.takeIf { it.index == cur }
+            ?.copy(index = 0)
+        refreshCachedOriginalKeys()
+        return true
+    }
+
+    /** Stops playback and empties the ExoPlayer media queue completely. */
+    fun clearQueue() {
+        stopPlayback()
+        player.clearMediaItems()
+        queueItems.clear()
+        positionBaseMillis.clear()
+        cachedOriginalKeys = emptySet()
+        lastCurrentIndex = C.INDEX_UNSET
+        recoveryTargetIndex = C.INDEX_UNSET
+        pendingCachedTranscodeSeek = null
+        hasUnrecoveredPlaybackError = false
+        lastCurrentTrackFullyLoaded = false
+        lastPrecacheCompletenessKey = null
+        LocalAudioCache.cancelPrecache()
     }
 
     fun replaceQueueItems(replacements: Map<Int, LocalQueueItem>, precacheCount: Int) {

@@ -122,6 +122,12 @@ internal fun PlaybackDetailSection(
     onArtistClick: (String?, List<ArtistRef>) -> Unit,
     onToggleTrackFavorite: (MusicTrack) -> Unit,
     onSelectTrack: (Int) -> Unit,
+    onMoveQueueTrack: (Int, Int) -> Unit = { _, _ -> },
+    onRemoveQueueTrack: (Int) -> Unit = {},
+    onClearUpcomingKeepCurrent: () -> Unit = {},
+    onClearQueueAndStop: () -> Unit = {},
+    queueNotice: QueueNotice? = null,
+    onConsumeQueueNotice: (Long) -> Unit = {},
     onSelectPlaybackMode: (PlaybackMode) -> Unit,
     onSelectTarget: (PlaybackTarget) -> Unit,
     onRefreshRooms: () -> Unit,
@@ -1004,93 +1010,18 @@ internal fun PlaybackDetailSection(
     }
 
     if (isPlaylistSheetVisible) {
-        ModalBottomSheet(
-            onDismissRequest = { isPlaylistSheetVisible = false },
-            containerColor = LocalArtworkPalette.current.backgroundBottom,
-        ) {
-            // Lazy so a long queue does not compose hundreds of rows at once; start at the
-            // currently playing track instead of the top.
-            val queueListState = rememberLazyListState(
-                initialFirstVisibleItemIndex = currentState.currentIndex.coerceIn(0, currentState.tracks.lastIndex.coerceAtLeast(0)),
-            )
-            val nowPlayingMarker = LocalNowPlaying.current
-            LazyColumn(
-                state = queueListState,
-                modifier = Modifier.fillMaxWidth(),
-                contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 32.dp),
-                verticalArrangement = Arrangement.spacedBy(2.dp),
-            ) {
-                item(key = "queue-title", contentType = "queue-title") {
-                    Text(
-                        text = Strings.playlist,
-                        style = MaterialTheme.typography.titleLarge,
-                        color = AppColors.TextPrimary,
-                        modifier = Modifier.padding(start = 6.dp, bottom = 10.dp),
-                    )
-                }
-                itemsIndexed(
-                    items = currentState.tracks,
-                    key = { index, track -> "$index-${track.ratingKey}" },
-                    contentType = { _, _ -> "queue-track" },
-                ) { index, track ->
-                    val isCurrent = index == currentState.currentIndex
-                    ChoiceRow(
-                        selected = isCurrent,
-                        showCheck = false,
-                        onClick = {
-                            isPlaylistSheetVisible = false
-                            onSelectTrack(index)
-                        },
-                        modifier = Modifier
-                            .animateItem(fadeInSpec = null, fadeOutSpec = null)
-                            .fillMaxWidth(),
-                    ) {
-                        // Queue position (not track identity) decides "current": the same track
-                        // can sit in the queue more than once.
-                        TrackNumberSlot(
-                            text = "${index + 1}",
-                            nowPlaying = if (isCurrent) nowPlayingMarker else null,
-                            modifier = Modifier.width(24.dp),
-                        )
-                        AsyncAlbumArtwork(
-                            imageUrl = track.thumbUrl,
-                            title = track.title,
-                            modifier = Modifier.size(40.dp),
-                            thumbnailSize = 48.dp,
-                            fit = ArtworkFit.Contain,
-                            alignment = Alignment.Center,
-                            shape = RoundedCornerShape(4.dp),
-                        )
-                        Column(
-                            modifier = Modifier.weight(1f),
-                            verticalArrangement = Arrangement.spacedBy(2.dp),
-                        ) {
-                            Text(
-                                text = track.title,
-                                color = if (isCurrent) LocalArtworkPalette.current.accent else AppColors.TextPrimary,
-                                fontWeight = if (isCurrent) FontWeight.SemiBold else FontWeight.Medium,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                            Text(
-                                text = track.albumTitle ?: currentState.album.title,
-                                color = AppColors.TextSecondary,
-                                style = MaterialTheme.typography.bodySmall,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                        track.durationMillis?.let {
-                            Text(
-                                text = formatDuration(it),
-                                color = AppColors.TextTertiary,
-                                style = MaterialTheme.typography.bodySmall,
-                            )
-                        }
-                    }
-                }
-            }
-        }
+        PlaybackQueueSheet(
+            state = currentState,
+            playbackMode = playbackMode,
+            queueNotice = queueNotice,
+            onConsumeQueueNotice = onConsumeQueueNotice,
+            onSelectTrack = onSelectTrack,
+            onMoveTrack = onMoveQueueTrack,
+            onRemoveTrack = onRemoveQueueTrack,
+            onClearUpcomingKeepCurrent = onClearUpcomingKeepCurrent,
+            onClearQueueAndStop = onClearQueueAndStop,
+            onDismiss = { isPlaylistSheetVisible = false },
+        )
     }
 
     if (isModeDialogVisible) {
