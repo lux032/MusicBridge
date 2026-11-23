@@ -118,11 +118,13 @@ fun SettingsScreen(
                 localOpusBitrate = state.localOpusBitrate,
                 wifiPrecacheCount = state.wifiPrecacheCount,
                 cellularPrecacheCount = state.cellularPrecacheCount,
+                autoPlaySimilarEnabled = state.autoPlaySimilarEnabled,
                 onWifiQualityChange = actions.onWifiQualityChange,
                 onCellularQualityChange = actions.onCellularQualityChange,
                 onLocalOpusBitrateChange = actions.onLocalOpusBitrateChange,
                 onWifiPrecacheCountChange = actions.onWifiPrecacheCountChange,
                 onCellularPrecacheCountChange = actions.onCellularPrecacheCountChange,
+                onAutoPlaySimilarChange = actions.onAutoPlaySimilarChange,
             )
 
             // 3. Storage & Cache

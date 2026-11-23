@@ -19,10 +19,11 @@ internal data class Music032Capabilities(
     val features: Set<String>,
     val transcodeFormats: Map<String, Music032FormatCaps>,
     val artworkSizes: List<Int>,
+    val similarityMethod: String? = null,
 ) {
     fun hasFeature(name: String) = name in features
     fun isFormatAvailable(fmt: String) = transcodeFormats[fmt]?.available == true
-    companion object { val LEGACY = Music032Capabilities(1, emptySet(), emptyMap(), emptyList()) }
+    companion object { val LEGACY = Music032Capabilities(1, emptySet(), emptyMap(), emptyList(), null) }
 }
 
 internal object Music032Json {
@@ -48,6 +49,7 @@ internal object Music032Json {
                     value?.optJSONArray("bitrates").toInts(), value?.optJSONArray("maxSampleRates").toInts())
             }.orEmpty(),
             root.optJSONObject("artwork")?.optJSONArray("sizes").toInts(),
+            root.optJSONObject("similarity")?.optString("method")?.trim()?.takeIf { it.isNotEmpty() },
         )
     }.getOrDefault(Music032Capabilities.LEGACY)
 

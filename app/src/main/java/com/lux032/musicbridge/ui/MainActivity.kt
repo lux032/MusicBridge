@@ -334,6 +334,12 @@ fun MusicBridgeApp(
             null
         }
     }
+    val similarRadioLauncher = remember(state) {
+        SimilarRadioLauncher(
+            canStart = state::canStartSimilarRadio,
+            startFromTrack = state::startSimilarRadioFromTrack,
+        )
+    }
 
     // The player and work detail paint edge-to-edge and apply safe insets internally;
     // other sections sit inside the scaffold's safe padding while the root gradient
@@ -349,6 +355,7 @@ fun MusicBridgeApp(
         LocalNowPlaying provides nowPlayingMarker,
         LocalSharedTransitionScope provides this@SharedTransitionLayout,
         LocalPlaylistEditor provides playlistEditor,
+        LocalSimilarRadioLauncher provides similarRadioLauncher,
     ) {
     Box(
         modifier = modifier
@@ -692,6 +699,15 @@ fun MusicBridgeApp(
                             onClearQueueAndStop = state::clearQueueAndStop,
                             queueNotice = state.queueNotice,
                             onConsumeQueueNotice = state::consumeQueueNotice,
+                            similarRadioState = state.similarRadioState,
+                            isSimilarRadioSupported = state.isSimilarRadioSupportedForCurrentQueue,
+                            isAutoContinueArmed = state.isAutoContinueArmed,
+                            onStartSimilarRadioFromCurrent = state::startSimilarRadioFromCurrentTrack,
+                            onToggleAutoPlaySimilar = { enabled ->
+                                state.setAutoPlaySimilarEnabled(enabled, announceInQueue = true)
+                            },
+                            onRefreshAutoSimilarBatch = state::refreshAutoSimilarBatch,
+                            onLoadMoreAutoSimilarTracks = state::loadMoreAutoSimilarTracks,
                             onSelectPlaybackMode = state::updatePlaybackMode,
                             onSelectTarget = state::switchPlaybackTarget,
                             onRefreshRooms = state::refreshSonosRooms,
@@ -1061,6 +1077,7 @@ fun MusicBridgeApp(
                             localCacheSize = state.localCacheSize,
                             downloadWifiOnly = state.downloadWifiOnly,
                             downloadFormat = state.downloadFormat,
+                            autoPlaySimilarEnabled = state.similarRadioState.autoPlayEnabled,
                             homeLayout = state.homeLayout,
                         ),
                         actions = SettingsActions(
@@ -1074,6 +1091,9 @@ fun MusicBridgeApp(
                             onLocalCacheSizeChange = state::updateLocalCacheSize,
                             onDownloadWifiOnlyChange = state::updateDownloadWifiOnly,
                             onDownloadFormatChange = state::updateDownloadFormat,
+                            onAutoPlaySimilarChange = { enabled ->
+                                state.setAutoPlaySimilarEnabled(enabled, announceInQueue = false)
+                            },
                             onClearLocalCache = state::clearLocalAudioCache,
                             onClearAllDownloads = state::clearAllDownloads,
                             onSaveServer = state::saveServerProfile,

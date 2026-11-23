@@ -1,5 +1,6 @@
 package com.lux032.musicbridge
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -12,6 +13,7 @@ import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LibraryAdd
+import androidx.compose.material.icons.filled.Radio
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -45,6 +47,8 @@ internal fun PlaybackMoreSheet(
     onOpenWork: (String, Long) -> Unit,
     onOpenArtist: (ArtistRef) -> Unit,
     onAddToPlaylist: (() -> Unit)?,
+    isRadioMode: Boolean = false,
+    onStartSimilarRadio: (() -> Unit)? = null,
     onDismiss: () -> Unit,
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = palette.backgroundBottom) {
@@ -53,6 +57,8 @@ internal fun PlaybackMoreSheet(
                 track, artworkUrl, artistAlbum, technicalDetails, loadWorks, loadWorkInfo,
                 onOpenWork = { source, id -> onDismiss(); onOpenWork(source, id) },
                 onAddToPlaylist = onAddToPlaylist?.let { action -> { onDismiss(); action() } },
+                isRadioMode = isRadioMode,
+                onStartSimilarRadio = onStartSimilarRadio?.let { action -> { onDismiss(); action() } },
                 onDismiss = onDismiss,
                 loadCredits = loadCredits,
                 onOpenArtist = { ref -> onDismiss(); onOpenArtist(ref) },
@@ -72,6 +78,8 @@ internal fun PlaybackMoreContent(
     onOpenWork: (String, Long) -> Unit,
     onAddToPlaylist: (() -> Unit)?,
     onDismiss: () -> Unit,
+    isRadioMode: Boolean = false,
+    onStartSimilarRadio: (() -> Unit)? = null,
     loadCredits: suspend (MusicTrack) -> List<TrackCredit> = { emptyList() },
     onOpenArtist: (ArtistRef) -> Unit = {},
 ) {
@@ -130,8 +138,48 @@ internal fun PlaybackMoreContent(
                 Hairline()
             }
         }
+        onStartSimilarRadio?.let { startRadio -> item("start-similar-radio") {
+            val accent = LocalArtworkPalette.current.accent
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 12.dp)
+                    .heightIn(min = 60.dp)
+                    .clickable(onClick = startRadio),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(KeyColors.Tonal),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Filled.Radio, contentDescription = null, tint = accent, modifier = Modifier.size(20.dp))
+                }
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    Text(
+                        text = if (isRadioMode) Strings.restartSimilarRadio else Strings.startSimilarRadio,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = AppColors.TextPrimary,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    Text(
+                        text = Strings.startSimilarRadioSub,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AppColors.TextSecondary,
+                    )
+                }
+                Icon(Icons.Filled.ChevronRight, null, tint = AppColors.TextSecondary, modifier = Modifier.size(20.dp))
+            }
+            if (onAddToPlaylist != null) Hairline(Modifier.padding(top = 4.dp))
+        } }
         onAddToPlaylist?.let { add -> item("add-to-playlist") {
-            Row(Modifier.fillMaxWidth().padding(top = 12.dp).heightIn(min = 58.dp).clickable(onClick = add),
+            Row(Modifier.fillMaxWidth().padding(top = if (onStartSimilarRadio != null) 4.dp else 12.dp).heightIn(min = 58.dp).clickable(onClick = add),
                 horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Filled.LibraryAdd, null, tint = AppColors.TextSecondary, modifier = Modifier.size(22.dp))
                 Text(Strings.addToPlaylist, style = MaterialTheme.typography.bodyLarge, color = AppColors.TextPrimary,
@@ -140,8 +188,8 @@ internal fun PlaybackMoreContent(
             }
         } }
         if (credits.isNotEmpty()) item("credits") {
-            // Works and the header already end on a hairline; only the playlist row needs one.
-            if (onAddToPlaylist != null) Hairline(Modifier.padding(top = 4.dp))
+            // Works and the header already end on a hairline; only the action rows need one.
+            if (onAddToPlaylist != null || onStartSimilarRadio != null) Hairline(Modifier.padding(top = 4.dp))
             Text(Strings.trackCredits, style = MaterialTheme.typography.labelMedium,
                 color = AppColors.TextSecondary, modifier = Modifier.padding(top = 16.dp, bottom = 4.dp))
             credits.forEach { credit -> PlaybackCreditRow(credit, onOpenArtist) }

@@ -150,7 +150,8 @@ class AppState(
     val activeDownloadProgress = offlineDownloadManager.downloadProgress
     val downloadTasks = offlineDownloadManager.downloadTasks
     internal val libraryCoordinator = AppStateLibraryCoordinator(this)
-    private val playbackCoordinator = AppStatePlaybackCoordinator(this)
+    internal val playbackCoordinator = AppStatePlaybackCoordinator(this)
+    internal val similarRadioCoordinator = AppStateSimilarRadioCoordinator(this)
     private val playlistCoordinator = AppStatePlaylistCoordinator(this)
     private val dailyMixCoordinator = AppStateDailyMixCoordinator(this)
     private val worksCoordinator = AppStateWorksCoordinator(this)
@@ -323,6 +324,11 @@ class AppState(
         internal set
     /** Latest playback-queue edit feedback shown inside the queue bottom sheet. */
     var queueNotice by mutableStateOf<QueueNotice?>(null)
+        internal set
+    /** State of 032 Track Radio and end-of-queue auto-continue. */
+    var similarRadioState by mutableStateOf(
+        SimilarRadioState(autoPlayEnabled = appPreferences.loadAutoPlaySimilarEnabled()),
+    )
         internal set
     var isPlaylistMutating by mutableStateOf(false)
         internal set
@@ -936,6 +942,7 @@ class AppState(
         worksCoordinator.reset()
         searchCoordinator.reset()
         searchCoordinator.loadHistory()
+        similarRadioCoordinator.resetForEmptyQueue()
     }
 
     fun openAlbumDetail(album: MusicAlbum) = libraryCoordinator.openAlbumDetail(album)
@@ -1237,6 +1244,30 @@ class AppState(
     fun clearQueueAndStop() =
         playbackCoordinator.clearQueueAndStop(announce = true)
 
+    fun canStartSimilarRadio(track: MusicTrack): Boolean =
+        similarRadioCoordinator.canStartSimilarRadio(track)
+
+    val isSimilarRadioSupportedForCurrentQueue: Boolean
+        get() = similarRadioCoordinator.isCurrentQueueSupported()
+
+    val isAutoContinueArmed: Boolean
+        get() = similarRadioCoordinator.isAutoContinueArmed()
+
+    fun setAutoPlaySimilarEnabled(enabled: Boolean, announceInQueue: Boolean = false) =
+        similarRadioCoordinator.setAutoPlayEnabled(enabled, announceInQueue = announceInQueue)
+
+    fun startSimilarRadioFromCurrentTrack() =
+        similarRadioCoordinator.startRadioFromCurrentTrack()
+
+    fun startSimilarRadioFromTrack(track: MusicTrack, fallbackAlbum: MusicAlbum? = null) =
+        similarRadioCoordinator.startRadioFromTrack(track, fallbackAlbum)
+
+    fun refreshAutoSimilarBatch() =
+        similarRadioCoordinator.refreshAutoSimilarBatch()
+
+    fun loadMoreAutoSimilarTracks() =
+        similarRadioCoordinator.loadMoreAutoSimilarTracks()
+
     fun enqueueAlbum(album: MusicAlbum, placement: QueuePlacement) =
         playbackCoordinator.enqueueAlbum(album, placement)
 
@@ -1318,6 +1349,7 @@ class AppState(
         persistedQueueId = saved.queueId
         persistedTracks = tracks
         persistedAlbum = saved.album
+        similarRadioState = similarRadioState.copy(manualQueueCount = tracks.size)
         localPlaybackCoordinator.adoptColdStartedSession()
         Log.i("PlaybackSession", "adopted cold-started session (${tracks.size} tracks at index $index)")
     }
@@ -1354,6 +1386,7 @@ class AppState(
             durationMillis = saved.durationMillis ?: track.durationMillis,
         )
         playbackCoordinator.markRestoredSession(saved.tracks)
+        similarRadioState = similarRadioState.copy(manualQueueCount = saved.tracks.size)
         // Already on disk: the observer must not rewrite it under a new id.
         persistedQueueId = saved.queueId
         persistedTracks = saved.tracks

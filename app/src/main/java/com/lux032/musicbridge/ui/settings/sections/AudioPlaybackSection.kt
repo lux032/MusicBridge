@@ -1,6 +1,7 @@
 package com.lux032.musicbridge.ui.settings.sections
 
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AllInclusive
 import androidx.compose.material.icons.filled.Audiotrack
 import androidx.compose.material.icons.filled.CellTower
 import androidx.compose.material.icons.filled.CloudDownload
@@ -18,6 +19,7 @@ import com.lux032.musicbridge.Strings
 import com.lux032.musicbridge.ui.settings.components.SettingsDivider
 import com.lux032.musicbridge.ui.settings.components.SettingsGroup
 import com.lux032.musicbridge.ui.settings.components.SettingsItem
+import com.lux032.musicbridge.ui.settings.components.SettingsSwitchItem
 import com.lux032.musicbridge.ui.settings.dialogs.SettingOptionSheet
 
 @Composable
@@ -27,11 +29,13 @@ fun AudioPlaybackSection(
     localOpusBitrate: LocalOpusBitrate,
     wifiPrecacheCount: LocalPrecacheCount,
     cellularPrecacheCount: LocalPrecacheCount,
+    autoPlaySimilarEnabled: Boolean = true,
     onWifiQualityChange: (LocalStreamingLimit) -> Unit,
     onCellularQualityChange: (LocalStreamingLimit) -> Unit,
     onLocalOpusBitrateChange: (LocalOpusBitrate) -> Unit,
     onWifiPrecacheCountChange: (LocalPrecacheCount) -> Unit,
     onCellularPrecacheCountChange: (LocalPrecacheCount) -> Unit,
+    onAutoPlaySimilarChange: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     var isWifiQualitySheetVisible by remember { mutableStateOf(false) }
@@ -142,6 +146,15 @@ fun AudioPlaybackSection(
             value = cellularPrecacheCount.label,
             icon = Icons.Filled.CloudDownload,
             onClick = { isCellularPrecacheSheetVisible = true },
+        )
+        SettingsDivider()
+
+        SettingsSwitchItem(
+            title = Strings.autoPlaySimilarTitle,
+            subtitle = Strings.autoPlaySimilarSubtitle,
+            checked = autoPlaySimilarEnabled,
+            onCheckedChange = onAutoPlaySimilarChange,
+            icon = Icons.Filled.AllInclusive,
         )
     }
 }

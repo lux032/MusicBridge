@@ -1415,6 +1415,7 @@ private fun PlaylistDetailTrackRow(
                 if (isDownloaded) onDeleteDownloadedTrack(track) else onDownloadTrack(track)
             },
             onAddToPlaylist = addTrackToPlaylistAction(track),
+            onStartSimilarRadio = startSimilarRadioAction(track),
             onRemoveFromPlaylist = onRemoveFromPlaylist?.let { remove -> { remove(track) } },
             recommendationBlocked = isRecommendationBlocked,
             onToggleRecommendationBlock = onToggleRecommendationBlock,

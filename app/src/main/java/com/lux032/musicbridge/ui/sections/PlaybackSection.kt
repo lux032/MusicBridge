@@ -128,6 +128,13 @@ internal fun PlaybackDetailSection(
     onClearQueueAndStop: () -> Unit = {},
     queueNotice: QueueNotice? = null,
     onConsumeQueueNotice: (Long) -> Unit = {},
+    similarRadioState: SimilarRadioState = SimilarRadioState(),
+    isSimilarRadioSupported: Boolean = false,
+    isAutoContinueArmed: Boolean = false,
+    onStartSimilarRadioFromCurrent: () -> Unit = {},
+    onToggleAutoPlaySimilar: (Boolean) -> Unit = {},
+    onRefreshAutoSimilarBatch: () -> Unit = {},
+    onLoadMoreAutoSimilarTracks: () -> Unit = {},
     onSelectPlaybackMode: (PlaybackMode) -> Unit,
     onSelectTarget: (PlaybackTarget) -> Unit,
     onRefreshRooms: () -> Unit,
@@ -713,6 +720,7 @@ internal fun PlaybackDetailSection(
             PlayerToolButton(
                 icon = Icons.Filled.QueueMusic,
                 label = Strings.queueShort,
+                showBadgeDot = isAutoContinueArmed,
                 onClick = { isPlaylistSheetVisible = true },
             )
             PlayerToolButton(
@@ -1010,6 +1018,8 @@ internal fun PlaybackDetailSection(
             onOpenWork = onOpenWork,
             onOpenArtist = { ref -> onArtistClick(ref.name, listOf(ref)) },
             onAddToPlaylist = addTrackToPlaylistAction(currentTrack),
+            isRadioMode = similarRadioState.radioSeed != null,
+            onStartSimilarRadio = if (isSimilarRadioSupported) onStartSimilarRadioFromCurrent else null,
             onDismiss = { isMoreSheetVisible = false },
         )
     }
@@ -1020,6 +1030,13 @@ internal fun PlaybackDetailSection(
             playbackMode = playbackMode,
             queueNotice = queueNotice,
             onConsumeQueueNotice = onConsumeQueueNotice,
+            similarRadioState = similarRadioState,
+            isSimilarRadioSupported = isSimilarRadioSupported,
+            sleepStopAfterCurrent = sleepTimerState.stopAfterCurrentTrack,
+            onToggleAutoPlaySimilar = onToggleAutoPlaySimilar,
+            onRefreshAutoSimilarBatch = onRefreshAutoSimilarBatch,
+            onLoadMoreAutoSimilarTracks = onLoadMoreAutoSimilarTracks,
+            onSwitchToSequential = { onSelectPlaybackMode(PlaybackMode.Sequential) },
             onSelectTrack = onSelectTrack,
             onMoveTrack = onMoveQueueTrack,
             onRemoveTrack = onRemoveQueueTrack,
@@ -1395,9 +1412,11 @@ private fun PlayerToolButton(
     label: String,
     onClick: () -> Unit,
     selected: Boolean = false,
+    showBadgeDot: Boolean = false,
 ) {
+    val palette = LocalArtworkPalette.current
     val tint by animateColorAsState(
-        targetValue = if (selected) LocalArtworkPalette.current.accent else AppColors.TextSecondary,
+        targetValue = if (selected) palette.accent else AppColors.TextSecondary,
         label = "player_tool_tint",
     )
     Column(
@@ -1409,7 +1428,19 @@ private fun PlayerToolButton(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(22.dp))
+        Box {
+            Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(22.dp))
+            if (showBadgeDot) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .offset(x = 3.dp, y = (-2).dp)
+                        .size(6.dp)
+                        .clip(CircleShape)
+                        .background(palette.accent),
+                )
+            }
+        }
         Text(
             text = label,
             color = tint,

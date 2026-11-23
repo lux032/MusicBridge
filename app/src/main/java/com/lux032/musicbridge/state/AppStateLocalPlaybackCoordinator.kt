@@ -113,6 +113,7 @@ internal class AppStateLocalPlaybackCoordinator(
                         durationMillis = track.durationMillis,
                     )
                     state.actionMessage = Strings.playingTrack(track.title)
+                    state.similarRadioCoordinator.maybeTriggerAutoContinue()
                 }
             }
 
@@ -182,6 +183,9 @@ internal class AppStateLocalPlaybackCoordinator(
                         failed = failed,
                     )
                     if (!failed && SleepTimerController.triggerIfStopAfterCurrentTrack()) {
+                        return@launch
+                    }
+                    if (!failed && state.similarRadioCoordinator.maybeTriggerAutoContinue(playFirstAppendedIfEnded = true)) {
                         return@launch
                     }
                     state.localPlaybackEngine.rewindToStartAndPause()
@@ -471,14 +475,21 @@ internal class AppStateLocalPlaybackCoordinator(
     }
 
     /** Inserts tracks into the live engine queue so its indices stay aligned with
-     *  [MiniPlayerState.tracks] after an enqueue or undo. */
-    fun insertIntoLocalQueue(insertIndex: Int, tracks: List<MusicTrack>) {
+     *  [MiniPlayerState.tracks] after an enqueue, undo, or auto-continue append. */
+    fun insertIntoLocalQueue(
+        insertIndex: Int,
+        tracks: List<MusicTrack>,
+        playIndexAfterInsert: Int? = null,
+    ) {
         val policy = state.currentLocalPlaybackPolicy()
         val resolvedTracks = tracks.map(::resolveTrackWithLocalDownload)
         state.scope.launch {
             val items = withContext(Dispatchers.IO) { resolvedTracks.map { it.toLocalQueueItem(policy) } }
             state.cachedOriginalTrackKeys = state.cachedOriginalTrackKeys + items.filter(LocalQueueItem::isCachedOriginal).map { it.cacheKey }
             state.localPlaybackEngine.insertQueueItems(insertIndex, items)
+            if (playIndexAfterInsert != null && state.localPlaybackEngine.isActive) {
+                state.localPlaybackEngine.playAt(playIndexAfterInsert, 0L)
+            }
         }
     }
 
@@ -507,6 +518,17 @@ internal class AppStateLocalPlaybackCoordinator(
 
     fun clearLocalUpcomingKeepCurrent() {
         state.localPlaybackEngine.clearUpcomingKeepCurrent()
+    }
+
+    /** Replaces every item strictly after [keepThroughIndex] in the live local queue without interrupting playback. */
+    fun replaceLocalUpcomingAfter(keepThroughIndex: Int, tracks: List<MusicTrack>) {
+        val policy = state.currentLocalPlaybackPolicy()
+        val resolvedTracks = tracks.map(::resolveTrackWithLocalDownload)
+        state.scope.launch {
+            val items = withContext(Dispatchers.IO) { resolvedTracks.map { it.toLocalQueueItem(policy) } }
+            state.cachedOriginalTrackKeys = state.cachedOriginalTrackKeys + items.filter(LocalQueueItem::isCachedOriginal).map { it.cacheKey }
+            state.localPlaybackEngine.replaceUpcomingAfter(keepThroughIndex, items)
+        }
     }
 
     fun clearLocalQueueAndStop() {

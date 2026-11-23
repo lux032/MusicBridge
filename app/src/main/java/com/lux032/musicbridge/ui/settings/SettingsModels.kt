@@ -28,6 +28,7 @@ data class SettingsViewState(
     val localCacheSize: LocalCacheSize,
     val downloadWifiOnly: Boolean = true,
     val downloadFormat: OfflineDownloadFormat = OfflineDownloadFormat.DEFAULT,
+    val autoPlaySimilarEnabled: Boolean = true,
     val homeLayout: List<HomeModuleConfig> = defaultHomeLayout(),
 )
 
@@ -45,6 +46,7 @@ data class SettingsActions(
     val onLocalCacheSizeChange: (LocalCacheSize) -> Unit,
     val onDownloadWifiOnlyChange: (Boolean) -> Unit = {},
     val onDownloadFormatChange: (OfflineDownloadFormat) -> Unit = {},
+    val onAutoPlaySimilarChange: (Boolean) -> Unit = {},
     val onClearLocalCache: () -> Unit,
     val onClearAllDownloads: () -> Unit,
     val onSaveServer: (MusicServerProfile, Boolean) -> String?,

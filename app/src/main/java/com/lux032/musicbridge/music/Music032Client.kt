@@ -314,6 +314,46 @@ class Music032Client(
         catch (error: Music032HttpException) { if (trackDetailNotFound(error.status)) null else throw error }
     }
 
+    /**
+     * Fetches similar tracks from `GET /api/v1/tracks/{id}/similar`.
+     * Retries once on HTTP 503 (similarity concurrency slot saturated) and falls back to
+     * the legacy `?limit=` query if an older server rejects `exclude`/`diverse` with HTTP 400.
+     */
+    suspend fun fetchSimilarTracks(
+        trackId: String,
+        limit: Int = 20,
+        excludeIds: Collection<Long> = emptyList(),
+        diverse: Boolean = true,
+    ): List<Music032SimilarTrack> = withContext(Dispatchers.IO) {
+        val numericId = trackId.trackIdPath()
+        val query = Music032SimilarJson.buildQuery(limit = limit, excludeIds = excludeIds, diverse = diverse)
+        val path = "/api/v1/tracks/$numericId/similar?$query"
+        val body = try {
+            fetchSimilarWithBusyRetry(path)
+        } catch (error: Music032HttpException) {
+            if (error.status == 400 && (diverse || excludeIds.isNotEmpty())) {
+                // Backward compatibility with older 032 servers before exclude/diverse params existed.
+                fetchSimilarWithBusyRetry("/api/v1/tracks/$numericId/similar?limit=${limit.coerceIn(1, 100)}")
+            } else {
+                throw error
+            }
+        }
+        Music032SimilarJson.parse(body, baseUrl, mediaToken, sourceId)
+    }
+
+    private suspend fun fetchSimilarWithBusyRetry(path: String): String {
+        return try {
+            cancellableGet(path)
+        } catch (error: Music032HttpException) {
+            if (error.status == 503) {
+                kotlinx.coroutines.delay(1_100L)
+                cancellableGet(path)
+            } else {
+                throw error
+            }
+        }
+    }
+
     override suspend fun fetchFavoriteTracks(): List<MusicTrack> = withContext(Dispatchers.IO) {
         fetchPaged("/api/v1/favorites/tracks") { parseTrack(it) }
     }

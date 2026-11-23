@@ -1026,6 +1026,7 @@ private fun AlbumTrackRow(
                 if (isDownloaded) onDeleteDownloadedTrack(track) else onDownloadTrack(track)
             },
             onAddToPlaylist = addTrackToPlaylistAction(track),
+            onStartSimilarRadio = startSimilarRadioAction(track, album),
         )
     }
 

@@ -380,6 +380,13 @@ class AppPreferences internal constructor(
         sharedPreferences.edit { putBoolean(KEY_DOWNLOAD_WIFI_ONLY, enabled) }
     }
 
+    fun loadAutoPlaySimilarEnabled(): Boolean =
+        sharedPreferences.getBoolean(KEY_AUTO_PLAY_SIMILAR, true)
+
+    fun saveAutoPlaySimilarEnabled(enabled: Boolean) {
+        sharedPreferences.edit { putBoolean(KEY_AUTO_PLAY_SIMILAR, enabled) }
+    }
+
     fun loadDownloadFormat(): OfflineDownloadFormat =
         OfflineDownloadFormat.fromId(sharedPreferences.getString(KEY_DOWNLOAD_FORMAT, null))
 
@@ -533,6 +540,7 @@ class AppPreferences internal constructor(
         private const val KEY_LOCAL_QUALITY_CELLULAR = "local_stream_quality_cellular_v1"
         private const val KEY_LOCAL_CACHE_SIZE = "local_cache_size_v1"
         private const val KEY_DOWNLOAD_WIFI_ONLY = "download_wifi_only_v1"
+        private const val KEY_AUTO_PLAY_SIMILAR = "auto_play_similar_v1"
         private const val KEY_DOWNLOAD_FORMAT = "download_format_v1"
         private const val KEY_LOCAL_STREAMING_LIMIT_WIFI = "local_streaming_limit_wifi_v2"
         private const val KEY_LOCAL_STREAMING_LIMIT_CELLULAR = "local_streaming_limit_cellular_v2"

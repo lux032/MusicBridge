@@ -1250,6 +1250,37 @@ class LocalPlaybackEngine(
         return true
     }
 
+    /**
+     * Replaces every item strictly after [keepThroughIndex] with [newItems] without
+     * interrupting the currently playing track (used for Track Radio & Refresh Auto Batch).
+     */
+    fun replaceUpcomingAfter(keepThroughIndex: Int, newItems: List<LocalQueueItem>): Boolean {
+        if (!isActive || keepThroughIndex !in queueItems.indices) return false
+        val removeStart = keepThroughIndex + 1
+        val total = player.mediaItemCount
+        if (removeStart < total) {
+            player.removeMediaItems(removeStart, total)
+        }
+        while (queueItems.size > removeStart) {
+            queueItems.removeAt(queueItems.lastIndex)
+        }
+        while (positionBaseMillis.size > removeStart) {
+            positionBaseMillis.removeAt(positionBaseMillis.lastIndex)
+        }
+        if (recoveryTargetIndex != C.INDEX_UNSET && recoveryTargetIndex >= removeStart) {
+            recoveryTargetIndex = C.INDEX_UNSET
+        }
+        pendingCachedTranscodeSeek = pendingCachedTranscodeSeek?.takeIf { it.index < removeStart }
+        if (newItems.isNotEmpty()) {
+            queueItems.addAll(newItems)
+            positionBaseMillis.addAll(List(newItems.size) { 0L })
+            player.addMediaItems(newItems.map(::buildMediaItem))
+        }
+        refreshCachedOriginalKeys()
+        if (!PrecacheGate.shouldYield()) schedulePrecacheFrom(currentIndex)
+        return true
+    }
+
     /** Stops playback and empties the ExoPlayer media queue completely. */
     fun clearQueue() {
         stopPlayback()

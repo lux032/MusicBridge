@@ -32,13 +32,17 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
+import androidx.compose.material.icons.filled.AllInclusive
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.MyLocation
+import androidx.compose.material.icons.filled.Radio
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -109,6 +113,13 @@ internal fun PlaybackQueueSheet(
     playbackMode: PlaybackMode,
     queueNotice: QueueNotice?,
     onConsumeQueueNotice: (Long) -> Unit,
+    similarRadioState: SimilarRadioState = SimilarRadioState(),
+    isSimilarRadioSupported: Boolean = false,
+    sleepStopAfterCurrent: Boolean = false,
+    onToggleAutoPlaySimilar: (Boolean) -> Unit = {},
+    onRefreshAutoSimilarBatch: () -> Unit = {},
+    onLoadMoreAutoSimilarTracks: () -> Unit = {},
+    onSwitchToSequential: () -> Unit = {},
     onSelectTrack: (Int) -> Unit,
     onMoveTrack: (Int, Int) -> Unit,
     onRemoveTrack: (Int) -> Unit,
@@ -136,6 +147,9 @@ internal fun PlaybackQueueSheet(
     var displayCurrentIndex by remember {
         mutableIntStateOf(state.currentIndex.coerceIn(0, (state.tracks.size - 1).coerceAtLeast(0)))
     }
+    var displayManualBoundary by remember {
+        mutableIntStateOf(similarRadioState.manualQueueCount.coerceIn(0, state.tracks.size))
+    }
 
     var draggedSlotId by remember { mutableStateOf<Long?>(null) }
     var dragStartIndex by remember { mutableIntStateOf(-1) }
@@ -144,10 +158,11 @@ internal fun PlaybackQueueSheet(
     var autoScrollVelocityPx by remember { mutableFloatStateOf(0f) }
 
     // Reconcile external queue updates whenever no drag gesture is in progress.
-    LaunchedEffect(state.tracks, state.currentIndex, draggedSlotId) {
+    LaunchedEffect(state.tracks, state.currentIndex, similarRadioState.manualQueueCount, draggedSlotId) {
         if (draggedSlotId != null) return@LaunchedEffect
         displaySlots = reconcileQueueSlots(displaySlots, state.tracks) { nextSlotId++ }
         displayCurrentIndex = state.currentIndex.coerceIn(0, (state.tracks.size - 1).coerceAtLeast(0))
+        displayManualBoundary = similarRadioState.manualQueueCount.coerceIn(0, state.tracks.size)
     }
 
     val queueListState = rememberLazyListState(
@@ -165,12 +180,14 @@ internal fun PlaybackQueueSheet(
         if (currentIdx !in latestDisplaySlots.indices) return
         val draggedCenterY = draggedInfo.offset + draggedInfo.size / 2f + dragOffsetY
         val targetInfo = visible.firstOrNull { info ->
-            info.key != activeId &&
+            info.key is Long &&
+                info.key != activeId &&
                 draggedCenterY >= info.offset &&
                 draggedCenterY <= info.offset + info.size
         } ?: return
-        val targetIdx = targetInfo.index
-        if (targetIdx == currentIdx || targetIdx !in latestDisplaySlots.indices) return
+        val targetSlotId = targetInfo.key as? Long ?: return
+        val targetIdx = latestDisplaySlots.indexOfFirst { it.id == targetSlotId }
+        if (targetIdx < 0 || targetIdx == currentIdx || targetIdx !in latestDisplaySlots.indices) return
 
         val reordered = latestDisplaySlots.toMutableList().apply {
             val item = removeAt(currentIdx)
@@ -178,6 +195,7 @@ internal fun PlaybackQueueSheet(
         }
         displaySlots = reordered
         displayCurrentIndex = remapIndexAfterMove(displayCurrentIndex, currentIdx, targetIdx)
+        displayManualBoundary = remapManualQueueCountAfterMove(displayManualBoundary, currentIdx, targetIdx, reordered.size)
         dragCurrentIndex = targetIdx
         dragOffsetY -= (targetInfo.offset - draggedInfo.offset).toFloat()
         haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
@@ -208,10 +226,14 @@ internal fun PlaybackQueueSheet(
 
     val isCurrentItemVisible by remember {
         derivedStateOf {
-            queueListState.layoutInfo.visibleItemsInfo.any { it.index == displayCurrentIndex }
+            val activeSlotId = displaySlots.getOrNull(displayCurrentIndex)?.id ?: return@derivedStateOf true
+            queueListState.layoutInfo.visibleItemsInfo.any { it.key == activeSlotId }
         }
     }
     val showLocatePill = displaySlots.size > 5 && !isCurrentItemVisible && draggedSlotId == null
+    val blockedByLoop = playbackMode == PlaybackMode.RepeatOne || playbackMode == PlaybackMode.RepeatAll
+    val manualBoundary = displayManualBoundary.coerceIn(0, displaySlots.size)
+    val hasAutoDivider = isSimilarRadioSupported && similarRadioState.autoPlayEnabled && manualBoundary < displaySlots.size
 
     val remainingMillis = remember(displaySlots, displayCurrentIndex, state.currentPositionMillis) {
         remainingQueueDurationMillis(
@@ -297,28 +319,25 @@ internal fun PlaybackQueueSheet(
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f, fill = false),
                         )
+                        if (isSimilarRadioSupported && similarRadioState.radioSeed != null) {
+                            QueueMetaBadge(
+                                icon = Icons.Filled.Radio,
+                                label = Strings.queueRadioSeedBadge(similarRadioState.radioSeed.title),
+                                accent = palette.accent,
+                            )
+                        } else if (isSimilarRadioSupported && similarRadioState.autoPlayEnabled && !blockedByLoop) {
+                            QueueMetaBadge(
+                                icon = Icons.Filled.AllInclusive,
+                                label = Strings.queueAutoPlayBadge,
+                                accent = palette.accent,
+                            )
+                        }
                         if (playbackMode == PlaybackMode.Shuffle) {
-                            Row(
-                                modifier = Modifier
-                                    .clip(CircleShape)
-                                    .background(KeyColors.Tonal)
-                                    .padding(horizontal = 7.dp, vertical = 2.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(3.dp),
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Filled.Shuffle,
-                                    contentDescription = null,
-                                    tint = palette.accent,
-                                    modifier = Modifier.size(12.dp),
-                                )
-                                Text(
-                                    text = Strings.queueShuffleBadge,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = palette.accent,
-                                    fontWeight = FontWeight.SemiBold,
-                                )
-                            }
+                            QueueMetaBadge(
+                                icon = Icons.Filled.Shuffle,
+                                label = Strings.queueShuffleBadge,
+                                accent = palette.accent,
+                            )
                         }
                     }
                 }
@@ -326,6 +345,39 @@ internal fun PlaybackQueueSheet(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
+                    if (isSimilarRadioSupported) {
+                        val isAutoOn = similarRadioState.autoPlayEnabled
+                        val autoBg = when {
+                            isAutoOn && !blockedByLoop -> KeyColors.Hi
+                            isAutoOn -> KeyColors.Tonal
+                            else -> Color.Transparent
+                        }
+                        val autoTint = when {
+                            isAutoOn && !blockedByLoop -> keyHiInk()
+                            isAutoOn -> AppColors.TextTertiary
+                            else -> AppColors.TextSecondary
+                        }
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(RoundedCornerShape(13.dp))
+                                .background(autoBg)
+                                .clickable(
+                                    role = Role.Switch,
+                                    onClickLabel = Strings.autoPlaySimilarToggleDesc,
+                                ) {
+                                    onToggleAutoPlaySimilar(!isAutoOn)
+                                },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.AllInclusive,
+                                contentDescription = Strings.autoPlaySimilarToggleDesc,
+                                tint = autoTint,
+                                modifier = Modifier.size(20.dp),
+                            )
+                        }
+                    }
                     if (saveAsPlaylistAction != null) {
                         BareIcon(
                             icon = Icons.AutoMirrored.Filled.PlaylistAdd,
@@ -359,11 +411,15 @@ internal fun PlaybackQueueSheet(
                     contentPadding = PaddingValues(start = 10.dp, end = 10.dp, top = 6.dp, bottom = 84.dp),
                     verticalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
-                    itemsIndexed(
-                        items = displaySlots,
-                        key = { _, slot -> slot.id },
-                        contentType = { _, _ -> "queue-track" },
-                    ) { index, slot ->
+                    val manualSlots = if (hasAutoDivider) displaySlots.subList(0, manualBoundary) else displaySlots
+                    val autoSlots = if (hasAutoDivider) displaySlots.subList(manualBoundary, displaySlots.size) else emptyList()
+
+                    fun renderSlotRow(
+                        scope: androidx.compose.foundation.lazy.LazyItemScope,
+                        index: Int,
+                        slot: QueueSlot,
+                        isAutoSlot: Boolean,
+                    ): @Composable () -> Unit = {
                         val track = slot.track
                         val isCurrent = index == displayCurrentIndex
                         val isPlayed = index < displayCurrentIndex
@@ -381,15 +437,18 @@ internal fun PlaybackQueueSheet(
                             track.artistName?.takeIf { it.isNotBlank() },
                             (track.albumTitle ?: state.album.title).takeIf { it.isNotBlank() },
                         ).joinToString(" · ")
+                        val reasonTag = if (isAutoSlot) similarRadioState.primaryReasonLabelFor(track) else null
 
                         Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .zIndex(if (isDragged) 10f else 0f)
-                                .then(
-                                    if (isDragged) Modifier
-                                    else Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null),
-                                )
+                            modifier = with(scope) {
+                                Modifier
+                                    .fillMaxWidth()
+                                    .zIndex(if (isDragged) 10f else 0f)
+                                    .then(
+                                        if (isDragged) Modifier
+                                        else Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null),
+                                    )
+                            }
                                 .graphicsLayer {
                                     translationY = if (isDragged) dragOffsetY else 0f
                                     scaleX = dragScale
@@ -435,14 +494,35 @@ internal fun PlaybackQueueSheet(
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                 )
-                                if (subtitle.isNotBlank()) {
-                                    Text(
-                                        text = subtitle,
-                                        color = AppColors.TextSecondary,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
+                                if (subtitle.isNotBlank() || reasonTag != null) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    ) {
+                                        if (subtitle.isNotBlank()) {
+                                            Text(
+                                                text = subtitle,
+                                                color = AppColors.TextSecondary,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                                modifier = Modifier.weight(1f, fill = false),
+                                            )
+                                        }
+                                        if (reasonTag != null) {
+                                            Text(
+                                                text = reasonTag,
+                                                color = palette.accent,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontWeight = FontWeight.Medium,
+                                                maxLines = 1,
+                                                modifier = Modifier
+                                                    .clip(RoundedCornerShape(6.dp))
+                                                    .background(Color.White.copy(alpha = 0.08f))
+                                                    .padding(horizontal = 6.dp, vertical = 1.dp),
+                                            )
+                                        }
+                                    }
                                 }
                             }
                             Row(
@@ -551,6 +631,51 @@ internal fun PlaybackQueueSheet(
                             }
                         }
                     }
+
+                    itemsIndexed(
+                        items = manualSlots,
+                        key = { _, slot -> slot.id },
+                        contentType = { _, _ -> "queue-track" },
+                    ) { index, slot ->
+                        renderSlotRow(this, index, slot, isAutoSlot = false)()
+                    }
+
+                    if (hasAutoDivider) {
+                        item(key = "auto-similar-divider", contentType = "auto-divider") {
+                            val seedTitle = similarRadioState.radioSeed?.title
+                                ?: similarRadioState.lastAutoSeedTitle
+                                ?: displaySlots.getOrNull((manualBoundary - 1).coerceAtLeast(0))?.track?.title
+                                ?: ""
+                            QueueAutoSimilarDivider(
+                                seedTitle = seedTitle,
+                                isHybrid = similarRadioState.isHybridMethod,
+                                isLoading = similarRadioState.isLoading,
+                                accent = palette.accent,
+                                onRefresh = onRefreshAutoSimilarBatch,
+                            )
+                        }
+                        itemsIndexed(
+                            items = autoSlots,
+                            key = { _, slot -> slot.id },
+                            contentType = { _, _ -> "queue-track" },
+                        ) { offset, slot ->
+                            renderSlotRow(this, manualBoundary + offset, slot, isAutoSlot = true)()
+                        }
+                    }
+
+                    if (isSimilarRadioSupported) {
+                        item(key = "auto-similar-footer", contentType = "auto-footer") {
+                            QueueAutoSimilarFooter(
+                                radioState = similarRadioState,
+                                playbackMode = playbackMode,
+                                sleepStopAfterCurrent = sleepStopAfterCurrent,
+                                accent = palette.accent,
+                                onEnableAutoPlay = { onToggleAutoPlaySimilar(true) },
+                                onSwitchToSequential = onSwitchToSequential,
+                                onLoadMore = onLoadMoreAutoSimilarTracks,
+                            )
+                        }
+                    }
                 }
 
                 // Floating "Jump to now playing" pill when scrolled away from the active track.
@@ -569,7 +694,9 @@ internal fun PlaybackQueueSheet(
                     Surface(
                         onClick = {
                             scope.launch {
-                                val target = (displayCurrentIndex - 1).coerceIn(0, displaySlots.lastIndex.coerceAtLeast(0))
+                                val dividerOffset = if (hasAutoDivider && displayCurrentIndex >= manualBoundary) 1 else 0
+                                val target = (displayCurrentIndex + dividerOffset - 1)
+                                    .coerceIn(0, (displaySlots.lastIndex + dividerOffset).coerceAtLeast(0))
                                 queueListState.animateScrollToItem(target)
                             }
                         },
@@ -657,6 +784,251 @@ internal fun PlaybackQueueSheet(
             },
             onDismiss = { isClearDialogVisible = false },
         )
+    }
+}
+
+@Composable
+private fun QueueMetaBadge(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    accent: Color,
+) {
+    Row(
+        modifier = Modifier
+            .clip(CircleShape)
+            .background(KeyColors.Tonal)
+            .padding(horizontal = 7.dp, vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = accent,
+            modifier = Modifier.size(12.dp),
+        )
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = accent,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@Composable
+private fun QueueAutoSimilarDivider(
+    seedTitle: String,
+    isHybrid: Boolean?,
+    isLoading: Boolean,
+    accent: Color,
+    onRefresh: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 6.dp, end = 6.dp, top = 12.dp, bottom = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Hairline(Modifier.fillMaxWidth())
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.AllInclusive,
+                        contentDescription = null,
+                        tint = accent,
+                        modifier = Modifier.size(15.dp),
+                    )
+                    Text(
+                        text = Strings.queueAutoSectionTitle,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = accent,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+                if (seedTitle.isNotBlank()) {
+                    Text(
+                        text = Strings.queueAutoSectionSub(seedTitle, isHybrid),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AppColors.TextSecondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(KeyColors.Tonal)
+                    .clickable(enabled = !isLoading, onClick = onRefresh)
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                if (isLoading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(13.dp),
+                        strokeWidth = 1.8.dp,
+                        color = accent,
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Filled.Refresh,
+                        contentDescription = null,
+                        tint = AppColors.TextPrimary,
+                        modifier = Modifier.size(14.dp),
+                    )
+                }
+                Text(
+                    text = Strings.queueAutoRefreshBatch,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AppColors.TextPrimary,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun QueueAutoSimilarFooter(
+    radioState: SimilarRadioState,
+    playbackMode: PlaybackMode,
+    sleepStopAfterCurrent: Boolean,
+    accent: Color,
+    onEnableAutoPlay: () -> Unit,
+    onSwitchToSequential: () -> Unit,
+    onLoadMore: () -> Unit,
+) {
+    val blockedByLoop = playbackMode == PlaybackMode.RepeatOne || playbackMode == PlaybackMode.RepeatAll
+    val title: String
+    val subtitle: String
+    val actionLabel: String?
+    val isPrimaryAction: Boolean
+    val onAction: (() -> Unit)?
+
+    when {
+        !radioState.autoPlayEnabled -> {
+            title = Strings.queueAutoStoppedTitle
+            subtitle = Strings.queueAutoStoppedSub
+            actionLabel = Strings.queueAutoEnableAction
+            isPrimaryAction = true
+            onAction = onEnableAutoPlay
+        }
+        blockedByLoop -> {
+            title = Strings.queueAutoPausedLoopTitle(playbackMode)
+            subtitle = Strings.queueAutoPausedLoopSub
+            actionLabel = Strings.queueAutoSwitchSequential
+            isPrimaryAction = false
+            onAction = onSwitchToSequential
+        }
+        sleepStopAfterCurrent -> {
+            title = Strings.queueAutoPausedSleepTitle
+            subtitle = Strings.queueAutoPausedSleepSub
+            actionLabel = null
+            isPrimaryAction = false
+            onAction = null
+        }
+        radioState.isLoading -> {
+            title = Strings.queueAutoLoading
+            subtitle = Strings.queueAutoActiveSub
+            actionLabel = null
+            isPrimaryAction = false
+            onAction = null
+        }
+        radioState.errorKind == SimilarRadioErrorKind.Busy -> {
+            title = Strings.queueAutoBusyTitle
+            subtitle = Strings.queueAutoBusySub
+            actionLabel = Strings.retry
+            isPrimaryAction = false
+            onAction = onLoadMore
+        }
+        radioState.errorKind == SimilarRadioErrorKind.OfflineOrFailed -> {
+            title = Strings.queueAutoOfflineTitle
+            subtitle = Strings.queueAutoOfflineSub
+            actionLabel = Strings.retry
+            isPrimaryAction = false
+            onAction = onLoadMore
+        }
+        radioState.errorKind == SimilarRadioErrorKind.Empty -> {
+            title = Strings.queueAutoEmptyTitle
+            subtitle = Strings.queueAutoEmptySub
+            actionLabel = Strings.retry
+            isPrimaryAction = false
+            onAction = onLoadMore
+        }
+        else -> {
+            title = Strings.queueAutoActiveTitle
+            subtitle = Strings.queueAutoActiveSub
+            actionLabel = Strings.queueAutoLoadMore
+            isPrimaryAction = false
+            onAction = onLoadMore
+        }
+    }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 6.dp, vertical = 10.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(Color.White.copy(alpha = 0.055f))
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyMedium,
+                color = AppColors.TextPrimary,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = AppColors.TextSecondary,
+            )
+        }
+        if (radioState.isLoading) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(18.dp),
+                strokeWidth = 2.dp,
+                color = accent,
+            )
+        } else if (actionLabel != null && onAction != null) {
+            val hiInk = keyHiInk()
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(if (isPrimaryAction) KeyColors.Hi else KeyColors.Tonal)
+                    .clickable(role = Role.Button, onClick = onAction)
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = actionLabel,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (isPrimaryAction) hiInk else AppColors.TextPrimary,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+        }
     }
 }
 

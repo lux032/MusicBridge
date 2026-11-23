@@ -574,6 +574,7 @@ internal fun QueueActionMenu(
     downloadLabel: String? = null,
     onDownloadAction: (() -> Unit)? = null,
     onAddToPlaylist: (() -> Unit)? = null,
+    onStartSimilarRadio: (() -> Unit)? = null,
     onRemoveFromPlaylist: (() -> Unit)? = null,
     recommendationBlocked: Boolean = false,
     onToggleRecommendationBlock: (() -> Unit)? = null,
@@ -622,6 +623,21 @@ internal fun QueueActionMenu(
                 onClick = {
                     onDismiss()
                     onDownloadAction()
+                },
+            )
+            HorizontalDivider(
+                color = KeyColors.Line,
+                modifier = Modifier.padding(vertical = 4.dp),
+            )
+        }
+        if (onStartSimilarRadio != null) {
+            val accent = LocalArtworkPalette.current.accent
+            DropdownMenuItem(
+                text = { Text(Strings.startSimilarRadio, color = accent, fontWeight = FontWeight.SemiBold) },
+                leadingIcon = { Icon(Icons.Filled.Radio, contentDescription = null, tint = accent) },
+                onClick = {
+                    onDismiss()
+                    onStartSimilarRadio()
                 },
             )
             HorizontalDivider(

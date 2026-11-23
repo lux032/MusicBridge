@@ -39,6 +39,7 @@ import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.DownloadDone
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.LibraryAdd
+import androidx.compose.material.icons.filled.Radio
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
@@ -1380,12 +1381,21 @@ private fun SearchTrackActionMenu(
     onOpenArtist: (() -> Unit)?,
 ) {
     val addToPlaylist = addTrackToPlaylistAction(track)
+    val startSimilarRadio = startSimilarRadioAction(track)
+    val accent = LocalArtworkPalette.current.accent
     DropdownMenu(expanded = expanded, onDismissRequest = onDismiss, shape = RoundedCornerShape(16.dp)) {
         DropdownMenuItem(
             text = { Text(Strings.play) },
             leadingIcon = { Icon(Icons.Filled.PlayArrow, contentDescription = null) },
             onClick = { onDismiss(); onPlay() },
         )
+        if (startSimilarRadio != null) {
+            DropdownMenuItem(
+                text = { Text(Strings.startSimilarRadio, color = accent, fontWeight = FontWeight.SemiBold) },
+                leadingIcon = { Icon(Icons.Filled.Radio, contentDescription = null, tint = accent) },
+                onClick = { onDismiss(); startSimilarRadio() },
+            )
+        }
         if (addToPlaylist != null) {
             DropdownMenuItem(
                 text = { Text(Strings.addToPlaylist) },

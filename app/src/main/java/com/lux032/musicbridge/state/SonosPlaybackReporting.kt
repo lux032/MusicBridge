@@ -312,14 +312,18 @@ internal fun AppStatePlaybackCoordinator.startPlaybackReporting(
             val effectivePaused = playbackState == "paused" || playbackState == "stopped"
             val displayAlbum = currentTrack.resolvePlaybackAlbum(state.allAlbums, latestMiniPlayerState.album)
             if (playbackState == "playing") state.recordPlayedAlbum(displayAlbum)
+            val updatedIndex = queueIndex ?: currentQueue.indexOfFirst { it.ratingKey == currentTrack.ratingKey && it.sourceId == currentTrack.sourceId }
+                .takeIf { it >= 0 } ?: latestMiniPlayerState.currentIndex
             state.miniPlayerState = latestMiniPlayerState.copy(
                 album = displayAlbum,
-                currentIndex = queueIndex ?: currentQueue.indexOfFirst { it.ratingKey == currentTrack.ratingKey && it.sourceId == currentTrack.sourceId }
-                    .takeIf { it >= 0 } ?: latestMiniPlayerState.currentIndex,
+                currentIndex = updatedIndex,
                 isPaused = effectivePaused,
                 currentPositionMillis = currentTrackTimeMillis,
                 durationMillis = currentTrackDurationMillis,
             )
+            if (updatedIndex != latestMiniPlayerState.currentIndex) {
+                state.similarRadioCoordinator.maybeTriggerAutoContinue()
+            }
 
             // 收藏状态以队列里的曲目为准：toggleTrackFavorite 只更新 miniPlayerState。
             val queueTrack = state.miniPlayerState?.let { it.tracks.getOrNull(it.currentIndex) }
@@ -399,6 +403,9 @@ internal fun AppStatePlaybackCoordinator.startPlaybackReporting(
                         .takeIf { it >= 0 } ?: break
                     val nextIndex = resolveNextPlaybackIndex(currentQueue.size, currentIndex)
                     if (nextIndex == null) {
+                        if (state.similarRadioCoordinator.maybeTriggerAutoContinue(playFirstAppendedIfEnded = true)) {
+                            break
+                        }
                         resetFinishedSonosQueue(room)
                         break
                     }
