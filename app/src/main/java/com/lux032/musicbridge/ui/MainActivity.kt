@@ -68,6 +68,7 @@ import com.lux032.musicbridge.music.MusicAlbum
 import com.lux032.musicbridge.music.AlbumTracksResult
 import com.lux032.musicbridge.music.LibrarySection
 import com.lux032.musicbridge.music.MusicTrack
+import com.lux032.musicbridge.service.OfflineDownloadService.Companion.ACTION_OPEN_DOWNLOADS
 import com.lux032.musicbridge.service.PlaybackForegroundService.Companion.ACTION_OPEN_PLAYBACK_DETAIL
 import com.lux032.musicbridge.ui.settings.SettingsActions
 import com.lux032.musicbridge.ui.settings.SettingsScreen
@@ -124,14 +125,22 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handlePlaybackIntent(intent: Intent?) {
-        if (intent?.action != ACTION_OPEN_PLAYBACK_DETAIL) return
-        // Consume this command so Activity recreation does not reopen the player.
+        val action = intent?.action ?: return
+        if (action != ACTION_OPEN_PLAYBACK_DETAIL && action != ACTION_OPEN_DOWNLOADS) return
+        // Consume this command so Activity recreation does not re-trigger navigation.
         intent.action = null
         setIntent(intent)
 
-        val playerState = appState.miniPlayerState
-        if (playerState != null && playerState.tracks.getOrNull(playerState.currentIndex) != null) {
-            appState.openPlaybackDetail()
+        when (action) {
+            ACTION_OPEN_PLAYBACK_DETAIL -> {
+                val playerState = appState.miniPlayerState
+                if (playerState != null && playerState.tracks.getOrNull(playerState.currentIndex) != null) {
+                    appState.openPlaybackDetail()
+                }
+            }
+            ACTION_OPEN_DOWNLOADS -> {
+                appState.openDownloadedTracks()
+            }
         }
     }
 
@@ -898,11 +907,13 @@ fun MusicBridgeApp(
                     }
                 } else if (currentSection == AppSection.Downloads) {
                     val downloadedAlbums by state.downloadedAlbums.collectAsState()
+                    val downloadTasks by state.downloadTasks.collectAsState()
                     Box(
                         modifier = Modifier.fillMaxSize(),
                     ) {
                         DownloadsSection(
                             albums = downloadedAlbums,
+                            downloadTasks = downloadTasks,
                             bottomContentPadding = contentBottomPadding,
                             onBack = state::navigateBack,
                             onPlayAlbum = state::playDownloadedAlbum,
@@ -921,6 +932,14 @@ fun MusicBridgeApp(
                                 state.deleteDownloadedTrack(track.toTrackStream())
                             },
                             onShuffleAll = state::shuffleAllDownloadedTracks,
+                            onPauseTask = state::pauseDownloadTask,
+                            onResumeTask = state::resumeDownloadTask,
+                            onRetryTask = state::retryDownloadTask,
+                            onCancelTask = state::cancelDownloadTask,
+                            onPauseAllTasks = state::pauseAllDownloads,
+                            onResumeAllTasks = state::resumeAllDownloads,
+                            onRetryAllFailedTasks = state::retryAllFailedDownloads,
+                            onCancelAllTasks = state::cancelAllDownloads,
                         )
                     }
                 } else if (currentSection == AppSection.Home) {

@@ -2,4 +2,6 @@
     <string name="app_name">MusicBridge</string>
     <string name="notification_channel_playback">播放控制</string>
     <string name="notification_channel_playback_desc">MusicBridge 推流到音箱时保持后台运行</string>
+    <string name="notification_channel_downloads">离线下载</string>
+    <string name="notification_channel_downloads_desc">后台下载离线原档时显示进度</string>
 </resources>

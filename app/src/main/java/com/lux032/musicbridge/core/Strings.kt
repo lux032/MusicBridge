@@ -480,6 +480,31 @@ object Strings {
     val downloadStarted get() = if (isZhCN) { title: String -> "已加入下载队列: $title" } else { title: String -> "Added to download queue: $title" }
     val downloadSuccess get() = if (isZhCN) { title: String -> "下载完成: $title" } else { title: String -> "Download complete: $title" }
     val downloadFailed get() = if (isZhCN) { title: String -> "下载失败: $title" } else { title: String -> "Download failed: $title" }
+    val downloadIncompleteError get() = if (isZhCN) "传输中断，文件未完整" else "Transfer interrupted before completion"
+    fun downloadNotificationTitle(activeIndex: Int, activeTotal: Int) =
+        if (isZhCN) "正在下载离线原档 ($activeIndex/$activeTotal)" else "Downloading offline tracks ($activeIndex/$activeTotal)"
+    fun downloadQueueHeader(count: Int) =
+        if (isZhCN) "下载任务 · $count 首" else "Download Queue · $count"
+    val downloadPauseAction get() = if (isZhCN) "暂停" else "Pause"
+    val downloadResumeAction get() = if (isZhCN) "继续" else "Resume"
+    val downloadRetryAction get() = if (isZhCN) "重试" else "Retry"
+    val downloadPauseAll get() = if (isZhCN) "全部暂停" else "Pause All"
+    val downloadResumeAll get() = if (isZhCN) "全部继续" else "Resume All"
+    val downloadRetryFailed get() = if (isZhCN) "重试失败" else "Retry Failed"
+    val downloadCancelAll get() = if (isZhCN) "清空队列" else "Cancel All"
+    val downloadStatusQueued get() = if (isZhCN) "等待中" else "Queued"
+    fun downloadStatusPaused(percent: Int) =
+        if (percent > 0) {
+            if (isZhCN) "已暂停 · $percent%" else "Paused · $percent%"
+        } else {
+            if (isZhCN) "已暂停" else "Paused"
+        }
+    fun downloadStatusFailed(reason: String?) =
+        if (reason.isNullOrBlank()) {
+            if (isZhCN) "下载失败" else "Download failed"
+        } else {
+            if (isZhCN) "下载失败：$reason" else "Failed: $reason"
+        }
     val deleteDownloadedSuccess get() = if (isZhCN) { title: String -> "已删除离线文件: $title" } else { title: String -> "Deleted offline file: $title" }
     val clearAllDownloadsSuccess get() = if (isZhCN) "已清空所有离线原档" else "Cleared all offline downloads"
     val insufficientStorageSpace get() = if (isZhCN) "存储空间不足，无法下载" else "Insufficient storage space to download"

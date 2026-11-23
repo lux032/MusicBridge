@@ -5,18 +5,14 @@ import com.lux032.musicbridge.local.LocalAudioCache
 import com.lux032.musicbridge.local.LocalPlaybackEngine
 import com.lux032.musicbridge.local.LocalPlaybackService
 import com.lux032.musicbridge.local.LocalQueueItem
-import com.lux032.musicbridge.local.isLiveTranscodeUrl
 import com.lux032.musicbridge.local.originalCacheKey
-import com.lux032.musicbridge.local.shouldUseCachedOriginal
-import com.lux032.musicbridge.local.transcodedCacheKey
+import com.lux032.musicbridge.local.resolveTrackToLocalQueueItem
 import com.lux032.musicbridge.music.Music032Client
 import com.lux032.musicbridge.music.Music032TranscodeUrls
 import com.lux032.musicbridge.music.ReporterEndReason
 import com.lux032.musicbridge.music.ReporterPlayState
 import com.lux032.musicbridge.music.MusicAlbum
 import com.lux032.musicbridge.music.MusicTrack
-import com.lux032.musicbridge.music.willTranscodeLocally
-import com.lux032.musicbridge.music.withLocalPlaybackPolicy
 import com.lux032.musicbridge.service.PlaybackForegroundService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancelAndJoin
@@ -403,65 +399,23 @@ internal class AppStateLocalPlaybackCoordinator(
         )
     }
 
-    private fun MusicTrack.toLocalQueueItem(policy: LocalPlaybackPolicy): LocalQueueItem {
-        // Tier 1: Check offline downloaded original file
-        val downloaded = state.albumLocalStore.getDownloadedTrack(sourceId, ratingKey)
-        if (downloaded != null && java.io.File(downloaded.localAudioPath).exists()) {
-            val offlineTrack = downloaded.toTrackStream()
-            val origKey = originalCacheKey(sourceId, ratingKey, partKey)
-            return LocalQueueItem(
-                url = offlineTrack.streamUrl,
-                cacheKey = origKey,
-                isTranscoded = false,
-                title = offlineTrack.title,
-                artist = offlineTrack.artistName,
-                artworkUrl = offlineTrack.thumbUrl,
-                durationMillis = offlineTrack.durationMillis,
-                isCachedOriginal = true, // marks as offline/cached original, bypasses transcode & precache
-            )
-        }
-
-        // Tier 2: Check SimpleCache
-        val origKey = originalCacheKey(sourceId, ratingKey, partKey)
-        val needsTranscode = willTranscodeLocally(policy)
-        if (shouldUseCachedOriginal(needsTranscode, LocalAudioCache.isFullyCached(origKey))) {
-            val direct = withLocalPlaybackPolicy(policy.copy(streamingLimit = LocalStreamingLimit.MAXIMUM))
-            return direct.toQueueItem(origKey, isTranscoded = false).copy(
-                isCachedOriginal = true,
-                fallbackItem = toTranscodedLocalQueueItem(policy),
-            )
-        }
-
-        // Tier 3: Remote Network stream
-        val effective = withLocalPlaybackPolicy(policy)
-        // 032 transcode.ogg 是实时转码流。
-        val isTranscoded = effective.streamUrl.isLiveTranscodeUrl()
-        val key = if (isTranscoded) {
-            transcodedCacheKey(sourceId, ratingKey, partKey, policy.opusBitrate.kbps)
-        } else {
-            origKey
-        }
-        return effective.toQueueItem(key, isTranscoded)
-    }
-
-
-    private fun MusicTrack.toTranscodedLocalQueueItem(policy: LocalPlaybackPolicy): LocalQueueItem {
-        val effective = withLocalPlaybackPolicy(policy)
-        return effective.toQueueItem(
-            transcodedCacheKey(sourceId, ratingKey, partKey, policy.opusBitrate.kbps),
-            isTranscoded = true,
+    private fun MusicTrack.toLocalQueueItem(policy: LocalPlaybackPolicy): LocalQueueItem =
+        resolveTrackToLocalQueueItem(
+            track = this,
+            policy = policy,
+            downloadedTrackProvider = state.albumLocalStore::getDownloadedTrack,
         )
-    }
 
-    private fun MusicTrack.toQueueItem(cacheKey: String, isTranscoded: Boolean) = LocalQueueItem(
-        url = streamUrl,
-        cacheKey = cacheKey,
-        isTranscoded = isTranscoded,
-        title = title,
-        artist = artistName,
-        artworkUrl = thumbUrl,
-        durationMillis = durationMillis,
-    )
+    /**
+     * Attaches UI reporting & service keep-alive to a [LocalPlaybackEngine] that was
+     * cold-started by [LocalPlaybackService] before [AppState] existed, without
+     * rebuilding the queue or interrupting audio.
+     */
+    fun adoptColdStartedSession() {
+        SleepTimerController.attachRoom(null)
+        LocalPlaybackService.start(state.context)
+        startReporting()
+    }
 
     private fun updateCachedOriginalKeys(items: List<LocalQueueItem>) {
         state.cachedOriginalTrackKeys = items.filter(LocalQueueItem::isCachedOriginal).mapTo(mutableSetOf()) { it.cacheKey }

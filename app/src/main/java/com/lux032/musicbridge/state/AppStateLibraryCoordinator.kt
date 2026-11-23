@@ -609,7 +609,7 @@ internal class AppStateLibraryCoordinator(
             state.actionMessage = "整张专辑已在本地"
             return
         }
-        unDownloaded.forEach { state.offlineDownloadManager.enqueueDownload(it) }
+        state.offlineDownloadManager.enqueueDownloads(unDownloaded)
         state.actionMessage = Strings.albumDownloadQueued(unDownloaded.size)
     }
 

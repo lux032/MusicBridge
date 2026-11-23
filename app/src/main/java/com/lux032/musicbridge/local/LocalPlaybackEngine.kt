@@ -115,10 +115,20 @@ class LocalPlaybackEngine(
         private const val LIVE_TRANSCODE_MAX_BUFFER_MS = 1_800_000
 
         /**
-         * The engine instance owned by AppState. Registered here so [LocalPlaybackService]
-         * (created on demand by the system) can find the shared player without owning it.
+         * The engine instance owned by AppState or created on demand by [LocalPlaybackService]
+         * during a headless cold-start resumption.
          */
+        @Volatile
         internal var activeEngine: LocalPlaybackEngine? = null
+
+        @Synchronized
+        internal fun obtain(context: Context, cacheMaxBytes: Long): LocalPlaybackEngine {
+            val existing = activeEngine
+            if (existing != null && !existing.released) return existing
+            return LocalPlaybackEngine(context.applicationContext, cacheMaxBytes).also {
+                activeEngine = it
+            }
+        }
     }
 
     private val httpDataSourceFactory = DefaultHttpDataSource.Factory()
@@ -1011,6 +1021,72 @@ class LocalPlaybackEngine(
         recoveryTargetIndex = C.INDEX_UNSET
         seekToItem(targetIndex, 0L)
         ensurePrepared(shouldPlay)
+    }
+
+    internal data class PreparedColdStartQueue(
+        val mediaItems: List<MediaItem>,
+        val startIndex: Int,
+        val startPositionMillis: Long,
+    )
+
+    /**
+     * Populates internal queue metadata & transcode seek offsets for a Media3
+     * `onPlaybackResumption` cold start without calling `player.setMediaItems` yet —
+     * Media3 applies the returned [PreparedColdStartQueue] to [mediaSessionPlayer] itself.
+     */
+    internal fun prepareColdStartQueue(
+        items: List<LocalQueueItem>,
+        startIndex: Int,
+        startPositionMillis: Long,
+        precacheCount: Int = 0,
+    ): PreparedColdStartQueue {
+        PlaybackDiagnostics.beginPlaybackSession()
+        resetTruncatedRestartGuard()
+        synchronized(completionPrecacheLock) { completionPrecacheItems.clear() }
+        pendingCachedTranscodeSeek = null
+        hasUnrecoveredPlaybackError = false
+        recoveryTargetIndex = C.INDEX_UNSET
+        recoveryBudget.resetForUserAction()
+        queueItems.clear()
+        queueItems.addAll(items)
+        lastCurrentTrackFullyLoaded = false
+        lastPrecacheCompletenessKey = null
+        refreshCachedOriginalKeys()
+        positionBaseMillis.clear()
+        repeat(items.size) { positionBaseMillis += 0L }
+        val safeIndex = startIndex.coerceIn(0, (items.size - 1).coerceAtLeast(0))
+        val safeStartMillis = startPositionMillis.coerceAtLeast(0L)
+        val selectedItem = items.getOrNull(safeIndex)
+        val selectedSeekPlan = selectedItem
+            ?.takeUnless { LocalAudioCache.isFullyCached(it.cacheKey) }
+            ?.let { buildLocalSeekPlan(it.url, safeStartMillis, it.durationMillis) }
+        val selectedOffsetMillis = selectedSeekPlan?.logicalBaseMillis ?: 0L
+        if (safeIndex in positionBaseMillis.indices) {
+            positionBaseMillis[safeIndex] = selectedOffsetMillis
+        }
+        val mediaItems = items.mapIndexed { index, item ->
+            val url = if (index == safeIndex) selectedSeekPlan?.url ?: item.url else item.url
+            buildMediaItem(item, url)
+        }
+        lastCurrentIndex = safeIndex
+        queuePrecacheCount = precacheCount.coerceAtLeast(0)
+        return PreparedColdStartQueue(
+            mediaItems = mediaItems,
+            startIndex = safeIndex,
+            startPositionMillis = selectedSeekPlan?.playerPositionMillis ?: safeStartMillis,
+        )
+    }
+
+    internal fun currentMediaItemsForResumption(): PreparedColdStartQueue? {
+        if (!isActive || queueItems.isEmpty()) return null
+        val safeIndex = currentIndex.coerceIn(0, queueItems.lastIndex)
+        val mediaItems = (0 until player.mediaItemCount).map { player.getMediaItemAt(it) }
+        if (mediaItems.isEmpty()) return null
+        return PreparedColdStartQueue(
+            mediaItems = mediaItems,
+            startIndex = safeIndex.coerceIn(0, mediaItems.lastIndex),
+            startPositionMillis = player.currentPosition.coerceAtLeast(0L),
+        )
     }
 
     fun setQueue(

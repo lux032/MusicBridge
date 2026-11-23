@@ -78,6 +78,8 @@ class PlaybackSessionStore(context: Context) {
             .apply()
     }
 
+    fun hasSavedSession(): Boolean = queueFile.exists() && queueFile.length() > 0L
+
     fun load(): SavedPlaybackSession? = runCatching {
         if (!queueFile.exists()) return null
         val json = JSONObject(queueFile.readText())
@@ -186,7 +188,7 @@ private fun JSONObject.toAlbum(): MusicAlbum {
     )
 }
 
-private fun MusicTrack.toJson(): JSONObject = JSONObject()
+internal fun MusicTrack.toJson(): JSONObject = JSONObject()
     .put("ratingKey", ratingKey)
     .put("title", title)
     .put("streamUrl", streamUrl)
@@ -212,7 +214,7 @@ private fun MusicTrack.toJson(): JSONObject = JSONObject()
     .put("trackNumber", trackNumber)
     .put("artists", artists.toJson())
 
-private fun JSONObject.toTrack(): MusicTrack = MusicTrack(
+internal fun JSONObject.toTrack(): MusicTrack = MusicTrack(
     ratingKey = getString("ratingKey"),
     title = getString("title"),
     streamUrl = getString("streamUrl"),

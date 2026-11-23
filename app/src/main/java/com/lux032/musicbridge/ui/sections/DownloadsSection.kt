@@ -26,11 +26,14 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.Sort
 import androidx.compose.material3.AlertDialog
@@ -39,6 +42,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -62,6 +66,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.lux032.musicbridge.music.groupTracksByDisc
 import com.lux032.musicbridge.music.hasMultipleDiscs
+import com.lux032.musicbridge.storage.DownloadTaskItem
+import com.lux032.musicbridge.storage.DownloadTaskStatus
 import com.lux032.musicbridge.storage.DownloadedAlbumGroup
 import com.lux032.musicbridge.storage.DownloadedAudioTrack
 import java.util.Locale
@@ -77,6 +83,7 @@ internal fun DownloadsSection(
     albums: List<DownloadedAlbumGroup>,
     bottomContentPadding: Dp,
     modifier: Modifier = Modifier,
+    downloadTasks: List<DownloadTaskItem> = emptyList(),
     onBack: () -> Unit,
     onPlayAlbum: (DownloadedAlbumGroup) -> Unit,
     onPlayDisc: (DownloadedAlbumGroup, Int) -> Unit = { _, _ -> },
@@ -84,6 +91,14 @@ internal fun DownloadsSection(
     onDeleteAlbum: (DownloadedAlbumGroup) -> Unit,
     onDeleteTrack: (DownloadedAudioTrack) -> Unit,
     onShuffleAll: () -> Unit,
+    onPauseTask: (String) -> Unit = {},
+    onResumeTask: (String) -> Unit = {},
+    onRetryTask: (String) -> Unit = {},
+    onCancelTask: (String) -> Unit = {},
+    onPauseAllTasks: () -> Unit = {},
+    onResumeAllTasks: () -> Unit = {},
+    onRetryAllFailedTasks: () -> Unit = {},
+    onCancelAllTasks: () -> Unit = {},
     nowPlaying: NowPlayingMarker? = LocalNowPlaying.current,
 ) {
     val layoutInfo = LocalAppLayoutInfo.current
@@ -208,7 +223,7 @@ internal fun DownloadsSection(
             }
         }
 
-        if (albums.isEmpty()) {
+        if (albums.isEmpty() && downloadTasks.isEmpty()) {
             EmptyStateCard(
                 title = Strings.noOfflineMusic,
                 body = Strings.noOfflineMusicDesc,
@@ -225,6 +240,22 @@ internal fun DownloadsSection(
                     bottom = bottomContentPadding,
                 ),
             ) {
+                if (downloadTasks.isNotEmpty()) {
+                    item(key = "download_queue_panel") {
+                        DownloadQueuePanel(
+                            tasks = downloadTasks,
+                            onPauseTask = onPauseTask,
+                            onResumeTask = onResumeTask,
+                            onRetryTask = onRetryTask,
+                            onCancelTask = onCancelTask,
+                            onPauseAll = onPauseAllTasks,
+                            onResumeAll = onResumeAllTasks,
+                            onRetryAllFailed = onRetryAllFailedTasks,
+                            onCancelAll = onCancelAllTasks,
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                    }
+                }
                 items(
                     items = sortedAlbums,
                     key = { "${it.sourceId}:${it.albumRatingKey.ifBlank { it.albumTitle }}" },
@@ -600,6 +631,191 @@ private fun DownloadedTrackItem(
             titleContentColor = AppColors.TextPrimary,
             textContentColor = AppColors.TextSecondary,
         )
+    }
+}
+
+@Composable
+private fun DownloadQueuePanel(
+    tasks: List<DownloadTaskItem>,
+    onPauseTask: (String) -> Unit,
+    onResumeTask: (String) -> Unit,
+    onRetryTask: (String) -> Unit,
+    onCancelTask: (String) -> Unit,
+    onPauseAll: () -> Unit,
+    onResumeAll: () -> Unit,
+    onRetryAllFailed: () -> Unit,
+    onCancelAll: () -> Unit,
+) {
+    val palette = LocalArtworkPalette.current
+    val hasActive = tasks.any { it.status == DownloadTaskStatus.Downloading || it.status == DownloadTaskStatus.Queued }
+    val hasPaused = tasks.any { it.status == DownloadTaskStatus.Paused }
+    val hasFailed = tasks.any { it.status == DownloadTaskStatus.Failed }
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        color = Color.White.copy(alpha = 0.06f),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = Strings.downloadQueueHeader(tasks.size),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = AppColors.TextPrimary,
+                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (hasActive) {
+                        TextButton(onClick = onPauseAll) {
+                            Text(Strings.downloadPauseAll, style = MaterialTheme.typography.labelMedium, color = palette.accent)
+                        }
+                    } else if (hasPaused) {
+                        TextButton(onClick = onResumeAll) {
+                            Text(Strings.downloadResumeAll, style = MaterialTheme.typography.labelMedium, color = palette.accent)
+                        }
+                    }
+                    if (hasFailed) {
+                        TextButton(onClick = onRetryAllFailed) {
+                            Text(Strings.downloadRetryFailed, style = MaterialTheme.typography.labelMedium, color = palette.accent)
+                        }
+                    }
+                    TextButton(onClick = onCancelAll) {
+                        Text(Strings.downloadCancelAll, style = MaterialTheme.typography.labelMedium, color = AppColors.ErrorText)
+                    }
+                }
+            }
+
+            tasks.forEachIndexed { index, task ->
+                if (index > 0) {
+                    HorizontalDivider(color = Color.White.copy(alpha = 0.08f))
+                }
+                DownloadTaskRow(
+                    task = task,
+                    accentColor = palette.accent,
+                    onPause = { onPauseTask(task.taskKey) },
+                    onResume = { onResumeTask(task.taskKey) },
+                    onRetry = { onRetryTask(task.taskKey) },
+                    onCancel = { onCancelTask(task.taskKey) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun DownloadTaskRow(
+    task: DownloadTaskItem,
+    accentColor: Color,
+    onPause: () -> Unit,
+    onResume: () -> Unit,
+    onRetry: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    val percent = (task.progress * 100f).toInt().coerceIn(0, 100)
+    val statusText = when (task.status) {
+        DownloadTaskStatus.Queued -> Strings.downloadStatusQueued
+        DownloadTaskStatus.Downloading -> Strings.downloadingProgress(percent)
+        DownloadTaskStatus.Paused -> Strings.downloadStatusPaused(percent)
+        DownloadTaskStatus.Failed -> Strings.downloadStatusFailed(task.errorMessage)
+    }
+    val statusColor = if (task.status == DownloadTaskStatus.Failed) AppColors.ErrorText else AppColors.TextTertiary
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(
+                text = task.track.title,
+                style = MaterialTheme.typography.bodyMedium,
+                color = AppColors.TextPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = statusText,
+                style = MaterialTheme.typography.bodySmall,
+                color = statusColor,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (task.status == DownloadTaskStatus.Downloading || (task.status == DownloadTaskStatus.Paused && percent > 0)) {
+                LinearProgressIndicator(
+                    progress = { task.progress.coerceIn(0f, 1f) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(3.dp)
+                        .clip(RoundedCornerShape(2.dp)),
+                    color = if (task.status == DownloadTaskStatus.Paused) AppColors.TextTertiary else accentColor,
+                    trackColor = Color.White.copy(alpha = 0.12f),
+                )
+            }
+        }
+
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            when (task.status) {
+                DownloadTaskStatus.Queued,
+                DownloadTaskStatus.Downloading -> {
+                    IconButton(onClick = onPause, modifier = Modifier.size(36.dp)) {
+                        Icon(
+                            imageVector = Icons.Filled.Pause,
+                            contentDescription = Strings.downloadPauseAction,
+                            tint = AppColors.TextSecondary,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                }
+                DownloadTaskStatus.Paused -> {
+                    IconButton(onClick = onResume, modifier = Modifier.size(36.dp)) {
+                        Icon(
+                            imageVector = Icons.Filled.PlayArrow,
+                            contentDescription = Strings.downloadResumeAction,
+                            tint = accentColor,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                }
+                DownloadTaskStatus.Failed -> {
+                    IconButton(onClick = onRetry, modifier = Modifier.size(36.dp)) {
+                        Icon(
+                            imageVector = Icons.Filled.Refresh,
+                            contentDescription = Strings.downloadRetryAction,
+                            tint = accentColor,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                }
+            }
+            IconButton(onClick = onCancel, modifier = Modifier.size(36.dp)) {
+                Icon(
+                    imageVector = Icons.Filled.Close,
+                    contentDescription = Strings.cancel,
+                    tint = AppColors.TextTertiary,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+        }
     }
 }
 

@@ -15,8 +15,8 @@
   - `OfflineDownloadManager` 维护内存快照 `downloadedByKey`，`AppStateLocalPlaybackCoordinator` 启动/插队时不再在主线程逐首查库与 `File.exists()`。
   - `AppState.selectedArtist` 改为通过 `snapshotFlow` + `Dispatchers.IO` 异步加载 `localSelectedArtist`，不再在 Compose `derivedStateOf` 里同步查库。
   - `NetworkQualityMonitor` 新增 `unregister()` 并在 `AppState.onCleared()` 中注销 `NetworkCallback`。
-- [ ] **离线下载后台保活与任务控制**：接入 `WorkManager` / 下载前台进度通知，支持单曲/队列取消、暂停、失败重试与断点续传。
-- [ ] **本机播放服务冷启动恢复**：支持蓝牙/系统媒体按钮在进程被杀后冷启动 `LocalPlaybackService` 并从 `PlaybackSessionStore` 恢复上次会话。
+- [x] **离线下载后台保活与任务控制**：新增 `OfflineDownloadService`（`dataSync` 前台进度通知，含暂停/取消与 Android 15 `onTimeout` 兜底）、进程级 `OfflineDownloadManager` 单例与原子化队列持久化（`OfflineDownloadQueueStore`），支持单曲/队列取消、暂停/继续、失败重试、HTTP `Range` 断点续传（含 `206`/`200`/`416` 兼容），并在 `DownloadsSection` 补齐下载队列管理面板。
+- [x] **本机播放服务冷启动恢复**：注册 `MediaButtonReceiver` 并为 `LocalPlaybackService` 实现 `MediaSession.Callback.onPlaybackResumption()`，支持进程被杀后由蓝牙/系统媒体按钮冷启动从 `PlaybackSessionStore` 恢复上次会话（复用离线/缓存/转码三层路由并落盘进度）；打开 App 时 `AppState` 无缝热接管已运行的 `LocalPlaybackEngine` 而不打断音频。
 
 ---
 

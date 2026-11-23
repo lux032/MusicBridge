@@ -2,4 +2,6 @@
     <string name="app_name">MusicBridge</string>
     <string name="notification_channel_playback">Playback Controls</string>
     <string name="notification_channel_playback_desc">Keeps MusicBridge active while casting to speakers</string>
+    <string name="notification_channel_downloads">Offline Downloads</string>
+    <string name="notification_channel_downloads_desc">Shows progress while downloading tracks for offline listening</string>
 </resources>

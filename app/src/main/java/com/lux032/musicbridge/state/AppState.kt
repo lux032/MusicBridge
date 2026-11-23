@@ -19,6 +19,8 @@ import com.lux032.musicbridge.music.MusicPlaylist
 import com.lux032.musicbridge.music.PlaylistTracksResult
 import com.lux032.musicbridge.music.MusicTrack
 import com.lux032.musicbridge.music.isFavorite
+import com.lux032.musicbridge.local.ColdStartLocalPlaybackHolder
+import com.lux032.musicbridge.local.ColdStartSessionState
 import com.lux032.musicbridge.local.LocalAudioCache
 import com.lux032.musicbridge.local.LocalPlaybackEngine
 import com.lux032.musicbridge.local.LocalPlaybackService
@@ -81,10 +83,10 @@ class AppState(
     internal val networkQualityMonitor = NetworkQualityMonitor(context)
     var currentNetworkIsWifi by mutableStateOf(networkQualityMonitor.currentIsWifi())
         internal set
-    internal val localPlaybackEngine = LocalPlaybackEngine(
+    internal val localPlaybackEngine = LocalPlaybackEngine.obtain(
         context = context,
         cacheMaxBytes = appPreferences.loadLocalCacheSize().bytes,
-    ).also { LocalPlaybackEngine.activeEngine = it }
+    )
 
     var opusTranscodeMode by mutableStateOf(appPreferences.getOpusTranscodeMode())
     var sonosHiResTranscodeMode by mutableStateOf(appPreferences.getSonosHiResTranscodeMode())
@@ -138,10 +140,11 @@ class AppState(
     private val initialProfiles = appPreferences.loadServerProfiles()
     private val initialActiveServerId = appPreferences.loadActiveServerId(initialProfiles)
     private val initialPreferences = initialProfiles.firstOrNull { it.id == initialActiveServerId } ?: MusicServerProfile()
-    val offlineDownloadManager = OfflineDownloadManager(context, albumLocalStore, scope)
+    val offlineDownloadManager = OfflineDownloadManager.obtain(context, albumLocalStore)
     val downloadedTrackKeys = offlineDownloadManager.downloadedKeys
     val downloadedAlbums = offlineDownloadManager.downloadedAlbums
     val activeDownloadProgress = offlineDownloadManager.downloadProgress
+    val downloadTasks = offlineDownloadManager.downloadTasks
     internal val libraryCoordinator = AppStateLibraryCoordinator(this)
     private val playbackCoordinator = AppStatePlaybackCoordinator(this)
     private val playlistCoordinator = AppStatePlaylistCoordinator(this)
@@ -643,9 +646,20 @@ class AppState(
     fun downloadTrack(track: MusicTrack) {
         actionMessage = Strings.downloadStarted(track.title)
         offlineDownloadManager.enqueueDownload(track) { success ->
-            actionMessage = if (success) Strings.downloadSuccess(track.title) else Strings.downloadFailed(track.title)
+            scope.launch {
+                actionMessage = if (success) Strings.downloadSuccess(track.title) else Strings.downloadFailed(track.title)
+            }
         }
     }
+
+    fun pauseDownloadTask(taskKey: String) = offlineDownloadManager.pauseTask(taskKey)
+    fun resumeDownloadTask(taskKey: String) = offlineDownloadManager.resumeTask(taskKey)
+    fun retryDownloadTask(taskKey: String) = offlineDownloadManager.retryTask(taskKey)
+    fun cancelDownloadTask(taskKey: String) = offlineDownloadManager.cancelTask(taskKey)
+    fun pauseAllDownloads() = offlineDownloadManager.pauseAll()
+    fun resumeAllDownloads() = offlineDownloadManager.resumeAll()
+    fun retryAllFailedDownloads() = offlineDownloadManager.retryAllFailed()
+    fun cancelAllDownloads() = offlineDownloadManager.cancelAll()
 
     fun deleteDownloadedTrack(track: MusicTrack) {
         offlineDownloadManager.deleteDownload(track.sourceId, track.ratingKey)
@@ -1161,13 +1175,47 @@ class AppState(
         appPreferences.retiredServerIds.takeIf { it.isNotEmpty() }?.let { retired ->
             scope.launch(Dispatchers.IO) { retired.forEach(albumLocalStore::deleteServerData) }
         }
+        // If LocalPlaybackService already cold-started playback via a Bluetooth/media button
+        // before MainActivity opened, adopt that running engine synchronously right now so
+        // miniPlayerState is immediately ready and audio keeps playing uninterrupted.
+        ColdStartLocalPlaybackHolder.consumeForAppStateAdoption(localPlaybackEngine)?.let { coldStart ->
+            if (localPlaybackEngine.isActive) {
+                adoptColdStartedSession(coldStart)
+            }
+        }
         scope.launch { observeSelectedArtistLocalStore() }
         scope.launch {
             val saved = withContext(playbackSessionIo) { playbackSessionStore.load() }
-            // Only if the user has not started something in the meantime.
+            // Only if the user has not started something in the meantime (or adopted cold start).
             if (saved != null && miniPlayerState == null) restorePlaybackSession(saved)
             persistPlaybackSession()
         }
+    }
+
+    private fun adoptColdStartedSession(coldStart: ColdStartSessionState) {
+        val saved = coldStart.savedSession
+        val tracks = coldStart.resolvedTracks
+        if (tracks.isEmpty()) return
+        val index = localPlaybackEngine.currentIndex.coerceIn(0, tracks.lastIndex)
+        val currentTrack = tracks[index]
+        playbackMode = saved.playbackMode
+        selectPlaybackTarget(PlaybackTarget.LocalDevice)
+        cachedOriginalTrackKeys = coldStart.cachedOriginalKeys
+        miniPlayerState = MiniPlayerState(
+            album = currentTrack.resolvePlaybackAlbum(allAlbums, saved.album),
+            tracks = tracks,
+            currentIndex = index,
+            target = PlaybackTarget.LocalDevice,
+            isPaused = !localPlaybackEngine.isPlayRequested,
+            isBuffering = localPlaybackEngine.isBuffering,
+            currentPositionMillis = localPlaybackEngine.currentPositionMillis.coerceAtLeast(0L),
+            durationMillis = localPlaybackEngine.durationMillis ?: currentTrack.durationMillis,
+        )
+        persistedQueueId = saved.queueId
+        persistedTracks = tracks
+        persistedAlbum = saved.album
+        localPlaybackCoordinator.adoptColdStartedSession()
+        Log.i("PlaybackSession", "adopted cold-started session (${tracks.size} tracks at index $index)")
     }
 
     private suspend fun restorePlaybackSession(saved: SavedPlaybackSession) {
@@ -1268,6 +1316,7 @@ class AppState(
         LocalPlaybackService.stop(context)
         PlaybackForegroundService.stop(context)
         networkQualityMonitor.unregister()
+        ColdStartLocalPlaybackHolder.clearIfEngine(localPlaybackEngine)
         localPlaybackEngine.release()
         scope.cancel()
         super.onCleared()
