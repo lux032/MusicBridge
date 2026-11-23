@@ -610,7 +610,11 @@ internal class AppStateLibraryCoordinator(
             return
         }
         state.offlineDownloadManager.enqueueDownloads(unDownloaded)
-        state.actionMessage = Strings.albumDownloadQueued(unDownloaded.size)
+        state.actionMessage = if (state.offlineDownloadManager.isBlockedByWifiPolicy()) {
+            Strings.downloadQueuedWaitingForWifi
+        } else {
+            Strings.albumDownloadQueued(unDownloaded.size)
+        }
     }
 
     fun deleteDownloadedAlbum(group: DownloadedAlbumGroup) {

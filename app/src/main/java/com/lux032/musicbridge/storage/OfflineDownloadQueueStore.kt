@@ -9,6 +9,7 @@ import java.io.File
 enum class DownloadTaskStatus {
     Queued,
     Downloading,
+    WaitingForWifi,
     Paused,
     Failed,
 }
@@ -99,14 +100,16 @@ internal fun normalizeRestoredDownloadTasks(tasks: List<DownloadTaskItem>): List
         when (task.status) {
             DownloadTaskStatus.Downloading,
             DownloadTaskStatus.Queued -> task.copy(status = DownloadTaskStatus.Paused)
+            DownloadTaskStatus.WaitingForWifi,
             DownloadTaskStatus.Paused,
             DownloadTaskStatus.Failed -> task
         }
     }
 
-internal fun audioFileNameForTrack(track: MusicTrack): String {
+internal fun audioFileNameForTrack(track: MusicTrack, extension: String = "audio"): String {
     val safePartKey = track.partKey.replace(Regex("[^a-zA-Z0-9_-]"), "_")
-    return "${track.sourceId}_${track.ratingKey}_$safePartKey.audio"
+    val safeExt = extension.trim().trimStart('.').ifBlank { "audio" }
+    return "${track.sourceId}_${track.ratingKey}_$safePartKey.$safeExt"
 }
 
 /**

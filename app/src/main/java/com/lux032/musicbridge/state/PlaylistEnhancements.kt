@@ -166,6 +166,7 @@ internal fun summarizePlaylistDownload(
                 activeKeys += key
                 progressSum += (liveProgress ?: task.progress).coerceIn(0f, 1f)
             }
+            DownloadTaskStatus.WaitingForWifi,
             DownloadTaskStatus.Paused -> {
                 pausedKeys += key
                 progressSum += task.progress.coerceIn(0f, 1f)

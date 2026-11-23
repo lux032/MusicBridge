@@ -119,6 +119,16 @@ internal class AppStateLocalPlaybackCoordinator(
             override fun onTrackTransition(index: Int, reason: Int) {
                 val current = state.miniPlayerState ?: return
                 if (current.target != PlaybackTarget.LocalDevice) return
+                val isNaturalTrackEnd = reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO ||
+                    reason == Player.MEDIA_ITEM_TRANSITION_REASON_REPEAT
+                if (isNaturalTrackEnd && SleepTimerController.state.value.stopAfterCurrentTrack) {
+                    sessionDriver.onQueueEnded(
+                        track = current.tracks.getOrNull(current.currentIndex),
+                        failed = false,
+                    )
+                    SleepTimerController.triggerIfStopAfterCurrentTrack()
+                    return
+                }
                 val track = current.tracks.getOrNull(index) ?: return
                 val engine = state.localPlaybackEngine
                 state.recordPlayedAlbum(track.resolvePlaybackAlbum(state.allAlbums, current.album))
@@ -171,6 +181,9 @@ internal class AppStateLocalPlaybackCoordinator(
                         track = current.tracks.getOrNull(state.localPlaybackEngine.currentIndex),
                         failed = failed,
                     )
+                    if (!failed && SleepTimerController.triggerIfStopAfterCurrentTrack()) {
+                        return@launch
+                    }
                     state.localPlaybackEngine.rewindToStartAndPause()
                     state.miniPlayerState = current.copy(
                         isPaused = true,
@@ -239,6 +252,8 @@ internal class AppStateLocalPlaybackCoordinator(
             }
         }
         state.localPlaybackEngine.setNetworkIsWifi(state.currentNetworkIsWifi)
+        state.offlineDownloadManager.updatePolicy(state.currentOfflineDownloadPolicy())
+        state.offlineDownloadManager.updateNetworkIsWifi(state.currentNetworkIsWifi)
     }
 
     /**
@@ -260,6 +275,7 @@ internal class AppStateLocalPlaybackCoordinator(
                 previousIsWifi = isWifi
                 state.currentNetworkIsWifi = isWifi
                 state.localPlaybackEngine.setNetworkIsWifi(isWifi)
+                state.offlineDownloadManager.updateNetworkIsWifi(isWifi)
                 if (switchedToCellular) LocalAudioCache.cancelPrecache()
                 reEvaluateQueueForNetworkChange()
             }

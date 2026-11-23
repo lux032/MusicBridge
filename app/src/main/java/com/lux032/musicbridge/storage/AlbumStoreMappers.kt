@@ -52,7 +52,7 @@ data class DownloadedAudioTrack(
         sourceAudioBitrateKbps = sourceAudioBitrateKbps,
         sourceAudioSampleRate = sourceAudioSampleRate,
         bitDepth = bitDepth,
-        playbackMimeType = null,
+        playbackMimeType = if (localAudioPath.endsWith(".ogg", ignoreCase = true)) "audio/ogg" else null,
         lyricUrl = localLyricPath?.let { "file://$it" },
         sourceId = sourceId,
         discNumber = discNumber,

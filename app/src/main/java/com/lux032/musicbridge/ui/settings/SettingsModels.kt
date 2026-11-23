@@ -6,6 +6,7 @@ import com.lux032.musicbridge.LocalOpusBitrate
 import com.lux032.musicbridge.LocalPrecacheCount
 import com.lux032.musicbridge.LocalStreamingLimit
 import com.lux032.musicbridge.MusicServerProfile
+import com.lux032.musicbridge.OfflineDownloadFormat
 import com.lux032.musicbridge.OpusTranscodeMode
 import com.lux032.musicbridge.SonosHiResTranscodeMode
 import com.lux032.musicbridge.defaultHomeLayout
@@ -25,6 +26,8 @@ data class SettingsViewState(
     val wifiPrecacheCount: LocalPrecacheCount,
     val cellularPrecacheCount: LocalPrecacheCount,
     val localCacheSize: LocalCacheSize,
+    val downloadWifiOnly: Boolean = true,
+    val downloadFormat: OfflineDownloadFormat = OfflineDownloadFormat.DEFAULT,
     val homeLayout: List<HomeModuleConfig> = defaultHomeLayout(),
 )
 
@@ -40,6 +43,8 @@ data class SettingsActions(
     val onWifiPrecacheCountChange: (LocalPrecacheCount) -> Unit,
     val onCellularPrecacheCountChange: (LocalPrecacheCount) -> Unit,
     val onLocalCacheSizeChange: (LocalCacheSize) -> Unit,
+    val onDownloadWifiOnlyChange: (Boolean) -> Unit = {},
+    val onDownloadFormatChange: (OfflineDownloadFormat) -> Unit = {},
     val onClearLocalCache: () -> Unit,
     val onClearAllDownloads: () -> Unit,
     val onSaveServer: (MusicServerProfile, Boolean) -> String?,

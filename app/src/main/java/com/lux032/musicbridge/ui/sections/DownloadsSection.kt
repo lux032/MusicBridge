@@ -647,7 +647,11 @@ private fun DownloadQueuePanel(
     onCancelAll: () -> Unit,
 ) {
     val palette = LocalArtworkPalette.current
-    val hasActive = tasks.any { it.status == DownloadTaskStatus.Downloading || it.status == DownloadTaskStatus.Queued }
+    val hasActive = tasks.any {
+        it.status == DownloadTaskStatus.Downloading ||
+            it.status == DownloadTaskStatus.Queued ||
+            it.status == DownloadTaskStatus.WaitingForWifi
+    }
     val hasPaused = tasks.any { it.status == DownloadTaskStatus.Paused }
     val hasFailed = tasks.any { it.status == DownloadTaskStatus.Failed }
 
@@ -727,6 +731,7 @@ private fun DownloadTaskRow(
     val statusText = when (task.status) {
         DownloadTaskStatus.Queued -> Strings.downloadStatusQueued
         DownloadTaskStatus.Downloading -> Strings.downloadingProgress(percent)
+        DownloadTaskStatus.WaitingForWifi -> Strings.downloadStatusWaitingForWifi
         DownloadTaskStatus.Paused -> Strings.downloadStatusPaused(percent)
         DownloadTaskStatus.Failed -> Strings.downloadStatusFailed(task.errorMessage)
     }
@@ -757,14 +762,16 @@ private fun DownloadTaskRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            if (task.status == DownloadTaskStatus.Downloading || (task.status == DownloadTaskStatus.Paused && percent > 0)) {
+            if (task.status == DownloadTaskStatus.Downloading ||
+                ((task.status == DownloadTaskStatus.Paused || task.status == DownloadTaskStatus.WaitingForWifi) && percent > 0)
+            ) {
                 LinearProgressIndicator(
                     progress = { task.progress.coerceIn(0f, 1f) },
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(3.dp)
                         .clip(RoundedCornerShape(2.dp)),
-                    color = if (task.status == DownloadTaskStatus.Paused) AppColors.TextTertiary else accentColor,
+                    color = if (task.status == DownloadTaskStatus.Downloading) accentColor else AppColors.TextTertiary,
                     trackColor = Color.White.copy(alpha = 0.12f),
                 )
             }
@@ -776,7 +783,8 @@ private fun DownloadTaskRow(
         ) {
             when (task.status) {
                 DownloadTaskStatus.Queued,
-                DownloadTaskStatus.Downloading -> {
+                DownloadTaskStatus.Downloading,
+                DownloadTaskStatus.WaitingForWifi -> {
                     IconButton(onClick = onPause, modifier = Modifier.size(36.dp)) {
                         Icon(
                             imageVector = Icons.Filled.Pause,

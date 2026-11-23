@@ -111,6 +111,10 @@ class AppState(
         private set
     var localCacheSize by mutableStateOf(appPreferences.loadLocalCacheSize())
         private set
+    var downloadWifiOnly by mutableStateOf(appPreferences.loadDownloadWifiOnly())
+        private set
+    var downloadFormat by mutableStateOf(appPreferences.loadDownloadFormat())
+        private set
     var homeLayout by mutableStateOf(appPreferences.loadHomeLayout())
         private set
     var cachedOriginalTrackKeys by mutableStateOf<Set<String>>(emptySet())
@@ -608,7 +612,32 @@ class AppState(
     fun updateLocalOpusBitrate(bitrate: LocalOpusBitrate) {
         localOpusBitrate = bitrate
         appPreferences.saveLocalOpusBitrate(bitrate)
+        offlineDownloadManager.updatePolicy(currentOfflineDownloadPolicy())
         actionMessage = Strings.localOpusBitrateUpdated(bitrate.label)
+    }
+
+    fun currentOfflineDownloadPolicy(): OfflineDownloadPolicy = OfflineDownloadPolicy(
+        wifiOnly = downloadWifiOnly,
+        format = downloadFormat,
+        opusBitrate = localOpusBitrate,
+    )
+
+    fun updateDownloadWifiOnly(enabled: Boolean) {
+        downloadWifiOnly = enabled
+        appPreferences.saveDownloadWifiOnly(enabled)
+        offlineDownloadManager.updatePolicy(currentOfflineDownloadPolicy())
+        actionMessage = if (enabled) Strings.downloadWifiOnlyEnabledNotice else Strings.downloadWifiOnlyDisabledNotice
+    }
+
+    fun updateDownloadFormat(format: OfflineDownloadFormat) {
+        downloadFormat = format
+        appPreferences.saveDownloadFormat(format)
+        offlineDownloadManager.updatePolicy(currentOfflineDownloadPolicy())
+        val label = when (format) {
+            OfflineDownloadFormat.ORIGINAL -> Strings.downloadFormatOriginal
+            OfflineDownloadFormat.OPUS -> Strings.downloadFormatOpusValue(localOpusBitrate.label)
+        }
+        actionMessage = Strings.downloadFormatUpdatedNotice(label)
     }
 
     fun updateLocalPrecacheCount(wifi: Boolean, count: LocalPrecacheCount) {
@@ -647,7 +676,11 @@ class AppState(
         offlineDownloadManager.isTrackDownloaded(track.sourceId, track.ratingKey)
 
     fun downloadTrack(track: MusicTrack) {
-        actionMessage = Strings.downloadStarted(track.title)
+        actionMessage = if (offlineDownloadManager.isBlockedByWifiPolicy()) {
+            Strings.downloadQueuedWaitingForWifi
+        } else {
+            Strings.downloadStarted(track.title)
+        }
         offlineDownloadManager.enqueueDownload(track) { success ->
             scope.launch {
                 actionMessage = if (success) Strings.downloadSuccess(track.title) else Strings.downloadFailed(track.title)
@@ -988,8 +1021,11 @@ class AppState(
         val alreadyHadSome = unDownloaded.size < tracks.size
         offlineDownloadManager.enqueueDownloads(unDownloaded)
         notifyPlaylist(
-            if (alreadyHadSome) Strings.playlistDownloadRemainingQueued(unDownloaded.size)
-            else Strings.playlistDownloadQueued(unDownloaded.size),
+            when {
+                offlineDownloadManager.isBlockedByWifiPolicy() -> Strings.downloadQueuedWaitingForWifi
+                alreadyHadSome -> Strings.playlistDownloadRemainingQueued(unDownloaded.size)
+                else -> Strings.playlistDownloadQueued(unDownloaded.size)
+            },
         )
     }
 
@@ -1217,6 +1253,9 @@ class AppState(
 
     fun startSleepTimer(hours: Int, minutes: Int) =
         playbackCoordinator.startSleepTimer(hours, minutes)
+
+    fun startSleepTimerAfterCurrentTrack() =
+        playbackCoordinator.startSleepTimerAfterCurrentTrack()
 
     fun cancelSleepTimer() = playbackCoordinator.cancelSleepTimer()
 

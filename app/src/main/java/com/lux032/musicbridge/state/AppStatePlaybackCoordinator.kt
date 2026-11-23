@@ -405,10 +405,14 @@ internal class AppStatePlaybackCoordinator(
                     },
                     getTracks = { state.miniPlayerState?.tracks ?: albumTrackResult.tracks },
                     getNextIndex = { currentIndex ->
-                        resolveNextPlaybackIndex(
-                            state.miniPlayerState?.tracks?.size ?: albumTrackResult.tracks.size,
-                            currentIndex,
-                        )
+                        if (SleepTimerController.triggerIfStopAfterCurrentTrack()) {
+                            null
+                        } else {
+                            resolveNextPlaybackIndex(
+                                state.miniPlayerState?.tracks?.size ?: albumTrackResult.tracks.size,
+                                currentIndex,
+                            )
+                        }
                     },
                     onTrackChanged = { index, track, startPositionMillis ->
                         transcodeRestartSeek = transcodeRestartSeek?.takeIf {
@@ -1075,12 +1079,16 @@ internal class AppStatePlaybackCoordinator(
                     },
                     getTracks = { state.miniPlayerState?.tracks ?: tracks },
                     getNextIndex = { currentIndex ->
-                        val queueSize = state.miniPlayerState?.tracks?.size ?: tracks.size
-                        when (state.playbackMode) {
-                            PlaybackMode.Sequential -> if (currentIndex < queueSize - 1) currentIndex + 1 else null
-                            PlaybackMode.RepeatAll -> (currentIndex + 1) % queueSize
-                            PlaybackMode.RepeatOne -> currentIndex
-                            PlaybackMode.Shuffle -> Random.nextInt(queueSize)
+                        if (SleepTimerController.triggerIfStopAfterCurrentTrack()) {
+                            null
+                        } else {
+                            val queueSize = state.miniPlayerState?.tracks?.size ?: tracks.size
+                            when (state.playbackMode) {
+                                PlaybackMode.Sequential -> if (currentIndex < queueSize - 1) currentIndex + 1 else null
+                                PlaybackMode.RepeatAll -> (currentIndex + 1) % queueSize
+                                PlaybackMode.RepeatOne -> currentIndex
+                                PlaybackMode.Shuffle -> Random.nextInt(queueSize)
+                            }
                         }
                     },
                     onTrackChanged = { index, track, positionMillis ->
@@ -2063,6 +2071,14 @@ internal class AppStatePlaybackCoordinator(
         )
         state.errorMessage = null
         state.actionMessage = "${Strings.sleepTimer} ${Strings.sleepTimerRemaining(formatSleepTimer(durationMillis))}"
+    }
+
+    fun startSleepTimerAfterCurrentTrack() {
+        val room = state.miniPlayerState?.sonosRoom
+            ?: state.selectedSonosRoom.takeIf { state.miniPlayerState == null }
+        SleepTimerController.startStopAfterCurrentTrack(room = room)
+        state.errorMessage = null
+        state.actionMessage = Strings.sleepTimerAfterCurrentTrackSet
     }
 
     fun cancelSleepTimer() {

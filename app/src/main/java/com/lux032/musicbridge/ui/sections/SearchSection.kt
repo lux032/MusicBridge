@@ -35,6 +35,8 @@ import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.DownloadDone
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.LibraryAdd
 import androidx.compose.material.icons.filled.MoreVert
@@ -86,11 +88,14 @@ internal fun SearchSection(
     isOverviewLoading: Boolean,
     overviewError: String?,
     overview: UnifiedSearchResults?,
+    downloadedOnly: Boolean = false,
+    localSource: SearchLocalSource? = null,
     categoryStates: Map<SearchCategory, SearchCategoryFeedState>,
     bottomContentPadding: Dp,
     activeSourceId: String,
     onQueryInputChange: (String) -> Unit,
     onSubmitSearch: () -> Unit,
+    onToggleDownloadedOnly: () -> Unit = {},
     onSelectHistoryQuery: (String) -> Unit,
     onRemoveHistoryQuery: (String) -> Unit,
     onClearHistory: () -> Unit,
@@ -166,6 +171,20 @@ internal fun SearchSection(
         }
 
         if (!inResultsMode) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 10.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                AlbumControlChip(
+                    icon = Icons.Filled.DownloadDone,
+                    label = Strings.searchDownloadedOnlyChip,
+                    selected = downloadedOnly,
+                    onClick = onToggleDownloadedOnly,
+                )
+            }
             SearchHistoryList(
                 history = history,
                 bottomContentPadding = bottomContentPadding,
@@ -182,8 +201,14 @@ internal fun SearchSection(
         SearchCategoryChipRow(
             selectedTab = selectedTab,
             overview = overview,
+            downloadedOnly = downloadedOnly,
+            onToggleDownloadedOnly = onToggleDownloadedOnly,
             onSelectTab = onSelectTab,
         )
+
+        if (localSource == SearchLocalSource.OfflineFallback) {
+            SearchOfflineFallbackBanner(onRetryOnline = onRetryOverview)
+        }
 
         val category = selectedTab.toCategory()
         if (category == null) {
@@ -191,9 +216,11 @@ internal fun SearchSection(
                 isLoading = isOverviewLoading,
                 error = overviewError,
                 overview = overview,
+                downloadedOnly = downloadedOnly,
                 activeSourceId = activeSourceId,
                 bottomContentPadding = bottomContentPadding,
                 onRetry = onRetryOverview,
+                onTurnOffDownloadedOnly = onToggleDownloadedOnly,
                 onSelectTab = onSelectTab,
                 onOpenBestMatch = onOpenBestMatch,
                 onOpenArtist = onOpenArtist,
@@ -329,6 +356,8 @@ private fun SearchHistoryList(
 private fun SearchCategoryChipRow(
     selectedTab: SearchTab,
     overview: UnifiedSearchResults?,
+    downloadedOnly: Boolean,
+    onToggleDownloadedOnly: () -> Unit,
     onSelectTab: (SearchTab) -> Unit,
 ) {
     val items = listOf(
@@ -344,12 +373,66 @@ private fun SearchCategoryChipRow(
             .padding(top = 12.dp, bottom = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        item(key = "downloaded-only-filter") {
+            AlbumControlChip(
+                icon = Icons.Filled.DownloadDone,
+                label = Strings.searchDownloadedOnlyChip,
+                selected = downloadedOnly,
+                onClick = onToggleDownloadedOnly,
+            )
+        }
         lazyItems(items, key = { it.first.name }) { (tab, label) ->
             AlbumControlChip(
                 icon = null,
                 label = label,
                 selected = selectedTab == tab,
                 onClick = { onSelectTab(tab) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun SearchOfflineFallbackBanner(
+    onRetryOnline: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 4.dp, bottom = 4.dp),
+        shape = RoundedCornerShape(14.dp),
+        color = AppColors.SurfaceMuted,
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 9.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Filled.CloudOff,
+                contentDescription = null,
+                tint = AppColors.TextSecondary,
+                modifier = Modifier.size(16.dp),
+            )
+            Text(
+                text = Strings.searchOfflineBannerTitle,
+                color = AppColors.TextSecondary,
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                text = Strings.searchRetryOnline,
+                color = AppColors.Accent,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(onClick = onRetryOnline)
+                    .padding(horizontal = 6.dp, vertical = 2.dp),
             )
         }
     }
@@ -362,9 +445,11 @@ private fun SearchOverviewBody(
     isLoading: Boolean,
     error: String?,
     overview: UnifiedSearchResults?,
+    downloadedOnly: Boolean,
     activeSourceId: String,
     bottomContentPadding: Dp,
     onRetry: () -> Unit,
+    onTurnOffDownloadedOnly: () -> Unit,
     onSelectTab: (SearchTab) -> Unit,
     onOpenBestMatch: (SearchBestMatch) -> Unit,
     onOpenArtist: (MusicArtist) -> Unit,
@@ -399,10 +484,19 @@ private fun SearchOverviewBody(
     val data = overview ?: return
     if (data.isEmpty) {
         Box(modifier = Modifier.fillMaxSize().padding(top = 12.dp)) {
-            EmptyStateCard(
-                title = Strings.searchEmptyTitle,
-                body = Strings.searchEmptyDesc,
-            )
+            if (downloadedOnly) {
+                EmptyStateCard(
+                    title = Strings.searchDownloadedEmptyTitle,
+                    body = Strings.searchDownloadedEmptyDesc,
+                    actionLabel = Strings.searchTurnOffDownloadedOnly,
+                    onAction = onTurnOffDownloadedOnly,
+                )
+            } else {
+                EmptyStateCard(
+                    title = Strings.searchEmptyTitle,
+                    body = Strings.searchEmptyDesc,
+                )
+            }
         }
         return
     }

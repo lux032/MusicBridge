@@ -13,10 +13,18 @@ import com.lux032.musicbridge.music.MusicTrack
 import com.lux032.musicbridge.music.SearchBestMatch
 import com.lux032.musicbridge.music.SearchCategory
 import com.lux032.musicbridge.music.UnifiedSearchResults
+import com.lux032.musicbridge.storage.searchLocalLibrary
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+enum class SearchLocalSource {
+    OfflineFallback,
+    DownloadedOnly,
+}
 
 enum class SearchTab {
     All,
@@ -77,6 +85,10 @@ internal class AppStateSearchCoordinator(private val state: AppState) {
         private set
     var overview by mutableStateOf<UnifiedSearchResults?>(null)
         private set
+    var downloadedOnly by mutableStateOf(false)
+        private set
+    var localSource by mutableStateOf<SearchLocalSource?>(null)
+        private set
     val categoryStates = mutableStateMapOf<SearchCategory, SearchCategoryFeedState>()
 
     private var debounceJob: Job? = null
@@ -109,7 +121,22 @@ internal class AppStateSearchCoordinator(private val state: AppState) {
         isOverviewLoading = false
         overviewError = null
         overview = null
+        downloadedOnly = false
+        localSource = null
         categoryStates.clear()
+    }
+
+    fun toggleDownloadedOnly() {
+        updateDownloadedOnly(!downloadedOnly)
+    }
+
+    fun updateDownloadedOnly(enabled: Boolean) {
+        if (downloadedOnly == enabled) return
+        downloadedOnly = enabled
+        val q = activeQuery.ifBlank { normalizeQuery(queryInput) }
+        if (q.isNotEmpty()) {
+            executeOverviewSearch(q, recordHistory = false, preserveTab = true)
+        }
     }
 
     fun onQueryInputChanged(newValue: String) {
@@ -225,6 +252,7 @@ internal class AppStateSearchCoordinator(private val state: AppState) {
         isOverviewLoading = false
         overviewError = null
         overview = null
+        localSource = null
         categoryStates.clear()
     }
 
@@ -376,7 +404,11 @@ internal class AppStateSearchCoordinator(private val state: AppState) {
         }
     }
 
-    private fun executeOverviewSearch(query: String, recordHistory: Boolean) {
+    private fun executeOverviewSearch(
+        query: String,
+        recordHistory: Boolean,
+        preserveTab: Boolean = false,
+    ) {
         if (recordHistory) recordHistory(query)
         overviewJob?.cancel()
         categoryJobs.values.forEach { it.cancel() }
@@ -386,51 +418,104 @@ internal class AppStateSearchCoordinator(private val state: AppState) {
             categoryGenerations[cat] = (categoryGenerations[cat] ?: 0L) + 1L
         }
         val profile = state.connectionPreferences
+        val targetTab = if (preserveTab) selectedTab else SearchTab.All
+        val wantDownloadedOnly = downloadedOnly
         activeQuery = query
-        selectedTab = SearchTab.All
+        selectedTab = targetTab
         categoryStates.clear()
         overview = null
         overviewError = null
+        localSource = null
 
-        val client = activeClient()
-        if (client == null) {
-            isOverviewLoading = false
-            overviewError = Strings.searchNoServer
-            return
-        }
-
+        val client = if (wantDownloadedOnly) null else activeClient()
         isOverviewLoading = true
         overviewJob = state.scope.launch {
+            if (wantDownloadedOnly) {
+                val localRes = queryLocalSearch(profile.id, query, downloadedOnly = true)
+                if (generation != overviewGeneration || state.connectionPreferences.id != profile.id) return@launch
+                overview = localRes
+                localSource = SearchLocalSource.DownloadedOnly
+                overviewError = null
+                isOverviewLoading = false
+                targetTab.toCategory()?.let { loadCategoryPage(it, reset = true) }
+                return@launch
+            }
+
+            if (client == null) {
+                val snapshot = withContext(Dispatchers.IO) {
+                    state.albumLocalStore.getLocalSearchSnapshot(profile.id, downloadedOnly = false)
+                }
+                if (generation != overviewGeneration || state.connectionPreferences.id != profile.id) return@launch
+                if (snapshot.hasAnyContent) {
+                    overview = searchLocalLibrary(snapshot, query, downloadedOnly = false)
+                    localSource = SearchLocalSource.OfflineFallback
+                    overviewError = null
+                    isOverviewLoading = false
+                    targetTab.toCategory()?.let { loadCategoryPage(it, reset = true) }
+                } else {
+                    isOverviewLoading = false
+                    overviewError = Strings.searchNoServer
+                }
+                return@launch
+            }
+
             runCatching { client.searchUnified(query) }
                 .onSuccess { res ->
                     if (generation != overviewGeneration || state.connectionPreferences.id != profile.id) return@onSuccess
                     overview = res.copy(
                         albums = res.albums.copy(items = state.enrichAlbumDiscCounts(res.albums.items)),
                     )
+                    localSource = null
                     overviewError = null
                     isOverviewLoading = false
+                    targetTab.toCategory()?.let { loadCategoryPage(it, reset = true) }
                 }
                 .onFailure { error ->
                     if (error is CancellationException) throw error
                     if (generation != overviewGeneration || state.connectionPreferences.id != profile.id) return@onFailure
-                    isOverviewLoading = false
-                    overviewError = errorMessageFor(error)
+                    val snapshot = withContext(Dispatchers.IO) {
+                        state.albumLocalStore.getLocalSearchSnapshot(profile.id, downloadedOnly = false)
+                    }
+                    if (generation != overviewGeneration || state.connectionPreferences.id != profile.id) return@onFailure
+                    if (snapshot.hasAnyContent) {
+                        overview = searchLocalLibrary(snapshot, query, downloadedOnly = false)
+                        localSource = SearchLocalSource.OfflineFallback
+                        overviewError = null
+                        isOverviewLoading = false
+                        targetTab.toCategory()?.let { loadCategoryPage(it, reset = true) }
+                    } else {
+                        isOverviewLoading = false
+                        overviewError = errorMessageFor(error)
+                    }
                 }
         }
+    }
+
+    private suspend fun queryLocalSearch(
+        sourceId: String,
+        query: String,
+        downloadedOnly: Boolean,
+        category: SearchCategory? = null,
+        offset: Int = 0,
+        limit: Int = TRACK_PAGE_SIZE,
+    ): UnifiedSearchResults = withContext(Dispatchers.IO) {
+        val snapshot = state.albumLocalStore.getLocalSearchSnapshot(sourceId, downloadedOnly)
+        searchLocalLibrary(
+            snapshot = snapshot,
+            query = query,
+            downloadedOnly = downloadedOnly,
+            category = category,
+            offset = offset,
+            limit = limit,
+        )
     }
 
     private fun loadCategoryPage(category: SearchCategory, reset: Boolean) {
         val query = activeQuery
         if (query.isBlank()) return
         val profile = state.connectionPreferences
-        val client = activeClient()
-        if (client == null) {
-            categoryStates[category] = SearchCategoryFeedState(
-                loadedQuery = query,
-                error = Strings.searchNoServer,
-            )
-            return
-        }
+        val useLocalDirectly = downloadedOnly || localSource != null
+        val client = if (useLocalDirectly) null else activeClient()
         categoryJobs[category]?.cancel()
         val generation = (categoryGenerations[category] ?: 0L) + 1L
         categoryGenerations[category] = generation
@@ -447,63 +532,107 @@ internal class AppStateSearchCoordinator(private val state: AppState) {
         )
 
         categoryJobs[category] = state.scope.launch {
+            if (useLocalDirectly || client == null) {
+                val res = queryLocalSearch(
+                    sourceId = profile.id,
+                    query = query,
+                    downloadedOnly = downloadedOnly,
+                    category = category,
+                    offset = offset,
+                    limit = limit,
+                )
+                if (categoryGenerations[category] != generation || state.connectionPreferences.id != profile.id) {
+                    return@launch
+                }
+                applyCategoryPageResult(category, query, reset, res)
+                return@launch
+            }
+
             runCatching { client.searchUnified(query, category = category, offset = offset, limit = limit) }
                 .onSuccess { res ->
                     if (categoryGenerations[category] != generation || state.connectionPreferences.id != profile.id) {
                         return@onSuccess
                     }
-                    val current = categoryStates[category] ?: SearchCategoryFeedState(loadedQuery = query)
-                    categoryStates[category] = when (category) {
-                        SearchCategory.Artists -> current.copy(
-                            loadedQuery = query,
-                            artists = if (reset) res.artists.items else (current.artists + res.artists.items).distinctBy(MusicArtist::ratingKey),
-                            total = res.artists.total,
-                            isLoading = false,
-                            isLoadingMore = false,
-                            error = null,
-                        )
-                        SearchCategory.Albums -> {
-                            val enriched = state.enrichAlbumDiscCounts(res.albums.items)
-                            current.copy(
-                                loadedQuery = query,
-                                albums = if (reset) enriched else (current.albums + enriched).distinctBy(MusicAlbum::ratingKey),
-                                total = res.albums.total,
-                                isLoading = false,
-                                isLoadingMore = false,
-                                error = null,
-                            )
-                        }
-                        SearchCategory.Tracks -> current.copy(
-                            loadedQuery = query,
-                            tracks = if (reset) res.tracks.items else (current.tracks + res.tracks.items).distinctBy(MusicTrack::ratingKey),
-                            total = res.tracks.total,
-                            isLoading = false,
-                            isLoadingMore = false,
-                            error = null,
-                        )
-                        SearchCategory.Composers -> current.copy(
-                            loadedQuery = query,
-                            artists = if (reset) res.composers.items else (current.artists + res.composers.items).distinctBy(MusicArtist::ratingKey),
-                            total = res.composers.total,
-                            isLoading = false,
-                            isLoadingMore = false,
-                            error = null,
-                        )
-                    }
+                    applyCategoryPageResult(category, query, reset, res)
                 }
                 .onFailure { error ->
                     if (error is CancellationException) throw error
                     if (categoryGenerations[category] != generation || state.connectionPreferences.id != profile.id) {
                         return@onFailure
                     }
-                    val current = categoryStates[category] ?: SearchCategoryFeedState(loadedQuery = query)
-                    categoryStates[category] = current.copy(
-                        loadedQuery = query,
-                        isLoading = false,
-                        isLoadingMore = false,
-                        error = errorMessageFor(error),
-                    )
+                    val snapshot = withContext(Dispatchers.IO) {
+                        state.albumLocalStore.getLocalSearchSnapshot(profile.id, downloadedOnly = false)
+                    }
+                    if (categoryGenerations[category] != generation || state.connectionPreferences.id != profile.id) {
+                        return@onFailure
+                    }
+                    if (snapshot.hasAnyContent) {
+                        localSource = SearchLocalSource.OfflineFallback
+                        val fallbackRes = searchLocalLibrary(
+                            snapshot = snapshot,
+                            query = query,
+                            downloadedOnly = false,
+                            category = category,
+                            offset = offset,
+                            limit = limit,
+                        )
+                        applyCategoryPageResult(category, query, reset, fallbackRes)
+                    } else {
+                        val current = categoryStates[category] ?: SearchCategoryFeedState(loadedQuery = query)
+                        categoryStates[category] = current.copy(
+                            loadedQuery = query,
+                            isLoading = false,
+                            isLoadingMore = false,
+                            error = errorMessageFor(error),
+                        )
+                    }
                 }
+        }
+    }
+
+    private fun applyCategoryPageResult(
+        category: SearchCategory,
+        query: String,
+        reset: Boolean,
+        res: UnifiedSearchResults,
+    ) {
+        val current = categoryStates[category] ?: SearchCategoryFeedState(loadedQuery = query)
+        categoryStates[category] = when (category) {
+            SearchCategory.Artists -> current.copy(
+                loadedQuery = query,
+                artists = if (reset) res.artists.items else (current.artists + res.artists.items).distinctBy(MusicArtist::ratingKey),
+                total = res.artists.total,
+                isLoading = false,
+                isLoadingMore = false,
+                error = null,
+            )
+            SearchCategory.Albums -> {
+                val enriched = state.enrichAlbumDiscCounts(res.albums.items)
+                current.copy(
+                    loadedQuery = query,
+                    albums = if (reset) enriched else (current.albums + enriched).distinctBy(MusicAlbum::ratingKey),
+                    total = res.albums.total,
+                    isLoading = false,
+                    isLoadingMore = false,
+                    error = null,
+                )
+            }
+            SearchCategory.Tracks -> current.copy(
+                loadedQuery = query,
+                tracks = if (reset) res.tracks.items else (current.tracks + res.tracks.items).distinctBy(MusicTrack::ratingKey),
+                total = res.tracks.total,
+                isLoading = false,
+                isLoadingMore = false,
+                error = null,
+            )
+            SearchCategory.Composers -> current.copy(
+                loadedQuery = query,
+                artists = if (reset) res.composers.items else (current.artists + res.composers.items).distinctBy(MusicArtist::ratingKey),
+                total = res.composers.total,
+                isLoading = false,
+                isLoadingMore = false,
+                error = null,
+            )
         }
     }
 

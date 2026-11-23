@@ -53,12 +53,14 @@ class AlbumLocalStore(context: Context) {
         return if (fallbackRating != null) track.copy(userRating = fallbackRating) else track
     }
 
-    fun getAllDownloadedTracks(): List<DownloadedAudioTrack> {
+    fun getAllDownloadedTracks(sourceId: String? = null): List<DownloadedAudioTrack> {
+        val selection = sourceId?.takeIf(String::isNotBlank)?.let { "${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ?" }
+        val selectionArgs = sourceId?.takeIf(String::isNotBlank)?.let { arrayOf(it) }
         val tracks = helper.readableDatabase.query(
             AlbumDatabaseHelper.TABLE_DOWNLOADED_TRACKS,
             null,
-            null,
-            null,
+            selection,
+            selectionArgs,
             null,
             null,
             "${AlbumDatabaseHelper.COLUMN_DOWNLOADED_AT_EPOCH_SECONDS} DESC",
@@ -512,6 +514,57 @@ class AlbumLocalStore(context: Context) {
             }
         }
         return applyDerivedDiscCounts(db, sourceId, albums)
+    }
+
+    internal fun getLocalSearchSnapshot(
+        sourceId: String,
+        downloadedOnly: Boolean,
+    ): LocalLibrarySearchSnapshot {
+        val downloaded = getAllDownloadedTracks(sourceId.takeIf(String::isNotBlank)).filter {
+            val file = java.io.File(it.localAudioPath)
+            file.exists() && file.length() > 0L
+        }
+        val effectiveSourceIds = if (sourceId.isNotBlank()) {
+            listOf(sourceId)
+        } else {
+            downloaded.map(DownloadedAudioTrack::sourceId).filter(String::isNotBlank).distinct()
+        }
+        val albums = effectiveSourceIds.flatMap(::getAllAlbums)
+        val artists = effectiveSourceIds.flatMap(::getArtists)
+        if (downloadedOnly) {
+            return LocalLibrarySearchSnapshot(
+                artists = artists,
+                albums = albums,
+                tracks = emptyList(),
+                downloadedTracks = downloaded,
+            )
+        }
+        val db = helper.readableDatabase
+        val catalogTracks = buildList {
+            for (src in effectiveSourceIds) {
+                for (table in listOf(AlbumDatabaseHelper.TABLE_ALBUM_TRACKS, AlbumDatabaseHelper.TABLE_TRACKS)) {
+                    db.query(
+                        table,
+                        null,
+                        "${AlbumDatabaseHelper.COLUMN_SOURCE_ID} = ?",
+                        arrayOf(src),
+                        null,
+                        null,
+                        null,
+                    ).use { cursor ->
+                        while (cursor.moveToNext()) {
+                            add(cursor.toTrack())
+                        }
+                    }
+                }
+            }
+        }
+        return LocalLibrarySearchSnapshot(
+            artists = artists,
+            albums = albums,
+            tracks = catalogTracks,
+            downloadedTracks = downloaded,
+        )
     }
 
     fun replaceAllAlbums(sourceId: String, albums: List<MusicAlbum>) {

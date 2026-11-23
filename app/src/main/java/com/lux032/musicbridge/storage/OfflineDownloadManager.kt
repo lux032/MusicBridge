@@ -3,6 +3,7 @@ package com.lux032.musicbridge.storage
 import android.content.Context
 import android.os.SystemClock
 import android.util.Log
+import com.lux032.musicbridge.OfflineDownloadPolicy
 import com.lux032.musicbridge.Strings
 import com.lux032.musicbridge.core.AppHttpClient
 import com.lux032.musicbridge.local.LocalAudioCache
@@ -132,7 +133,13 @@ class OfflineDownloadManager(
     private val completionCallbacks = ConcurrentHashMap<String, MutableList<(Boolean) -> Unit>>()
     private val wakeupChannel = Channel<Unit>(Channel.CONFLATED)
 
-    private enum class InterruptReason { None, Paused, Cancelled }
+    private enum class InterruptReason { None, Paused, WaitingForWifi, Cancelled }
+
+    @Volatile
+    private var policy: OfflineDownloadPolicy = OfflineDownloadPolicy()
+
+    @Volatile
+    private var networkIsWifi: Boolean = true
 
     @Volatile
     private var activeTaskKey: String? = null
@@ -149,6 +156,7 @@ class OfflineDownloadManager(
     private sealed interface TransferOutcome {
         data object Completed : TransferOutcome
         data object Paused : TransferOutcome
+        data object WaitingForWifi : TransferOutcome
         data object Cancelled : TransferOutcome
         data class Failed(val reason: String) : TransferOutcome
     }
@@ -164,13 +172,74 @@ class OfflineDownloadManager(
 
     suspend fun refreshMetadataSnapshot() = refreshDownloadedKeys()
 
+    fun updatePolicy(newPolicy: OfflineDownloadPolicy) {
+        policy = newPolicy
+        reconcileWifiConstraint()
+    }
+
+    fun updateNetworkIsWifi(isWifi: Boolean) {
+        networkIsWifi = isWifi
+        reconcileWifiConstraint()
+    }
+
+    fun isBlockedByWifiPolicy(): Boolean = shouldBlockDownloadForWifi(policy.wifiOnly, networkIsWifi)
+
+    private fun reconcileWifiConstraint() {
+        val blocked = isBlockedByWifiPolicy()
+        var shouldAbortCall: Call? = null
+        var wokeWorker = false
+        var shouldStopService = false
+        synchronized(queueLock) {
+            if (blocked) {
+                var changed = false
+                tasksByKey.entries.forEach { (key, task) ->
+                    if (task.status == DownloadTaskStatus.Queued || task.status == DownloadTaskStatus.Downloading) {
+                        tasksByKey[key] = task.copy(status = DownloadTaskStatus.WaitingForWifi, errorMessage = null)
+                        changed = true
+                    }
+                }
+                if (activeTaskKey != null) {
+                    activeInterruptReason = InterruptReason.WaitingForWifi
+                    shouldAbortCall = activeCall
+                }
+                if (changed) {
+                    publishTaskStateLocked(persist = true)
+                    shouldStopService = !hasActiveTasksLocked()
+                }
+            } else {
+                val hadActiveBefore = hasActiveTasksLocked()
+                tasksByKey.entries.forEach { (key, task) ->
+                    if (task.status == DownloadTaskStatus.WaitingForWifi) {
+                        tasksByKey[key] = task.copy(status = DownloadTaskStatus.Queued, errorMessage = null)
+                        wokeWorker = true
+                    }
+                }
+                if (wokeWorker) {
+                    if (!hadActiveBefore) {
+                        batchCompletedCount.set(0)
+                        batchTotalCount.set(countActiveTasksLocked())
+                    } else {
+                        batchTotalCount.set(batchCompletedCount.get() + countActiveTasksLocked())
+                    }
+                    publishTaskStateLocked(persist = true)
+                }
+            }
+        }
+        shouldAbortCall?.cancel()
+        if (shouldStopService) {
+            OfflineDownloadService.stop(appContext)
+        }
+        if (wokeWorker) {
+            wakeupChannel.trySend(Unit)
+        }
+    }
+
     private fun restorePersistedQueue() {
         val loaded = normalizeRestoredDownloadTasks(queueStore.load())
         if (loaded.isEmpty()) return
         synchronized(queueLock) {
             loaded.forEach { task ->
-                val tmpFile = tmpAudioFileFor(task.track)
-                val restoredBytes = if (tmpFile.exists()) tmpFile.length() else 0L
+                val restoredBytes = tmpAudioFilesFor(task.track).maxOfOrNull { if (it.exists()) it.length() else 0L } ?: 0L
                 val adjustedProgress = when {
                     restoredBytes > 0L && task.totalBytes > 0L ->
                         (restoredBytes.toFloat() / task.totalBytes).coerceIn(0f, 0.99f)
@@ -234,7 +303,9 @@ class OfflineDownloadManager(
      */
     private fun cleanDanglingTmpFiles() {
         val protectedTmpNames = synchronized(queueLock) {
-            tasksByKey.values.mapTo(mutableSetOf()) { "${audioFileNameForTrack(it.track)}.tmp" }
+            tasksByKey.values.flatMapTo(mutableSetOf()) { task ->
+                tmpAudioFilesFor(task.track).map(File::getName)
+            }
         }
         runCatching {
             baseDir.listFiles { f -> f.extension == "tmp" && f.name !in protectedTmpNames }?.forEach { it.delete() }
@@ -263,6 +334,9 @@ class OfflineDownloadManager(
 
     fun enqueueDownloads(tracks: List<MusicTrack>) {
         if (tracks.isEmpty()) return
+        val blockedByWifi = isBlockedByWifiPolicy()
+        val targetStatus = if (blockedByWifi) DownloadTaskStatus.WaitingForWifi else DownloadTaskStatus.Queued
+        var changed = false
         var wokeWorker = false
         synchronized(queueLock) {
             val hadActiveBefore = hasActiveTasksLocked()
@@ -273,30 +347,45 @@ class OfflineDownloadManager(
                 when (existing?.status) {
                     DownloadTaskStatus.Queued,
                     DownloadTaskStatus.Downloading -> Unit
+                    DownloadTaskStatus.WaitingForWifi -> {
+                        if (!blockedByWifi) {
+                            tasksByKey[key] = existing.copy(
+                                track = track,
+                                status = DownloadTaskStatus.Queued,
+                                errorMessage = null,
+                            )
+                            changed = true
+                            wokeWorker = true
+                        }
+                    }
                     DownloadTaskStatus.Paused,
                     DownloadTaskStatus.Failed -> {
                         tasksByKey[key] = existing.copy(
                             track = track,
-                            status = DownloadTaskStatus.Queued,
+                            status = targetStatus,
                             errorMessage = null,
                         )
-                        wokeWorker = true
+                        changed = true
+                        if (!blockedByWifi) wokeWorker = true
                     }
                     null -> {
                         tasksByKey[key] = DownloadTaskItem(
                             track = track,
-                            status = DownloadTaskStatus.Queued,
+                            status = targetStatus,
                         )
-                        wokeWorker = true
+                        changed = true
+                        if (!blockedByWifi) wokeWorker = true
                     }
                 }
             }
-            if (wokeWorker) {
-                if (!hadActiveBefore) {
-                    batchCompletedCount.set(0)
-                    batchTotalCount.set(countActiveTasksLocked())
-                } else {
-                    batchTotalCount.set(batchCompletedCount.get() + countActiveTasksLocked())
+            if (changed) {
+                if (wokeWorker) {
+                    if (!hadActiveBefore) {
+                        batchCompletedCount.set(0)
+                        batchTotalCount.set(countActiveTasksLocked())
+                    } else {
+                        batchTotalCount.set(batchCompletedCount.get() + countActiveTasksLocked())
+                    }
                 }
                 publishTaskStateLocked(persist = true)
             }
@@ -331,7 +420,10 @@ class OfflineDownloadManager(
         synchronized(queueLock) {
             var changed = false
             tasksByKey.entries.forEach { (key, task) ->
-                if (task.status == DownloadTaskStatus.Queued || task.status == DownloadTaskStatus.Downloading) {
+                if (task.status == DownloadTaskStatus.Queued ||
+                    task.status == DownloadTaskStatus.Downloading ||
+                    task.status == DownloadTaskStatus.WaitingForWifi
+                ) {
                     tasksByKey[key] = task.copy(status = DownloadTaskStatus.Paused)
                     changed = true
                 }
@@ -355,7 +447,10 @@ class OfflineDownloadManager(
             var changed = false
             keySet.forEach { key ->
                 val task = tasksByKey[key] ?: return@forEach
-                if (task.status == DownloadTaskStatus.Queued || task.status == DownloadTaskStatus.Downloading) {
+                if (task.status == DownloadTaskStatus.Queued ||
+                    task.status == DownloadTaskStatus.Downloading ||
+                    task.status == DownloadTaskStatus.WaitingForWifi
+                ) {
                     tasksByKey[key] = task.copy(status = DownloadTaskStatus.Paused)
                     changed = true
                 }
@@ -376,10 +471,18 @@ class OfflineDownloadManager(
     }
 
     fun resumeTask(taskKey: String) {
+        val blockedByWifi = isBlockedByWifiPolicy()
         var woke = false
         synchronized(queueLock) {
             val existing = tasksByKey[taskKey] ?: return
-            if (existing.status != DownloadTaskStatus.Paused) return
+            if (existing.status != DownloadTaskStatus.Paused && existing.status != DownloadTaskStatus.WaitingForWifi) return
+            if (blockedByWifi) {
+                if (existing.status != DownloadTaskStatus.WaitingForWifi) {
+                    tasksByKey[taskKey] = existing.copy(status = DownloadTaskStatus.WaitingForWifi, errorMessage = null)
+                    publishTaskStateLocked(persist = true)
+                }
+                return
+            }
             val hadActiveBefore = hasActiveTasksLocked()
             tasksByKey[taskKey] = existing.copy(status = DownloadTaskStatus.Queued, errorMessage = null)
             if (!hadActiveBefore) {
@@ -395,21 +498,27 @@ class OfflineDownloadManager(
     }
 
     fun resumeAll() {
+        val blockedByWifi = isBlockedByWifiPolicy()
+        var changed = false
         var woke = false
         synchronized(queueLock) {
             val hadActiveBefore = hasActiveTasksLocked()
             tasksByKey.entries.forEach { (key, task) ->
-                if (task.status == DownloadTaskStatus.Paused) {
-                    tasksByKey[key] = task.copy(status = DownloadTaskStatus.Queued, errorMessage = null)
-                    woke = true
+                if (task.status == DownloadTaskStatus.Paused || (!blockedByWifi && task.status == DownloadTaskStatus.WaitingForWifi)) {
+                    val nextStatus = if (blockedByWifi) DownloadTaskStatus.WaitingForWifi else DownloadTaskStatus.Queued
+                    tasksByKey[key] = task.copy(status = nextStatus, errorMessage = null)
+                    changed = true
+                    if (!blockedByWifi) woke = true
                 }
             }
-            if (woke) {
-                if (!hadActiveBefore) {
-                    batchCompletedCount.set(0)
-                    batchTotalCount.set(countActiveTasksLocked())
-                } else {
-                    batchTotalCount.set(batchCompletedCount.get() + countActiveTasksLocked())
+            if (changed) {
+                if (woke) {
+                    if (!hadActiveBefore) {
+                        batchCompletedCount.set(0)
+                        batchTotalCount.set(countActiveTasksLocked())
+                    } else {
+                        batchTotalCount.set(batchCompletedCount.get() + countActiveTasksLocked())
+                    }
                 }
                 publishTaskStateLocked(persist = true)
             }
@@ -419,23 +528,32 @@ class OfflineDownloadManager(
 
     fun resumeTasks(taskKeys: Collection<String>) {
         if (taskKeys.isEmpty()) return
+        val blockedByWifi = isBlockedByWifiPolicy()
         val keySet = taskKeys.toSet()
+        var changed = false
         var woke = false
         synchronized(queueLock) {
             val hadActiveBefore = hasActiveTasksLocked()
             keySet.forEach { key ->
                 val task = tasksByKey[key] ?: return@forEach
-                if (task.status == DownloadTaskStatus.Paused || task.status == DownloadTaskStatus.Failed) {
-                    tasksByKey[key] = task.copy(status = DownloadTaskStatus.Queued, errorMessage = null)
-                    woke = true
+                if (task.status == DownloadTaskStatus.Paused ||
+                    task.status == DownloadTaskStatus.Failed ||
+                    (!blockedByWifi && task.status == DownloadTaskStatus.WaitingForWifi)
+                ) {
+                    val nextStatus = if (blockedByWifi) DownloadTaskStatus.WaitingForWifi else DownloadTaskStatus.Queued
+                    tasksByKey[key] = task.copy(status = nextStatus, errorMessage = null)
+                    changed = true
+                    if (!blockedByWifi) woke = true
                 }
             }
-            if (woke) {
-                if (!hadActiveBefore) {
-                    batchCompletedCount.set(0)
-                    batchTotalCount.set(countActiveTasksLocked())
-                } else {
-                    batchTotalCount.set(batchCompletedCount.get() + countActiveTasksLocked())
+            if (changed) {
+                if (woke) {
+                    if (!hadActiveBefore) {
+                        batchCompletedCount.set(0)
+                        batchTotalCount.set(countActiveTasksLocked())
+                    } else {
+                        batchTotalCount.set(batchCompletedCount.get() + countActiveTasksLocked())
+                    }
                 }
                 publishTaskStateLocked(persist = true)
             }
@@ -444,10 +562,16 @@ class OfflineDownloadManager(
     }
 
     fun retryTask(taskKey: String) {
+        val blockedByWifi = isBlockedByWifiPolicy()
         var woke = false
         synchronized(queueLock) {
             val existing = tasksByKey[taskKey] ?: return
             if (existing.status != DownloadTaskStatus.Failed) return
+            if (blockedByWifi) {
+                tasksByKey[taskKey] = existing.copy(status = DownloadTaskStatus.WaitingForWifi, errorMessage = null)
+                publishTaskStateLocked(persist = true)
+                return
+            }
             val hadActiveBefore = hasActiveTasksLocked()
             tasksByKey[taskKey] = existing.copy(status = DownloadTaskStatus.Queued, errorMessage = null)
             if (!hadActiveBefore) {
@@ -463,21 +587,27 @@ class OfflineDownloadManager(
     }
 
     fun retryAllFailed() {
+        val blockedByWifi = isBlockedByWifiPolicy()
+        var changed = false
         var woke = false
         synchronized(queueLock) {
             val hadActiveBefore = hasActiveTasksLocked()
             tasksByKey.entries.forEach { (key, task) ->
                 if (task.status == DownloadTaskStatus.Failed) {
-                    tasksByKey[key] = task.copy(status = DownloadTaskStatus.Queued, errorMessage = null)
-                    woke = true
+                    val nextStatus = if (blockedByWifi) DownloadTaskStatus.WaitingForWifi else DownloadTaskStatus.Queued
+                    tasksByKey[key] = task.copy(status = nextStatus, errorMessage = null)
+                    changed = true
+                    if (!blockedByWifi) woke = true
                 }
             }
-            if (woke) {
-                if (!hadActiveBefore) {
-                    batchCompletedCount.set(0)
-                    batchTotalCount.set(countActiveTasksLocked())
-                } else {
-                    batchTotalCount.set(batchCompletedCount.get() + countActiveTasksLocked())
+            if (changed) {
+                if (woke) {
+                    if (!hadActiveBefore) {
+                        batchCompletedCount.set(0)
+                        batchTotalCount.set(countActiveTasksLocked())
+                    } else {
+                        batchTotalCount.set(batchCompletedCount.get() + countActiveTasksLocked())
+                    }
                 }
                 publishTaskStateLocked(persist = true)
             }
@@ -502,7 +632,7 @@ class OfflineDownloadManager(
         shouldAbortCall?.cancel()
         removedTask?.let { task ->
             scope.launch(Dispatchers.IO) {
-                runCatching { tmpAudioFileFor(task.track).delete() }
+                tmpAudioFilesFor(task.track).forEach { runCatching { it.delete() } }
             }
         }
         if (shouldStopService) {
@@ -530,7 +660,7 @@ class OfflineDownloadManager(
         if (removedTasks.isNotEmpty()) {
             scope.launch(Dispatchers.IO) {
                 removedTasks.forEach { task ->
-                    runCatching { tmpAudioFileFor(task.track).delete() }
+                    tmpAudioFilesFor(task.track).forEach { runCatching { it.delete() } }
                 }
             }
         }
@@ -560,7 +690,7 @@ class OfflineDownloadManager(
         if (removedTasks.isNotEmpty()) {
             scope.launch(Dispatchers.IO) {
                 removedTasks.forEach { task ->
-                    runCatching { tmpAudioFileFor(task.track).delete() }
+                    tmpAudioFilesFor(task.track).forEach { runCatching { it.delete() } }
                 }
             }
         }
@@ -656,6 +786,17 @@ class OfflineDownloadManager(
     }
 
     private fun claimNextQueuedTask(): DownloadTaskItem? = synchronized(queueLock) {
+        if (isBlockedByWifiPolicy()) {
+            var changed = false
+            tasksByKey.entries.forEach { (key, task) ->
+                if (task.status == DownloadTaskStatus.Queued) {
+                    tasksByKey[key] = task.copy(status = DownloadTaskStatus.WaitingForWifi, errorMessage = null)
+                    changed = true
+                }
+            }
+            if (changed) publishTaskStateLocked(persist = true)
+            return null
+        }
         val candidate = tasksByKey.values.firstOrNull { it.status == DownloadTaskStatus.Queued }
             ?: return null
         val downloading = candidate.copy(status = DownloadTaskStatus.Downloading, errorMessage = null)
@@ -706,7 +847,7 @@ class OfflineDownloadManager(
                     dispatchCompletion(taskKey, success = true)
                 }
                 TransferOutcome.Paused -> {
-                    val partialBytes = runCatching { tmpAudioFileFor(track).length() }.getOrDefault(0L)
+                    val partialBytes = tmpAudioFilesFor(track).maxOfOrNull { runCatching { it.length() }.getOrDefault(0L) } ?: 0L
                     synchronized(queueLock) {
                         val current = tasksByKey[taskKey]
                         if (current != null) {
@@ -724,8 +865,28 @@ class OfflineDownloadManager(
                         }
                     }
                 }
+                TransferOutcome.WaitingForWifi -> {
+                    val partialBytes = tmpAudioFilesFor(track).maxOfOrNull { runCatching { it.length() }.getOrDefault(0L) } ?: 0L
+                    synchronized(queueLock) {
+                        val current = tasksByKey[taskKey]
+                        if (current != null) {
+                            val progress = if (current.totalBytes > 0L) {
+                                (partialBytes.toFloat() / current.totalBytes).coerceIn(0f, 0.99f)
+                            } else {
+                                current.progress
+                            }
+                            tasksByKey[taskKey] = current.copy(
+                                status = DownloadTaskStatus.WaitingForWifi,
+                                bytesDownloaded = partialBytes,
+                                progress = progress,
+                                errorMessage = null,
+                            )
+                            publishTaskStateLocked(persist = true)
+                        }
+                    }
+                }
                 TransferOutcome.Cancelled -> {
-                    runCatching { tmpAudioFileFor(track).delete() }
+                    tmpAudioFilesFor(track).forEach { runCatching { it.delete() } }
                     synchronized(queueLock) {
                         tasksByKey.remove(taskKey)
                         publishTaskStateLocked(persist = true)
@@ -733,7 +894,7 @@ class OfflineDownloadManager(
                     completionCallbacks.remove(taskKey)
                 }
                 is TransferOutcome.Failed -> {
-                    val partialBytes = runCatching { tmpAudioFileFor(track).length() }.getOrDefault(0L)
+                    val partialBytes = tmpAudioFilesFor(track).maxOfOrNull { runCatching { it.length() }.getOrDefault(0L) } ?: 0L
                     synchronized(queueLock) {
                         val current = tasksByKey[taskKey]
                         if (current != null) {
@@ -806,21 +967,32 @@ class OfflineDownloadManager(
         )
     }
 
-    private fun tmpAudioFileFor(track: MusicTrack): File =
-        File(baseDir, "${audioFileNameForTrack(track)}.tmp")
+    private fun tmpAudioFilesFor(track: MusicTrack): List<File> = listOf(
+        File(baseDir, "${audioFileNameForTrack(track, "audio")}.tmp"),
+        File(baseDir, "${audioFileNameForTrack(track, "ogg")}.tmp"),
+    )
 
     private suspend fun executeDownload(
         track: MusicTrack,
         onProgress: (bytesRead: Long, totalLength: Long) -> Unit,
     ): TransferOutcome = withContext(Dispatchers.IO) {
-        val audioFileName = audioFileNameForTrack(track)
+        if (isBlockedByWifiPolicy()) {
+            return@withContext TransferOutcome.WaitingForWifi
+        }
+        val currentPolicy = policy
+        val downloadPlan = resolveOfflineDownloadPlan(
+            track = track,
+            format = currentPolicy.format,
+            opusBitrate = currentPolicy.opusBitrate,
+        )
+        val audioFileName = audioFileNameForTrack(track, downloadPlan.fileExtension)
         val targetAudioFile = File(baseDir, audioFileName)
         val tmpAudioFile = File(baseDir, "$audioFileName.tmp")
 
         // Short-circuit if physical target file is already completely downloaded and recorded
         if (targetAudioFile.exists() && targetAudioFile.length() > 0L) {
             val existing = albumLocalStore.getDownloadedTrack(track.sourceId, track.ratingKey)
-            if (existing != null && existing.fileSize == targetAudioFile.length()) {
+            if (existing != null && existing.localAudioPath == targetAudioFile.absolutePath && existing.fileSize == targetAudioFile.length()) {
                 onProgress(existing.fileSize, existing.fileSize)
                 return@withContext TransferOutcome.Completed
             }
@@ -831,10 +1003,10 @@ class OfflineDownloadManager(
             return@withContext TransferOutcome.Failed(Strings.insufficientStorageSpace)
         }
 
-        // 1. Try Cache Promotion from LocalAudioCache
+        // 1. Try Cache Promotion from LocalAudioCache (only for original-quality downloads)
         val origKey = originalCacheKey(track.sourceId, track.ratingKey, track.partKey)
         var audioDownloaded = false
-        if (LocalAudioCache.isFullyCached(origKey)) {
+        if (!downloadPlan.isOpusTranscode && LocalAudioCache.isFullyCached(origKey)) {
             Log.i(TAG, "Attempting Cache Promotion for ${track.title}")
             audioDownloaded = LocalAudioCache.exportCachedToFile(origKey, track.streamUrl, targetAudioFile)
             if (audioDownloaded) {
@@ -843,16 +1015,26 @@ class OfflineDownloadManager(
             }
         }
 
-        // 2. If not in cache or promotion failed, download via HTTP (with Range breakpoint resume)
+        // 2. If not in cache or promotion failed, download via HTTP
+        // (Original supports HTTP Range resume; live transcode.ogg is chunked and starts fresh.)
         if (!audioDownloaded) {
+            if (downloadPlan.isOpusTranscode && tmpAudioFile.exists()) {
+                tmpAudioFile.delete()
+            }
             var attemptedReset = false
             while (true) {
                 checkInterrupt()?.let { return@withContext it }
-                val existingBytes = if (tmpAudioFile.exists()) tmpAudioFile.length().coerceAtLeast(0L) else 0L
+                val existingBytes = if (!downloadPlan.isOpusTranscode && tmpAudioFile.exists()) {
+                    tmpAudioFile.length().coerceAtLeast(0L)
+                } else {
+                    0L
+                }
                 val outcome = downloadAudioHttp(
                     track = track,
+                    downloadUrl = downloadPlan.downloadUrl,
                     tmpAudioFile = tmpAudioFile,
                     existingBytes = existingBytes,
+                    isOpusTranscode = downloadPlan.isOpusTranscode,
                     onProgress = onProgress,
                 )
                 when (outcome) {
@@ -865,6 +1047,7 @@ class OfflineDownloadManager(
                         attemptedReset = true
                     }
                     HttpDownloadAttempt.Paused -> return@withContext TransferOutcome.Paused
+                    HttpDownloadAttempt.WaitingForWifi -> return@withContext TransferOutcome.WaitingForWifi
                     HttpDownloadAttempt.Cancelled -> {
                         tmpAudioFile.delete()
                         return@withContext TransferOutcome.Cancelled
@@ -875,6 +1058,10 @@ class OfflineDownloadManager(
             checkInterrupt()?.let { reason ->
                 if (reason == TransferOutcome.Cancelled) tmpAudioFile.delete()
                 return@withContext reason
+            }
+            if (downloadPlan.isOpusTranscode && !isValidTranscodedOggFile(tmpAudioFile)) {
+                tmpAudioFile.delete()
+                return@withContext TransferOutcome.Failed(Strings.downloadOpusInvalidError)
             }
             if (targetAudioFile.exists()) targetAudioFile.delete()
             if (!tmpAudioFile.renameTo(targetAudioFile)) {
@@ -895,7 +1082,7 @@ class OfflineDownloadManager(
             }
         }
 
-        // 4. Companion Lyrics download (best-effort)
+        // 4. Companion Lyrics download (best-effort; always derives from original track.streamUrl)
         var localLyricPath: String? = null
         val lyricUrl = track.lyricUrl?.takeIf { it.isNotBlank() }
             ?: Music032TranscodeUrls.lyricsUrl(track.streamUrl, track.ratingKey)
@@ -916,10 +1103,10 @@ class OfflineDownloadManager(
             albumTitle = track.albumTitle,
             albumRatingKey = track.albumRatingKey,
             durationMillis = track.durationMillis,
-            sourceAudioCodec = track.sourceAudioCodec,
-            sourceAudioBitrateKbps = track.sourceAudioBitrateKbps,
-            sourceAudioSampleRate = track.sourceAudioSampleRate,
-            bitDepth = track.bitDepth,
+            sourceAudioCodec = downloadPlan.effectiveCodec,
+            sourceAudioBitrateKbps = downloadPlan.effectiveBitrateKbps,
+            sourceAudioSampleRate = downloadPlan.effectiveSampleRate,
+            bitDepth = downloadPlan.effectiveBitDepth,
             localAudioPath = targetAudioFile.absolutePath,
             localThumbPath = localThumbPath,
             localLyricPath = localLyricPath,
@@ -938,32 +1125,41 @@ class OfflineDownloadManager(
         data object Completed : HttpDownloadAttempt
         data object ResetAndRetryOnce : HttpDownloadAttempt
         data object Paused : HttpDownloadAttempt
+        data object WaitingForWifi : HttpDownloadAttempt
         data object Cancelled : HttpDownloadAttempt
         data class Failed(val reason: String) : HttpDownloadAttempt
     }
 
     private fun downloadAudioHttp(
         track: MusicTrack,
+        downloadUrl: String,
         tmpAudioFile: File,
         existingBytes: Long,
+        isOpusTranscode: Boolean,
         onProgress: (bytesRead: Long, totalLength: Long) -> Unit,
     ): HttpDownloadAttempt {
         val requestBuilder = Request.Builder()
-            .url(track.streamUrl)
+            .url(downloadUrl)
             .get()
             .header("User-Agent", "MusicBridge-Offline/1.0")
-        if (existingBytes > 0L) {
+        if (!isOpusTranscode && existingBytes > 0L) {
             requestBuilder.header("Range", "bytes=$existingBytes-")
         }
-        val call = AppHttpClient.defaultClient.newCall(requestBuilder.build())
+        val httpClient = if (isOpusTranscode) {
+            AppHttpClient.withReadTimeout(readTimeoutMillis = 60_000L, connectTimeoutMillis = 15_000L)
+        } else {
+            AppHttpClient.defaultClient
+        }
+        val call = httpClient.newCall(requestBuilder.build())
         activeCall = call
         return try {
             call.execute().use { response ->
                 val body = response.body
                 val contentLength = body?.contentLength() ?: -1L
+                val effectiveExistingBytes = if (isOpusTranscode) 0L else existingBytes
                 val plan = resolveResumePlan(
                     statusCode = response.code,
-                    existingBytes = existingBytes,
+                    existingBytes = effectiveExistingBytes,
                     contentLength = contentLength,
                     contentRangeHeader = response.header("Content-Range"),
                 )
@@ -1003,6 +1199,10 @@ class OfflineDownloadManager(
                                             output.flush()
                                             return HttpDownloadAttempt.Paused
                                         }
+                                        InterruptReason.WaitingForWifi -> {
+                                            output.flush()
+                                            return HttpDownloadAttempt.WaitingForWifi
+                                        }
                                         InterruptReason.Cancelled -> return HttpDownloadAttempt.Cancelled
                                         InterruptReason.None -> Unit
                                     }
@@ -1018,6 +1218,7 @@ class OfflineDownloadManager(
 
                         when (activeInterruptReason) {
                             InterruptReason.Paused -> return HttpDownloadAttempt.Paused
+                            InterruptReason.WaitingForWifi -> return HttpDownloadAttempt.WaitingForWifi
                             InterruptReason.Cancelled -> return HttpDownloadAttempt.Cancelled
                             InterruptReason.None -> Unit
                         }
@@ -1038,6 +1239,7 @@ class OfflineDownloadManager(
         } catch (e: IOException) {
             when (activeInterruptReason) {
                 InterruptReason.Paused -> HttpDownloadAttempt.Paused
+                InterruptReason.WaitingForWifi -> HttpDownloadAttempt.WaitingForWifi
                 InterruptReason.Cancelled -> HttpDownloadAttempt.Cancelled
                 InterruptReason.None -> {
                     Log.w(TAG, "Network download failed for ${track.title}", e)
@@ -1047,6 +1249,7 @@ class OfflineDownloadManager(
         } catch (e: Exception) {
             when (activeInterruptReason) {
                 InterruptReason.Paused -> HttpDownloadAttempt.Paused
+                InterruptReason.WaitingForWifi -> HttpDownloadAttempt.WaitingForWifi
                 InterruptReason.Cancelled -> HttpDownloadAttempt.Cancelled
                 InterruptReason.None -> {
                     Log.w(TAG, "Download failed for ${track.title}", e)
@@ -1060,6 +1263,7 @@ class OfflineDownloadManager(
 
     private fun checkInterrupt(): TransferOutcome? = when (activeInterruptReason) {
         InterruptReason.Paused -> TransferOutcome.Paused
+        InterruptReason.WaitingForWifi -> TransferOutcome.WaitingForWifi
         InterruptReason.Cancelled -> TransferOutcome.Cancelled
         InterruptReason.None -> null
     }

@@ -132,6 +132,7 @@ internal fun PlaybackDetailSection(
     onSelectTarget: (PlaybackTarget) -> Unit,
     onRefreshRooms: () -> Unit,
     onStartSleepTimer: (Int, Int) -> Unit,
+    onStartSleepTimerAfterCurrentTrack: () -> Unit = {},
     onCancelSleepTimer: () -> Unit,
     lyricsRepository: TrackLyricsRepository,
     lyricsTranslationSettings: LyricsTranslationSettings,
@@ -721,16 +722,16 @@ internal fun PlaybackDetailSection(
             )
             PlayerToolButton(
                 icon = Icons.Filled.Bedtime,
-                label = if (sleepTimerState.isActive) {
-                    formatSleepTimerCountdown(sleepTimerState.remainingMillis)
-                } else {
-                    Strings.timerShort
+                label = when {
+                    sleepTimerState.stopAfterCurrentTrack -> Strings.sleepTimerAfterCurrentTrackShort
+                    sleepTimerState.isCountdownActive -> formatSleepTimerCountdown(sleepTimerState.remainingMillis)
+                    else -> Strings.timerShort
                 },
                 selected = sleepTimerState.isActive,
                 onClick = {
                     val totalMinutes = ((sleepTimerState.remainingMillis + 59_999L) / 60_000L).toInt()
-                    sleepTimerHours = if (sleepTimerState.isActive) totalMinutes / 60 else 0
-                    sleepTimerMinutes = if (sleepTimerState.isActive) totalMinutes % 60 else 30
+                    sleepTimerHours = if (sleepTimerState.isCountdownActive) totalMinutes / 60 else 0
+                    sleepTimerMinutes = if (sleepTimerState.isCountdownActive) totalMinutes % 60 else 30
                     sleepTimerInputError = null
                     isSleepTimerDialogVisible = true
                 },
@@ -1082,6 +1083,71 @@ internal fun PlaybackDetailSection(
                         color = AppColors.TextSecondary,
                         style = MaterialTheme.typography.bodyMedium,
                     )
+                    Surface(
+                        onClick = {
+                            onStartSleepTimerAfterCurrentTrack()
+                            isSleepTimerDialogVisible = false
+                        },
+                        shape = RoundedCornerShape(14.dp),
+                        color = if (sleepTimerState.stopAfterCurrentTrack) {
+                            AppColors.Accent.copy(alpha = 0.14f)
+                        } else {
+                            AppColors.SurfaceMuted
+                        },
+                        border = BorderStroke(
+                            width = 1.dp,
+                            color = if (sleepTimerState.stopAfterCurrentTrack) {
+                                AppColors.Accent.copy(alpha = 0.55f)
+                            } else {
+                                AppColors.Border
+                            },
+                        ),
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.MusicNote,
+                                contentDescription = null,
+                                tint = if (sleepTimerState.stopAfterCurrentTrack) {
+                                    AppColors.Accent
+                                } else {
+                                    AppColors.TextSecondary
+                                },
+                                modifier = Modifier.size(20.dp),
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = Strings.sleepTimerAfterCurrentTrack,
+                                    color = if (sleepTimerState.stopAfterCurrentTrack) {
+                                        AppColors.Accent
+                                    } else {
+                                        AppColors.TextPrimary
+                                    },
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                                Text(
+                                    text = Strings.sleepTimerAfterCurrentTrackSubtitle,
+                                    color = AppColors.TextSecondary,
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                            if (sleepTimerState.stopAfterCurrentTrack) {
+                                Icon(
+                                    imageVector = Icons.Filled.Check,
+                                    contentDescription = null,
+                                    tint = AppColors.Accent,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            }
+                        }
+                    }
+                    HorizontalDivider(color = AppColors.Border)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceEvenly,

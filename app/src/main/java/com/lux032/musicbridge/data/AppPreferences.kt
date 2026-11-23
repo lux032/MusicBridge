@@ -373,6 +373,26 @@ class AppPreferences internal constructor(
         sharedPreferences.edit { putString(KEY_LOCAL_CACHE_SIZE, size.id) }
     }
 
+    fun loadDownloadWifiOnly(): Boolean =
+        sharedPreferences.getBoolean(KEY_DOWNLOAD_WIFI_ONLY, true)
+
+    fun saveDownloadWifiOnly(enabled: Boolean) {
+        sharedPreferences.edit { putBoolean(KEY_DOWNLOAD_WIFI_ONLY, enabled) }
+    }
+
+    fun loadDownloadFormat(): OfflineDownloadFormat =
+        OfflineDownloadFormat.fromId(sharedPreferences.getString(KEY_DOWNLOAD_FORMAT, null))
+
+    fun saveDownloadFormat(format: OfflineDownloadFormat) {
+        sharedPreferences.edit { putString(KEY_DOWNLOAD_FORMAT, format.id) }
+    }
+
+    fun loadOfflineDownloadPolicy(): OfflineDownloadPolicy = OfflineDownloadPolicy(
+        wifiOnly = loadDownloadWifiOnly(),
+        format = loadDownloadFormat(),
+        opusBitrate = loadLocalOpusBitrate(),
+    )
+
     fun loadAlbumSortOption(): AlbumSortOption =
         AlbumSortOption.fromStoredName(sharedPreferences.getString(KEY_ALBUM_SORT_OPTION, null))
             ?: AlbumSortOption.Title
@@ -512,6 +532,8 @@ class AppPreferences internal constructor(
         private const val KEY_LOCAL_QUALITY_WIFI = "local_stream_quality_wifi_v1"
         private const val KEY_LOCAL_QUALITY_CELLULAR = "local_stream_quality_cellular_v1"
         private const val KEY_LOCAL_CACHE_SIZE = "local_cache_size_v1"
+        private const val KEY_DOWNLOAD_WIFI_ONLY = "download_wifi_only_v1"
+        private const val KEY_DOWNLOAD_FORMAT = "download_format_v1"
         private const val KEY_LOCAL_STREAMING_LIMIT_WIFI = "local_streaming_limit_wifi_v2"
         private const val KEY_LOCAL_STREAMING_LIMIT_CELLULAR = "local_streaming_limit_cellular_v2"
         private const val KEY_LOCAL_OPUS_BITRATE = "local_opus_bitrate_v1"

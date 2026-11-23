@@ -132,7 +132,12 @@ fun SettingsScreen(
                 offlineDownloadedBytes = offlineDownloadedBytes,
                 deviceUsableBytes = deviceUsableBytes,
                 deviceTotalBytes = deviceTotalBytes,
+                downloadWifiOnly = state.downloadWifiOnly,
+                downloadFormat = state.downloadFormat,
+                localOpusBitrate = state.localOpusBitrate,
                 onLocalCacheSizeChange = actions.onLocalCacheSizeChange,
+                onDownloadWifiOnlyChange = actions.onDownloadWifiOnlyChange,
+                onDownloadFormatChange = actions.onDownloadFormatChange,
                 onClearLocalCache = {
                     actions.onClearLocalCache()
                     refreshStorageTrigger++

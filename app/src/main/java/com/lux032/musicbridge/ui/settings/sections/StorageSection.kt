@@ -3,10 +3,12 @@ package com.lux032.musicbridge.ui.settings.sections
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Audiotrack
 import androidx.compose.material.icons.filled.CleaningServices
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.FolderSpecial
 import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -21,12 +23,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.lux032.musicbridge.AppColors
 import com.lux032.musicbridge.LocalCacheSize
+import com.lux032.musicbridge.LocalOpusBitrate
+import com.lux032.musicbridge.OfflineDownloadFormat
 import com.lux032.musicbridge.Strings
 import com.lux032.musicbridge.ui.settings.components.CacheQuotaBar
 import com.lux032.musicbridge.ui.settings.components.DeviceStorageStatus
 import com.lux032.musicbridge.ui.settings.components.SettingsDivider
 import com.lux032.musicbridge.ui.settings.components.SettingsGroup
 import com.lux032.musicbridge.ui.settings.components.SettingsItem
+import com.lux032.musicbridge.ui.settings.components.SettingsSwitchItem
 import com.lux032.musicbridge.ui.settings.components.formatStorageBytes
 import com.lux032.musicbridge.ui.settings.dialogs.SettingOptionSheet
 
@@ -37,12 +42,18 @@ fun StorageSection(
     offlineDownloadedBytes: Long,
     deviceUsableBytes: Long,
     deviceTotalBytes: Long,
+    downloadWifiOnly: Boolean,
+    downloadFormat: OfflineDownloadFormat,
+    localOpusBitrate: LocalOpusBitrate,
     onLocalCacheSizeChange: (LocalCacheSize) -> Unit,
+    onDownloadWifiOnlyChange: (Boolean) -> Unit,
+    onDownloadFormatChange: (OfflineDownloadFormat) -> Unit,
     onClearLocalCache: () -> Unit,
     onClearAllDownloads: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var isCacheSizeSheetVisible by remember { mutableStateOf(false) }
+    var isDownloadFormatSheetVisible by remember { mutableStateOf(false) }
     var isConfirmClearCacheVisible by remember { mutableStateOf(false) }
     var isConfirmClearDownloadsVisible by remember { mutableStateOf(false) }
 
@@ -54,6 +65,22 @@ fun StorageSection(
             label = LocalCacheSize::megabytesLabel,
             onSelect = onLocalCacheSizeChange,
             onDismiss = { isCacheSizeSheetVisible = false },
+        )
+    }
+
+    if (isDownloadFormatSheetVisible) {
+        SettingOptionSheet(
+            title = Strings.downloadFormatTitle,
+            options = OfflineDownloadFormat.entries,
+            selected = downloadFormat,
+            label = { option ->
+                when (option) {
+                    OfflineDownloadFormat.ORIGINAL -> Strings.downloadFormatOriginal
+                    OfflineDownloadFormat.OPUS -> "${Strings.downloadFormatOpus} (${localOpusBitrate.label})"
+                }
+            },
+            onSelect = onDownloadFormatChange,
+            onDismiss = { isDownloadFormatSheetVisible = false },
         )
     }
 
@@ -179,6 +206,32 @@ fun StorageSection(
             offlineDownloadedBytes = offlineDownloadedBytes,
             deviceUsableBytes = deviceUsableBytes,
             deviceTotalBytes = deviceTotalBytes,
+        )
+
+        SettingsDivider()
+
+        SettingsSwitchItem(
+            title = Strings.downloadWifiOnlyTitle,
+            subtitle = Strings.downloadWifiOnlySubtitle,
+            icon = Icons.Filled.Wifi,
+            checked = downloadWifiOnly,
+            onCheckedChange = onDownloadWifiOnlyChange,
+        )
+
+        SettingsDivider()
+
+        SettingsItem(
+            title = Strings.downloadFormatTitle,
+            subtitle = when (downloadFormat) {
+                OfflineDownloadFormat.ORIGINAL -> Strings.downloadFormatOriginalSubtitle
+                OfflineDownloadFormat.OPUS -> Strings.downloadFormatOpusSubtitle(localOpusBitrate.label)
+            },
+            value = when (downloadFormat) {
+                OfflineDownloadFormat.ORIGINAL -> Strings.downloadFormatOriginal
+                OfflineDownloadFormat.OPUS -> Strings.downloadFormatOpusValue(localOpusBitrate.label)
+            },
+            icon = Icons.Filled.Audiotrack,
+            onClick = { isDownloadFormatSheetVisible = true },
         )
 
         SettingsDivider()

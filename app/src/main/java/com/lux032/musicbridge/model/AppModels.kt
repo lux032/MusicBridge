@@ -59,9 +59,13 @@ val PlaybackTarget.displayName: String
 data class SleepTimerState(
     val endEpochMillis: Long? = null,
     val remainingMillis: Long = 0L,
+    val stopAfterCurrentTrack: Boolean = false,
 ) {
-    val isActive: Boolean
+    val isCountdownActive: Boolean
         get() = endEpochMillis != null && remainingMillis > 0L
+
+    val isActive: Boolean
+        get() = isCountdownActive || stopAfterCurrentTrack
 }
 
 enum class PlaybackMode {
@@ -325,6 +329,30 @@ data class LocalPlaybackPolicy(
     val streamingLimit: LocalStreamingLimit,
     val opusBitrate: LocalOpusBitrate,
     val precacheCount: LocalPrecacheCount,
+)
+
+/** Format policy for manually downloaded offline tracks. */
+enum class OfflineDownloadFormat(val id: String) {
+    ORIGINAL("original"),
+    OPUS("opus");
+
+    val label: String
+        get() = when (this) {
+            ORIGINAL -> Strings.downloadFormatOriginal
+            OPUS -> Strings.downloadFormatOpus
+        }
+
+    companion object {
+        val DEFAULT = ORIGINAL
+        fun fromId(id: String?): OfflineDownloadFormat =
+            entries.firstOrNull { it.id == id } ?: DEFAULT
+    }
+}
+
+data class OfflineDownloadPolicy(
+    val wifiOnly: Boolean = true,
+    val format: OfflineDownloadFormat = OfflineDownloadFormat.DEFAULT,
+    val opusBitrate: LocalOpusBitrate = LocalOpusBitrate.DEFAULT,
 )
 
 /** Cap for the on-device audio cache, in megabytes. */

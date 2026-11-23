@@ -219,6 +219,9 @@ internal fun AppStatePlaybackCoordinator.startPlaybackReporting(
                 // external controller switch: end the old 032 session with the real
                 // last observed position — completed only near the end, otherwise
                 // replaced, never a fabricated full-duration completion (P3).
+                val nearEndForSleep = currentTrackDurationMillis?.let { duration ->
+                    currentTrackTimeMillis >= (duration - 5_000L).coerceAtLeast(0L)
+                } ?: false
                 if (is032Source(currentTrack)) {
                     val nearEnd = currentTrackDurationMillis?.let { duration ->
                         currentTrackTimeMillis >= (duration - 3_000L).coerceAtLeast(0L)
@@ -229,6 +232,9 @@ internal fun AppStatePlaybackCoordinator.startPlaybackReporting(
                     )
                     owned032SessionId = null
                     owned032SourceId = null
+                }
+                if (hasObservedPlayback && nearEndForSleep && SleepTimerController.triggerIfStopAfterCurrentTrack()) {
+                    break
                 }
 
                 currentTrack = resolvedTrack
@@ -261,10 +267,10 @@ internal fun AppStatePlaybackCoordinator.startPlaybackReporting(
             // Repeat-one on Sonos restarts the SAME track: the position wraps from
             // near the end back to ~0 without a track change. That wrap is a genuinely
             // new play — the completed session closes and a fresh one starts.
-            if (is032Source(currentTrack) && !stoppedAtResetPosition &&
+            if (!stoppedAtResetPosition &&
                 isSameTrackRepeatWrap(currentTrackTimeMillis, positionMillis, currentTrackDurationMillis, playbackState)
             ) {
-                val reporter = state.music032ReporterFor(currentTrack.sourceId)
+                val reporter = if (is032Source(currentTrack)) state.music032ReporterFor(currentTrack.sourceId) else null
                 val trackId = currentTrack.ratingKey.toLongOrNull()
                 if (reporter != null && trackId != null) {
                     // The completed play ends with the real observed final position.
@@ -272,6 +278,13 @@ internal fun AppStatePlaybackCoordinator.startPlaybackReporting(
                         ReporterEndReason.Completed,
                         finalPositionMillis = currentTrackTimeMillis,
                     )
+                    owned032SessionId = null
+                    owned032SourceId = null
+                }
+                if (SleepTimerController.triggerIfStopAfterCurrentTrack()) {
+                    break
+                }
+                if (reporter != null && trackId != null) {
                     // A loop restart is a genuinely new play (fresh chain).
                     reporter.requestStart(
                         trackId = trackId,
@@ -375,6 +388,9 @@ internal fun AppStatePlaybackCoordinator.startPlaybackReporting(
                         )
                         owned032SessionId = null
                         owned032SourceId = null
+                    }
+                    if (trackFinished && SleepTimerController.triggerIfStopAfterCurrentTrack()) {
+                        break
                     }
                     if (!autoAdvanceWhenStopped) continue
 

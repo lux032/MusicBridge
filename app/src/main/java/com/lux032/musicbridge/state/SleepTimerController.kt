@@ -50,6 +50,28 @@ internal object SleepTimerController {
         }
     }
 
+    /** Arms the timer to stop playback as soon as the currently playing track finishes. */
+    fun startStopAfterCurrentTrack(room: SonosRoom?) {
+        cancel()
+        attachedRoom = room
+        _state.value = SleepTimerState(stopAfterCurrentTrack = true)
+    }
+
+    /**
+     * Fires the sleep timer if armed in [SleepTimerState.stopAfterCurrentTrack] mode.
+     * Returns true when it fired so the caller can suppress advancing to the next track.
+     */
+    fun triggerIfStopAfterCurrentTrack(): Boolean {
+        if (!_state.value.stopAfterCurrentTrack) return false
+        val expiredRoom = attachedRoom
+        attachedRoom = null
+        job?.cancel()
+        job = null
+        _state.value = SleepTimerState()
+        onExpired?.invoke(expiredRoom)
+        return true
+    }
+
     /** Re-points the running timer at another Sonos room (or none) after a target switch. */
     fun attachRoom(room: SonosRoom?) {
         attachedRoom = room
