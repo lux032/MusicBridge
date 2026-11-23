@@ -346,6 +346,35 @@ class OfflineDownloadManager(
         OfflineDownloadService.stop(appContext)
     }
 
+    fun pauseTasks(taskKeys: Collection<String>) {
+        if (taskKeys.isEmpty()) return
+        val keySet = taskKeys.toSet()
+        var shouldAbortCall: Call? = null
+        var shouldStopService = false
+        synchronized(queueLock) {
+            var changed = false
+            keySet.forEach { key ->
+                val task = tasksByKey[key] ?: return@forEach
+                if (task.status == DownloadTaskStatus.Queued || task.status == DownloadTaskStatus.Downloading) {
+                    tasksByKey[key] = task.copy(status = DownloadTaskStatus.Paused)
+                    changed = true
+                }
+            }
+            if (activeTaskKey != null && activeTaskKey in keySet) {
+                activeInterruptReason = InterruptReason.Paused
+                shouldAbortCall = activeCall
+            }
+            if (changed) {
+                publishTaskStateLocked(persist = true)
+                shouldStopService = !hasActiveTasksLocked()
+            }
+        }
+        shouldAbortCall?.cancel()
+        if (shouldStopService) {
+            OfflineDownloadService.stop(appContext)
+        }
+    }
+
     fun resumeTask(taskKey: String) {
         var woke = false
         synchronized(queueLock) {
@@ -371,6 +400,32 @@ class OfflineDownloadManager(
             val hadActiveBefore = hasActiveTasksLocked()
             tasksByKey.entries.forEach { (key, task) ->
                 if (task.status == DownloadTaskStatus.Paused) {
+                    tasksByKey[key] = task.copy(status = DownloadTaskStatus.Queued, errorMessage = null)
+                    woke = true
+                }
+            }
+            if (woke) {
+                if (!hadActiveBefore) {
+                    batchCompletedCount.set(0)
+                    batchTotalCount.set(countActiveTasksLocked())
+                } else {
+                    batchTotalCount.set(batchCompletedCount.get() + countActiveTasksLocked())
+                }
+                publishTaskStateLocked(persist = true)
+            }
+        }
+        if (woke) wakeupChannel.trySend(Unit)
+    }
+
+    fun resumeTasks(taskKeys: Collection<String>) {
+        if (taskKeys.isEmpty()) return
+        val keySet = taskKeys.toSet()
+        var woke = false
+        synchronized(queueLock) {
+            val hadActiveBefore = hasActiveTasksLocked()
+            keySet.forEach { key ->
+                val task = tasksByKey[key] ?: return@forEach
+                if (task.status == DownloadTaskStatus.Paused || task.status == DownloadTaskStatus.Failed) {
                     tasksByKey[key] = task.copy(status = DownloadTaskStatus.Queued, errorMessage = null)
                     woke = true
                 }
@@ -479,6 +534,40 @@ class OfflineDownloadManager(
                 }
             }
         }
+    }
+
+    fun cancelTasks(taskKeys: Collection<String>): Int {
+        if (taskKeys.isEmpty()) return 0
+        val keySet = taskKeys.toSet()
+        val removedTasks = mutableListOf<DownloadTaskItem>()
+        var shouldAbortCall: Call? = null
+        var shouldStopService = false
+        synchronized(queueLock) {
+            keySet.forEach { key ->
+                tasksByKey.remove(key)?.let(removedTasks::add)
+            }
+            if (activeTaskKey != null && activeTaskKey in keySet) {
+                activeInterruptReason = InterruptReason.Cancelled
+                shouldAbortCall = activeCall
+            }
+            if (removedTasks.isNotEmpty()) {
+                publishTaskStateLocked(persist = true)
+                shouldStopService = !hasActiveTasksLocked()
+            }
+        }
+        keySet.forEach { completionCallbacks.remove(it) }
+        shouldAbortCall?.cancel()
+        if (removedTasks.isNotEmpty()) {
+            scope.launch(Dispatchers.IO) {
+                removedTasks.forEach { task ->
+                    runCatching { tmpAudioFileFor(task.track).delete() }
+                }
+            }
+        }
+        if (shouldStopService) {
+            OfflineDownloadService.stop(appContext)
+        }
+        return removedTasks.size
     }
 
     fun deleteDownload(sourceId: String, ratingKey: String) {

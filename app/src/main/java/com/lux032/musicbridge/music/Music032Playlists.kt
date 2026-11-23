@@ -37,6 +37,11 @@ internal object Music032PlaylistRequests {
         return body
     }
 
+    fun reorder(trackIds: List<String>, expectedRevision: Long): JSONObject =
+        JSONObject()
+            .put("trackIds", trackIdArray(trackIds))
+            .put("expectedRevision", expectedRevision.coerceAtLeast(0L))
+
     /**
      * Strict create returns the playlist itself; the skip policy wraps it as
      * `{playlist, stats}`. Both shapes are accepted.

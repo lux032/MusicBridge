@@ -63,6 +63,10 @@
 - 表单保留 outlined 输入框；主键（反白）写明动作「创建歌单 / 创建并加入 / 保存」，失败时表单不关、原因写在表单内。
 - 写操作反馈统一走 `PlaylistNoticeHost`：反白（近白）snackbar 贴在底栏/房间栏之上；移除曲目带「撤销」。服务端返回的重复、失效曲目如实写出。
 - 删除歌单必须二次确认，确认文案说明歌曲文件不受影响且无法撤销。
+- 歌单详情增强（依据 `.prototypes/playlist-experience.html`，入口：`ui/sections/PlaylistSection.kt`、`ui/sections/PlaylistDetailControls.kt`、`state/PlaylistEnhancements.kt`）：
+  - 一键下载整个歌单：Hero `SplitPlayKey` 右侧放 48dp Tonal 下载键（与专辑页对齐），覆盖未下载 / 部分已离线（带 accent 点，点击仅补齐剩余）/ 下载中或已暂停（环形总进度 + 底部控制弹层暂停/继续/取消本歌单任务）/ 全部已离线（accent ✓，点击二次确认仅删本地离线文件不改歌单）。普通歌单、今日推荐与 AI 歌单均可用。
+  - 歌单内搜索与筛选：Hero 下方常驻紧凑 tonal 搜索框（空格多词 AND 匹配歌名/歌手/专辑并 accent 高亮）+ `已下载`/`已收藏` 芯片；向下滚过 Hero 后顶栏浮现标题，点顶栏放大镜吸顶展开搜索框。筛选保留原曲号，Hero 主键始终播整张歌单，筛选结果条右侧提供「播放这 N 首」。
+  - 歌单内拖拽重排：仅可编辑的 032 歌单且曲目 ≥ 2 首时在顶栏与筛选行提供「排序」入口（筛选激活时点击自动清空筛选并提示）。进入独立「排序模式」后顶部切换为编辑条（取消 / 已调整 N 处 / 反白保存键），行尾 `♥`/`⋮` 替换为零延迟 `≡` 拖拽手柄（含边缘自动滚动），点「保存」一次性提交 `PUT /api/v1/playlists/{id}/order`（带 `expectedRevision`，409 冲突自动刷新并提示）。
 
 ## 今日推荐（032）
 实现入口：`ui/sections/DailyMixUi.kt`、`state/AppStateDailyMixCoordinator.kt`；只在服务器声明 `features.dailyMixes` 时显示。

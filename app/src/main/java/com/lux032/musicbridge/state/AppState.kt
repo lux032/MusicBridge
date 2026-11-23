@@ -973,6 +973,51 @@ class AppState(
 
     fun removeTrackFromOpenPlaylist(track: MusicTrack) = playlistCoordinator.removeTrack(track)
 
+    suspend fun reorderOpenPlaylistTracks(playlist: MusicPlaylist, reorderedTracks: List<MusicTrack>): Result<Unit> =
+        playlistCoordinator.reorderTracks(playlist, reorderedTracks)
+
+    fun downloadPlaylist(playlist: MusicPlaylist, tracks: List<MusicTrack>) {
+        if (tracks.isEmpty()) return
+        val unDownloaded = tracks.filterNot {
+            offlineDownloadManager.isTrackDownloaded(it.sourceId, it.ratingKey)
+        }
+        if (unDownloaded.isEmpty()) {
+            notifyPlaylist(Strings.playlistAlreadyDownloaded)
+            return
+        }
+        val alreadyHadSome = unDownloaded.size < tracks.size
+        offlineDownloadManager.enqueueDownloads(unDownloaded)
+        notifyPlaylist(
+            if (alreadyHadSome) Strings.playlistDownloadRemainingQueued(unDownloaded.size)
+            else Strings.playlistDownloadQueued(unDownloaded.size),
+        )
+    }
+
+    fun deleteDownloadedPlaylistTracks(playlist: MusicPlaylist, tracks: List<MusicTrack>) {
+        if (tracks.isEmpty()) return
+        val keys = tracks.map { com.lux032.musicbridge.storage.downloadedTrackKey(it.sourceId, it.ratingKey) }
+        offlineDownloadManager.cancelTasks(keys)
+        val downloadedTracks = tracks.filter { offlineDownloadManager.isTrackDownloaded(it.sourceId, it.ratingKey) }
+        if (downloadedTracks.isEmpty()) return
+        offlineDownloadManager.deleteDownloads(downloadedTracks)
+        notifyPlaylist(Strings.playlistOfflineRemoved(downloadedTracks.size))
+    }
+
+    fun pausePlaylistDownloads(taskKeys: List<String>) {
+        offlineDownloadManager.pauseTasks(taskKeys)
+    }
+
+    fun resumePlaylistDownloads(taskKeys: List<String>) {
+        offlineDownloadManager.resumeTasks(taskKeys)
+    }
+
+    fun cancelPlaylistDownloads(taskKeys: List<String>) {
+        val cancelled = offlineDownloadManager.cancelTasks(taskKeys)
+        if (cancelled > 0) {
+            notifyPlaylist(Strings.playlistDownloadCancelled(cancelled))
+        }
+    }
+
     /** Global snackbar (playlist writes, daily mix feedback). */
     internal fun notifyPlaylist(message: String, actionLabel: String? = null, isError: Boolean = false, onAction: (() -> Unit)? = null) =
         playlistCoordinator.notify(message, actionLabel, isError, onAction)

@@ -214,6 +214,62 @@ internal class AppStatePlaylistCoordinator(
         }
     }
 
+    /** Reorders tracks in the open 032 playlist in one atomic server request (`PUT /order`). */
+    suspend fun reorderTracks(playlist: MusicPlaylist, reorderedTracks: List<MusicTrack>): Result<Unit> {
+        val sourceId = playlist.sourceId.ifBlank { state.connectionPreferences.id }
+        if (!canEditPlaylist(playlist)) return Result.failure(IllegalStateException(Strings.playlistEditUnsupported))
+        val open = state.playlistTrackResult?.takeIf { it.playlist.ratingKey == playlist.ratingKey }
+        val previousTracks = open?.tracks.orEmpty()
+        if (reorderedTracks.isEmpty() || !hasPlaylistOrderChanged(previousTracks, reorderedTracks)) {
+            return Result.success(Unit)
+        }
+        val firstChanged = previousTracks.firstOrNull()?.ratingKey != reorderedTracks.firstOrNull()?.ratingKey
+        state.isPlaylistMutating = true
+        return try {
+            val result = withContext(Dispatchers.IO) {
+                val client = client(sourceId)
+                val revision = open?.playlist?.revision
+                    ?: playlist.revision
+                    ?: client.fetchPlaylistTracks(playlist).playlist.revision
+                    ?: 0L
+                client.reorderPlaylistTracks(
+                    id = playlist.ratingKey,
+                    trackIds = reorderedTracks.map { it.ratingKey },
+                    expectedRevision = revision,
+                )
+            }
+            state.playlistTrackResult?.takeIf { it.playlist.ratingKey == playlist.ratingKey }?.let { current ->
+                state.playlistTrackResult = current.copy(
+                    playlist = current.playlist.copy(
+                        leafCount = reorderedTracks.size,
+                        revision = result.revision ?: current.playlist.revision,
+                    ),
+                    tracks = reorderedTracks,
+                )
+            }
+            applyItemResult(sourceId, playlist.ratingKey, result)
+            persistOpenPlaylistTracks(sourceId, playlist.ratingKey)
+            if (firstChanged) {
+                state.loadPlaylists()
+            }
+            notify(Strings.playlistOrderSaved)
+            Result.success(Unit)
+        } catch (error: Throwable) {
+            if (error is CancellationException) throw error
+            if (error is Music032HttpException && (error.code == "playlist_conflict" || error.status == 409)) {
+                refreshPlaylistTracks(sourceId, playlist)
+                notify(Strings.playlistReorderConflictRefreshed, isError = true)
+                Result.failure(IllegalStateException(Strings.playlistReorderConflictRefreshed, error))
+            } else {
+                val message = playlistErrorMessage(error)
+                notify(message, isError = true)
+                Result.failure(IllegalStateException(message, error))
+            }
+        } finally {
+            state.isPlaylistMutating = false
+        }
+    }
+
     /** Removes [track] from the open playlist: optimistic, with undo and rollback. */
     fun removeTrack(track: MusicTrack) {
         val current = state.playlistTrackResult ?: return

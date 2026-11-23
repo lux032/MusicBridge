@@ -409,6 +409,16 @@ class Music032Client(
         Music032PlaylistRequests.parseItemResult(JSONObject(request("POST", "/api/v1/playlists/${id.playlistId()}/items/insert", body)))
     }
 
+    /** Reorders tracks; [trackIds] must be an exact permutation of current tracks, guarded by [expectedRevision]. */
+    suspend fun reorderPlaylistTracks(
+        id: String,
+        trackIds: List<String>,
+        expectedRevision: Long,
+    ): Music032PlaylistItemResult = withContext(Dispatchers.IO) {
+        val body = Music032PlaylistRequests.reorder(trackIds, expectedRevision)
+        Music032PlaylistRequests.parseItemResult(JSONObject(request("PUT", "/api/v1/playlists/${id.playlistId()}/order", body)))
+    }
+
     private fun String.playlistId(): Long = toLongOrNull()?.takeIf { it > 0 } ?: error("无效的歌单 ID")
 
     // --- Daily mixes (server feature `dailyMixes`) ---------------------------------------

@@ -553,6 +553,7 @@ fun MusicBridgeApp(
                 } else if (currentSection == AppSection.PlaylistDetail) {
                     val downloadedTrackKeys by state.downloadedTrackKeys.collectAsState()
                     val downloadProgress by state.activeDownloadProgress.collectAsState()
+                    val downloadTasks by state.downloadTasks.collectAsState()
                     Box(
                         modifier = Modifier.fillMaxSize(),
                     ) {
@@ -564,8 +565,14 @@ fun MusicBridgeApp(
                             bottomContentPadding = contentBottomPadding,
                             downloadedTrackKeys = downloadedTrackKeys,
                             downloadProgress = downloadProgress,
+                            downloadTasks = downloadTasks,
                             onDownloadTrack = state::downloadTrack,
                             onDeleteDownloadedTrack = state::deleteDownloadedTrack,
+                            onDownloadPlaylist = state::downloadPlaylist,
+                            onDeleteDownloadedPlaylist = state::deleteDownloadedPlaylistTracks,
+                            onPausePlaylistDownloads = state::pausePlaylistDownloads,
+                            onResumePlaylistDownloads = state::resumePlaylistDownloads,
+                            onCancelPlaylistDownloads = state::cancelPlaylistDownloads,
                             onBack = state::navigateBack,
                             onToggleTrackFavorite = state::toggleTrackFavorite,
                             // Only plays from the mix's own queue count for it (server design §7.1).
@@ -580,10 +587,14 @@ fun MusicBridgeApp(
                             onSaveAiPlaylist = state::saveCurrentAiPlaylist,
                             canEditPlaylist = state.playlistTrackResult?.playlist?.let(state::canEditPlaylist) == true,
                             onRemoveTrack = state::removeTrackFromOpenPlaylist,
+                            onReorderTracks = { playlist, tracks ->
+                                state.reorderOpenPlaylistTracks(playlist, tracks)
+                            },
                             onUpdatePlaylist = { playlist, name, description ->
                                 state.updatePlaylist(playlist, name, description)
                             },
                             onDeletePlaylist = { playlist -> state.deletePlaylist(playlist) },
+                            onNotify = { message -> state.notifyPlaylist(message) },
                             dailyMix = state.openDailyMix?.takeIf {
                                 state.playlistTrackResult?.playlist?.ratingKey == dailyMixPlaylistKey(it.mix.id)
                             },

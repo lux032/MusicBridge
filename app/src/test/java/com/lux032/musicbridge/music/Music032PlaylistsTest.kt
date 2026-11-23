@@ -67,4 +67,14 @@ class Music032PlaylistsTest {
         assertTrue(parsed.thumbUrl!!.endsWith("/api/v1/artwork/1?mediaToken=token"))
         assertNull(playlist(JSONObject("""{"id":3,"name":"x"}""")).revision)
     }
+
+    @Test fun reorderBuildsTrackIdArrayAndNonNegativeExpectedRevision() {
+        val body = Music032PlaylistRequests.reorder(listOf("12", " 5 ", "bad", "9"), expectedRevision = 4L)
+        val ids = body.getJSONArray("trackIds")
+        assertEquals(listOf(12L, 5L, 9L), (0 until ids.length()).map { ids.getLong(it) })
+        assertEquals(4L, body.getLong("expectedRevision"))
+
+        val clamped = Music032PlaylistRequests.reorder(listOf("1"), expectedRevision = -3L)
+        assertEquals(0L, clamped.getLong("expectedRevision"))
+    }
 }
