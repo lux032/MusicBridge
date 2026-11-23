@@ -1,9 +1,15 @@
 package com.lux032.musicbridge
 
+import android.os.SystemClock
 import android.util.Log
 import android.widget.Toast
 import androidx.compose.animation.Crossfade
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -42,18 +48,25 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -70,13 +83,23 @@ import com.lux032.musicbridge.lyrics.LyricLine
 import com.lux032.musicbridge.lyrics.ParsedLyrics
 import com.lux032.musicbridge.music.MusicTrack
 import com.lux032.musicbridge.music.TrackCredit
+import kotlin.math.abs
+import kotlin.math.roundToInt
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 private const val TAG = "LyricsPanel"
+private const val LYRIC_ANCHOR_VIEWPORT_FRACTION = 0.36f
+private const val LYRIC_CLOCK_TICK_MILLIS = 60L
+private const val LYRIC_SCROLL_DURATION_MILLIS = 480
+private const val LYRIC_SCALE_DURATION_MILLIS = 380
+private const val LYRIC_FADE_DURATION_MILLIS = 340
+private val LyricScrollEasing = CubicBezierEasing(0.22f, 1f, 0.36f, 1f)
+private val LyricLineEasing = CubicBezierEasing(0.2f, 0f, 0f, 1f)
 
 /** Lyrics of the playing track plus its server translation; one instance per track. */
 @Stable
@@ -147,6 +170,9 @@ internal fun LyricsPanel(
     palette: ArtworkPalette,
     onSeekLine: (LyricLine) -> Unit,
     modifier: Modifier = Modifier,
+    isPlaying: Boolean = false,
+    durationMillis: Long? = null,
+    readLivePositionMillis: (() -> Long?)? = null,
     loadCredits: suspend (MusicTrack) -> List<TrackCredit> = { emptyList() },
 ) {
     val context = LocalContext.current
@@ -161,6 +187,13 @@ internal fun LyricsPanel(
     val credits by produceState(emptyList<TrackCredit>(), track.sourceId, track.ratingKey) {
         value = emptyList()
         value = loadCredits(track).filter { it.role in LyricsCreditRoles }
+    }
+    val shownLyrics = remember(state.data, state.translation, settings.enabled, settings.targetLanguage) {
+        state.shownLyrics(settings)
+    }
+    val lines = shownLyrics.lines
+    val visibleCredits = remember(lines, credits) {
+        if (lyricsCarryCredits(lines)) emptyList() else credits
     }
 
     Column(modifier = modifier) {
@@ -195,18 +228,21 @@ internal fun LyricsPanel(
                 }
             }
         }
-        val lines = state.shownLyrics(settings).lines
         LyricsView(
+            trackKey = "${track.sourceId}:${track.ratingKey}",
             lines = lines,
             isSynced = data.lyrics.isSynced,
             translationOnly = settings.enabled && settings.mode == LyricsTranslationMode.TranslationOnly,
             positionMillis = positionMillis,
+            isPlaying = isPlaying,
+            durationMillis = durationMillis,
+            readLivePositionMillis = readLivePositionMillis,
             listState = listState,
             isLoading = state.isLoading,
             palette = palette,
             onSeekLine = onSeekLine,
             modifier = Modifier.fillMaxWidth().weight(1f),
-            credits = if (lyricsCarryCredits(lines)) emptyList() else credits,
+            credits = visibleCredits,
         )
     }
 
@@ -441,6 +477,107 @@ private fun LyricsCandidateRow(candidate: Music032LyricsCandidate, onClick: () -
     }
 }
 
+internal data class LyricClockAnchor(
+    val positionMillis: Long,
+    val elapsedRealtimeMillis: Long,
+    val lastReportedMillis: Long,
+)
+
+internal fun findActiveLyricIndex(lines: List<LyricLine>, positionMillis: Long): Int {
+    if (lines.isEmpty()) return -1
+    return lines.indexOfLast { it.timeMillis <= positionMillis }.coerceAtLeast(0)
+}
+
+internal fun computeLyricScrollDeltaPx(
+    itemOffset: Int,
+    itemSize: Int,
+    viewportStartOffset: Int,
+    viewportHeight: Int,
+    anchorFraction: Float = LYRIC_ANCHOR_VIEWPORT_FRACTION,
+): Float {
+    if (viewportHeight <= 0) return 0f
+    val currentCenter = itemOffset + itemSize / 2f
+    val targetCenter = viewportStartOffset + viewportHeight * anchorFraction
+    return currentCenter - targetCenter
+}
+
+internal fun computeLyricTargetScrollOffset(
+    viewportStartOffset: Int,
+    viewportHeight: Int,
+    estimatedItemHeightPx: Int,
+    anchorFraction: Float = LYRIC_ANCHOR_VIEWPORT_FRACTION,
+): Int {
+    if (viewportHeight <= 0) return 0
+    val targetTop = viewportStartOffset + (viewportHeight * anchorFraction - estimatedItemHeightPx / 2f)
+    return (-targetTop).roundToInt()
+}
+
+internal fun reconcileLyricClockAnchor(
+    previous: LyricClockAnchor?,
+    reportedPositionMillis: Long,
+    nowElapsedRealtimeMillis: Long,
+    isPlaying: Boolean,
+    durationMillis: Long? = null,
+): LyricClockAnchor {
+    val clampedReported = clampLyricPosition(reportedPositionMillis, durationMillis)
+    if (previous == null || !isPlaying) {
+        return LyricClockAnchor(
+            positionMillis = clampedReported,
+            elapsedRealtimeMillis = nowElapsedRealtimeMillis,
+            lastReportedMillis = clampedReported,
+        )
+    }
+    val estimatedNow = interpolateLyricPositionMillis(
+        anchor = previous,
+        nowElapsedRealtimeMillis = nowElapsedRealtimeMillis,
+        isPlaying = true,
+        durationMillis = durationMillis,
+    )
+    val reportedDelta = clampedReported - previous.lastReportedMillis
+    val looksLikeSeek = reportedDelta < 0L || reportedDelta > 2_500L
+    if (looksLikeSeek) {
+        return LyricClockAnchor(
+            positionMillis = clampedReported,
+            elapsedRealtimeMillis = nowElapsedRealtimeMillis,
+            lastReportedMillis = clampedReported,
+        )
+    }
+    val behindEstimate = estimatedNow - clampedReported
+    return if (behindEstimate in 1L..1_500L) {
+        LyricClockAnchor(
+            positionMillis = estimatedNow,
+            elapsedRealtimeMillis = nowElapsedRealtimeMillis,
+            lastReportedMillis = clampedReported,
+        )
+    } else {
+        LyricClockAnchor(
+            positionMillis = clampedReported,
+            elapsedRealtimeMillis = nowElapsedRealtimeMillis,
+            lastReportedMillis = clampedReported,
+        )
+    }
+}
+
+internal fun interpolateLyricPositionMillis(
+    anchor: LyricClockAnchor,
+    nowElapsedRealtimeMillis: Long,
+    isPlaying: Boolean,
+    durationMillis: Long? = null,
+): Long {
+    if (!isPlaying) return clampLyricPosition(anchor.positionMillis, durationMillis)
+    val elapsed = (nowElapsedRealtimeMillis - anchor.elapsedRealtimeMillis).coerceAtLeast(0L)
+    return clampLyricPosition(anchor.positionMillis + elapsed, durationMillis)
+}
+
+private fun clampLyricPosition(positionMillis: Long, durationMillis: Long?): Long {
+    val nonNegative = positionMillis.coerceAtLeast(0L)
+    return if (durationMillis != null && durationMillis > 0L) {
+        nonNegative.coerceAtMost(durationMillis)
+    } else {
+        nonNegative
+    }
+}
+
 @Composable
 internal fun LyricsView(
     lines: List<LyricLine>,
@@ -452,12 +589,64 @@ internal fun LyricsView(
     palette: ArtworkPalette,
     onSeekLine: (LyricLine) -> Unit,
     modifier: Modifier = Modifier,
+    trackKey: String = "",
+    isPlaying: Boolean = false,
+    durationMillis: Long? = null,
+    readLivePositionMillis: (() -> Long?)? = null,
     credits: List<TrackCredit> = emptyList(),
 ) {
     val isUserDragging by listState.interactionSource.collectIsDraggedAsState()
     var autoFollowSuspended by remember { mutableStateOf(false) }
     var suspensionGeneration by remember { mutableIntStateOf(0) }
-    val activeIndex = if (isSynced) lines.indexOfLast { it.timeMillis <= positionMillis }.coerceAtLeast(0) else -1
+    val currentReadLivePosition by rememberUpdatedState(readLivePositionMillis)
+    var clockAnchor by remember(trackKey) { mutableStateOf<LyricClockAnchor?>(null) }
+    val livePositionMillis = remember(trackKey) { mutableLongStateOf(positionMillis) }
+
+    LaunchedEffect(trackKey, positionMillis, isPlaying, durationMillis) {
+        val now = SystemClock.elapsedRealtime()
+        val liveNow = if (isPlaying) currentReadLivePosition?.invoke() else null
+        if (liveNow != null) {
+            clockAnchor = LyricClockAnchor(liveNow, now, positionMillis)
+            livePositionMillis.longValue = liveNow
+        } else {
+            val reconciled = reconcileLyricClockAnchor(
+                previous = clockAnchor,
+                reportedPositionMillis = positionMillis,
+                nowElapsedRealtimeMillis = now,
+                isPlaying = isPlaying,
+                durationMillis = durationMillis,
+            )
+            clockAnchor = reconciled
+            livePositionMillis.longValue = reconciled.positionMillis
+        }
+    }
+
+    LaunchedEffect(trackKey, isSynced, isPlaying, lines.isNotEmpty(), durationMillis) {
+        if (!isSynced || !isPlaying || lines.isEmpty()) return@LaunchedEffect
+        while (isActive) {
+            val liveNow = currentReadLivePosition?.invoke()
+            if (liveNow != null) {
+                livePositionMillis.longValue = liveNow
+            } else {
+                clockAnchor?.let { anchor ->
+                    livePositionMillis.longValue = interpolateLyricPositionMillis(
+                        anchor = anchor,
+                        nowElapsedRealtimeMillis = SystemClock.elapsedRealtime(),
+                        isPlaying = true,
+                        durationMillis = durationMillis,
+                    )
+                }
+            }
+            delay(LYRIC_CLOCK_TICK_MILLIS)
+        }
+    }
+
+    // Only invalidate downstream readers when the highlighted line index actually changes.
+    val activeIndex by remember(lines, isSynced) {
+        derivedStateOf {
+            if (isSynced) findActiveLyricIndex(lines, livePositionMillis.longValue) else -1
+        }
+    }
 
     LaunchedEffect(isUserDragging) {
         if (isUserDragging) {
@@ -472,20 +661,79 @@ internal fun LyricsView(
             if (generation == suspensionGeneration) autoFollowSuspended = false
         }
     }
-    LaunchedEffect(activeIndex, isSynced, autoFollowSuspended) {
-        if (isSynced && activeIndex >= 0 && !autoFollowSuspended) {
-            listState.animateScrollToItem(activeIndex, scrollOffset = -120)
+
+    val hasCredits = credits.isNotEmpty() && lines.isNotEmpty()
+    val headerItemCount = if (hasCredits) 1 else 0
+    val fallbackItemHeightPx = with(LocalDensity.current) { 56.dp.roundToPx() }
+    var hasPositioned by remember(trackKey, lines) { mutableStateOf(false) }
+
+    LaunchedEffect(trackKey, isSynced) {
+        if (!isSynced) {
+            listState.scrollToItem(0)
         }
     }
+
+    LaunchedEffect(activeIndex, isSynced, autoFollowSuspended, trackKey, lines, headerItemCount) {
+        if (!isSynced || activeIndex < 0 || autoFollowSuspended) return@LaunchedEffect
+        if (listState.layoutInfo.viewportSize.height <= 0) {
+            snapshotFlow { listState.layoutInfo.viewportSize.height }
+                .filter { it > 0 }
+                .first()
+        }
+        val layoutInfo = listState.layoutInfo
+        val viewportHeight = layoutInfo.viewportSize.height
+        val viewportStart = layoutInfo.viewportStartOffset
+        val targetItemIndex = activeIndex + headerItemCount
+        val visibleTarget = layoutInfo.visibleItemsInfo.firstOrNull { it.index == targetItemIndex }
+        val estimatedItemHeight = visibleTarget?.size
+            ?: layoutInfo.visibleItemsInfo.takeIf { it.isNotEmpty() }?.let { items ->
+                items.sumOf { it.size } / items.size
+            }
+            ?: fallbackItemHeightPx
+
+        if (!hasPositioned) {
+            hasPositioned = true
+            val scrollOffset = computeLyricTargetScrollOffset(
+                viewportStartOffset = viewportStart,
+                viewportHeight = viewportHeight,
+                estimatedItemHeightPx = estimatedItemHeight,
+            )
+            listState.scrollToItem(targetItemIndex, scrollOffset)
+        } else if (visibleTarget != null) {
+            val delta = computeLyricScrollDeltaPx(
+                itemOffset = visibleTarget.offset,
+                itemSize = visibleTarget.size,
+                viewportStartOffset = viewportStart,
+                viewportHeight = viewportHeight,
+            )
+            if (abs(delta) > 1f) {
+                listState.animateScrollBy(
+                    value = delta,
+                    animationSpec = tween(
+                        durationMillis = LYRIC_SCROLL_DURATION_MILLIS,
+                        easing = LyricScrollEasing,
+                    ),
+                )
+            }
+        } else {
+            val scrollOffset = computeLyricTargetScrollOffset(
+                viewportStartOffset = viewportStart,
+                viewportHeight = viewportHeight,
+                estimatedItemHeightPx = estimatedItemHeight,
+            )
+            listState.animateScrollToItem(targetItemIndex, scrollOffset)
+        }
+    }
+
     LazyColumn(
         state = listState,
         modifier = modifier,
-        // The credits sit in the lead-in space, so the first line keeps roughly its place.
+        // Extra bottom padding lets the final lines glide cleanly to the upper-middle anchor.
         contentPadding = PaddingValues(
-            top = if (credits.isEmpty() || lines.isEmpty()) 160.dp else 96.dp,
-            bottom = 160.dp,
+            top = if (!hasCredits) 160.dp else 96.dp,
+            bottom = 240.dp,
         ),
-        verticalArrangement = Arrangement.spacedBy(20.dp),
+        verticalArrangement = Arrangement.spacedBy(if (isSynced) 10.dp else 16.dp),
     ) {
         if (lines.isEmpty()) {
             item(key = "empty-lyrics") {
@@ -500,46 +748,116 @@ internal fun LyricsView(
                 }
             }
         }
-        itemsIndexed(lines) { index, line ->
+        if (hasCredits) {
+            item(key = "lyrics-credits", contentType = "lyrics-credits") {
+                LyricsCredits(credits)
+            }
+        }
+        itemsIndexed(
+            items = lines,
+            key = { index, line -> "$index:${line.timeMillis}" },
+            contentType = { _, _ -> "lyric-line" },
+        ) { index, line ->
             val isActive = isSynced && index == activeIndex
             val translation = line.translation
             // Translation-only replaces the line; lines without a translation keep the original.
             val primary = if (translationOnly && translation != null) translation else line.text
             val secondary = translation.takeIf { !translationOnly }
-            // Part of the first line's item (line indices stay scroll targets) but outside its
-            // tap-to-seek area: the credits scroll away with the lyrics and are not links here.
-            if (index == 0 && credits.isNotEmpty()) LyricsCredits(credits)
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .clickable(enabled = isSynced) {
-                        autoFollowSuspended = false
-                        suspensionGeneration++
-                        onSeekLine(line)
-                    }
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                Text(
-                    text = primary,
-                    modifier = Modifier.fillMaxWidth(),
-                    color = if (isActive) palette.accent else AppColors.TextSecondary.copy(alpha = 0.72f),
-                    style = if (isActive) MaterialTheme.typography.headlineSmall else MaterialTheme.typography.titleMedium,
-                    fontWeight = if (isActive) FontWeight.Bold else FontWeight.Medium,
-                    textAlign = TextAlign.Center,
-                )
-                if (secondary != null) {
-                    Text(
-                        text = secondary,
-                        modifier = Modifier.fillMaxWidth(),
-                        color = if (isActive) palette.accent.copy(alpha = 0.85f) else AppColors.TextTertiary.copy(alpha = 0.8f),
-                        style = MaterialTheme.typography.bodyLarge,
-                        textAlign = TextAlign.Center,
-                    )
+            val onRowClick = remember(line, onSeekLine) {
+                {
+                    autoFollowSuspended = false
+                    suspensionGeneration++
+                    val now = SystemClock.elapsedRealtime()
+                    clockAnchor = LyricClockAnchor(line.timeMillis, now, line.timeMillis)
+                    livePositionMillis.longValue = line.timeMillis
+                    onSeekLine(line)
                 }
             }
+            LyricLineRow(
+                primary = primary,
+                secondary = secondary,
+                isActive = isActive,
+                isSynced = isSynced,
+                accentColor = palette.accent,
+                onClick = onRowClick,
+            )
+        }
+    }
+}
+
+/**
+ * Single lyric row with constant layout metrics across active/inactive states so transitioning
+ * between lines never triggers text re-wrapping or height jumps that fight the scroll animation.
+ */
+@Composable
+private fun LyricLineRow(
+    primary: String,
+    secondary: String?,
+    isActive: Boolean,
+    isSynced: Boolean,
+    accentColor: Color,
+    onClick: () -> Unit,
+) {
+    val scale by animateFloatAsState(
+        targetValue = if (!isSynced || isActive) 1f else 0.80f,
+        animationSpec = tween(durationMillis = LYRIC_SCALE_DURATION_MILLIS, easing = LyricLineEasing),
+        label = "lyric_scale",
+    )
+    val layerAlpha by animateFloatAsState(
+        targetValue = if (!isSynced || isActive) 1f else 0.68f,
+        animationSpec = tween(durationMillis = LYRIC_FADE_DURATION_MILLIS, easing = LyricLineEasing),
+        label = "lyric_alpha",
+    )
+    val primaryColor by animateColorAsState(
+        targetValue = when {
+            !isSynced -> AppColors.TextPrimary.copy(alpha = 0.9f)
+            isActive -> accentColor
+            else -> AppColors.TextSecondary
+        },
+        animationSpec = tween(durationMillis = LYRIC_FADE_DURATION_MILLIS, easing = LyricLineEasing),
+        label = "lyric_primary_color",
+    )
+    val secondaryColor by animateColorAsState(
+        targetValue = when {
+            !isSynced -> AppColors.TextSecondary
+            isActive -> accentColor.copy(alpha = 0.85f)
+            else -> AppColors.TextTertiary
+        },
+        animationSpec = tween(durationMillis = LYRIC_FADE_DURATION_MILLIS, easing = LyricLineEasing),
+        label = "lyric_secondary_color",
+    )
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(enabled = isSynced, onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 8.dp)
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+                alpha = layerAlpha
+                transformOrigin = TransformOrigin.Center
+            },
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Text(
+            text = primary,
+            modifier = Modifier.fillMaxWidth(),
+            color = primaryColor,
+            style = if (isSynced) MaterialTheme.typography.headlineSmall else MaterialTheme.typography.titleMedium,
+            fontWeight = if (isSynced) FontWeight.Bold else FontWeight.Medium,
+            textAlign = TextAlign.Center,
+        )
+        if (secondary != null) {
+            Text(
+                text = secondary,
+                modifier = Modifier.fillMaxWidth(),
+                color = secondaryColor,
+                style = MaterialTheme.typography.bodyLarge,
+                textAlign = TextAlign.Center,
+            )
         }
     }
 }

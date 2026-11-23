@@ -703,6 +703,17 @@ fun MusicBridgeApp(
                             lyricsRepository = state.lyricsRepository,
                             lyricsTranslationSettings = state.lyricsTranslationSettings,
                             onLyricsTranslationSettingsChange = state::updateLyricsTranslationSettings,
+                            readLivePositionMillis = state.miniPlayerState
+                                ?.takeIf { it.target == PlaybackTarget.LocalDevice }
+                                ?.let { mini ->
+                                    val expectedIndex = mini.currentIndex
+                                    {
+                                        state.localPlaybackEngine
+                                            .takeIf { it.isActive && it.currentIndex == expectedIndex }
+                                            ?.currentPositionMillis
+                                            ?.coerceAtLeast(0L)
+                                    }
+                                },
                             sonosVolume = state.sonosVolume,
                             hasLoadedSonosVolume = state.hasLoadedSonosVolume,
                             onVolumeChange = state.miniPlayerState?.sonosRoom?.let { room ->
