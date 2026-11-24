@@ -51,16 +51,41 @@ data class SimilarRadioState(
 internal fun similarTrackIdentityKey(track: MusicTrack): String =
     "${track.sourceId}:${track.ratingKey}"
 
-/** Maps raw 032 similarity reasons to the highest-priority user-facing short label. */
+private val STRUCTURAL_SIMILAR_REASONS = setOf(
+    "sameWork",
+    "sharedCredit",
+    "coPlaylist",
+    "sameArtist",
+)
+
+private fun hasStructuralSimilarReason(reasons: List<String>): Boolean =
+    reasons.any { it.trim() in STRUCTURAL_SIMILAR_REASONS }
+
+private fun isAcousticOnlySimilarReason(reasons: List<String>): Boolean {
+    var hasSoundsSimilar = false
+    for (reason in reasons) {
+        val trimmed = reason.trim()
+        if (trimmed in STRUCTURAL_SIMILAR_REASONS) return false
+        if (trimmed == "soundsSimilar") hasSoundsSimilar = true
+    }
+    return hasSoundsSimilar
+}
+
+/**
+ * Maps raw 032 similarity reasons to the most informative user-facing short label.
+ * Specific structural relationships (`sameWork`, `sharedCredit`, `coPlaylist`, `sameArtist`)
+ * take precedence over `soundsSimilar` so hybrid matches do not collapse into "听感相似",
+ * while pure acoustic matches still display "听感相似" ahead of broad `genre`/`era` tags.
+ */
 internal fun primarySimilarReasonLabel(reasons: List<String>): String? {
     if (reasons.isEmpty()) return null
     val normalized = reasons.map { it.trim() }.toSet()
     return when {
-        "soundsSimilar" in normalized -> Strings.similarReasonSoundsSimilar
         "sameWork" in normalized -> Strings.similarReasonSameWork
         "sharedCredit" in normalized -> Strings.similarReasonSharedCredit
         "coPlaylist" in normalized -> Strings.similarReasonCoPlaylist
         "sameArtist" in normalized -> Strings.similarReasonSameArtist
+        "soundsSimilar" in normalized -> Strings.similarReasonSoundsSimilar
         "genre" in normalized -> Strings.similarReasonGenre
         "era" in normalized -> Strings.similarReasonEra
         else -> null
@@ -166,9 +191,9 @@ internal fun selectRollingSimilarSeed(
 }
 
 /**
- * Client-side deduplication and two-pass artist diversification safeguard.
- * Ensures clean radio queues even when talking to an older 032 server that does not
- * yet implement `exclude` or `diverse=1`.
+ * Client-side deduplication, two-pass artist cap, and acoustic/structural interleaving safeguard.
+ * Ensures clean, varied radio queues even when talking to an older 032 server that does not
+ * yet implement `exclude`, `diverse=1`, or balanced signal interleaving.
  */
 internal fun filterAndDiversifySimilarTracks(
     candidates: List<Music032SimilarTrack>,
@@ -185,27 +210,75 @@ internal fun filterAndDiversifySimilarTracks(
             unique += candidate
         }
     }
-    if (maxPerArtist <= 0) return unique.take(limit)
-    val artistCounts = mutableMapOf<String, Int>()
-    val picked = mutableListOf<Music032SimilarTrack>()
-    val deferred = mutableListOf<Music032SimilarTrack>()
-    for (candidate in unique) {
-        val artistKey = candidate.track.artists.firstOrNull()?.id
+    if (unique.isEmpty() || maxPerArtist <= 0) return unique.take(limit)
+
+    fun artistKeyFor(candidate: Music032SimilarTrack): String =
+        candidate.track.artists.firstOrNull()?.id
             ?.takeIf { it.isNotBlank() }
             ?: candidate.track.artistName?.trim()?.lowercase()?.takeIf { it.isNotBlank() }
             ?: "unknown:${candidate.track.ratingKey}"
-        val count = artistCounts[artistKey] ?: 0
-        if (count >= maxPerArtist) {
-            deferred += candidate
-            continue
+
+    val topScore = unique.maxOf { it.score }
+    val minStructuralScore = maxOf(0.18, topScore * 0.50)
+    val used = BooleanArray(unique.size)
+    val artistCounts = mutableMapOf<String, Int>()
+    val picked = ArrayList<Music032SimilarTrack>(minOf(limit, unique.size))
+    var consecutiveAcousticOnly = 0
+    var nextGeneral = 0
+    var nextStructural = 0
+
+    fun advanceGeneral(): Int {
+        while (nextGeneral < unique.size) {
+            if (!used[nextGeneral] && (artistCounts[artistKeyFor(unique[nextGeneral])] ?: 0) < maxPerArtist) {
+                return nextGeneral
+            }
+            nextGeneral++
         }
-        artistCounts[artistKey] = count + 1
-        picked += candidate
-        if (picked.size >= limit) return picked
+        return -1
     }
-    for (candidate in deferred) {
+
+    fun advanceStructural(): Int {
+        while (nextStructural < unique.size) {
+            val candidate = unique[nextStructural]
+            if (!used[nextStructural] &&
+                (artistCounts[artistKeyFor(candidate)] ?: 0) < maxPerArtist &&
+                hasStructuralSimilarReason(candidate.reasons) &&
+                candidate.score >= minStructuralScore
+            ) {
+                return nextStructural
+            }
+            nextStructural++
+        }
+        return -1
+    }
+
+    while (picked.size < limit) {
+        val generalIndex = advanceGeneral()
+        if (generalIndex < 0) break
+        val chosenIndex = if (
+            consecutiveAcousticOnly >= 2 &&
+            isAcousticOnlySimilarReason(unique[generalIndex].reasons)
+        ) {
+            advanceStructural().takeIf { it >= 0 } ?: generalIndex
+        } else {
+            generalIndex
+        }
+        used[chosenIndex] = true
+        val chosen = unique[chosenIndex]
+        val artistKey = artistKeyFor(chosen)
+        artistCounts[artistKey] = (artistCounts[artistKey] ?: 0) + 1
+        picked += chosen
+        consecutiveAcousticOnly = if (isAcousticOnlySimilarReason(chosen.reasons)) {
+            consecutiveAcousticOnly + 1
+        } else {
+            0
+        }
+    }
+    for (index in unique.indices) {
         if (picked.size >= limit) break
-        picked += candidate
+        if (!used[index]) {
+            picked += unique[index]
+        }
     }
     return picked
 }

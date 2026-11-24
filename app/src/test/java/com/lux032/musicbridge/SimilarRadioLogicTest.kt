@@ -5,7 +5,6 @@ import com.lux032.musicbridge.music.Music032SimilarTrack
 import com.lux032.musicbridge.music.MusicTrack
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -25,12 +24,18 @@ class SimilarRadioLogicTest {
             artists = listOf(ArtistRef(artistId, artist)),
         )
 
-    private fun similar(id: Long, artist: String, artistId: String, score: Double = 0.8): Music032SimilarTrack =
+    private fun similar(
+        id: Long,
+        artist: String,
+        artistId: String,
+        score: Double = 0.8,
+        reasons: List<String> = listOf("soundsSimilar"),
+    ): Music032SimilarTrack =
         Music032SimilarTrack(
             track = track(id, artist = artist, artistId = artistId),
             distance = 1.0 - score,
             score = score,
-            reasons = listOf("soundsSimilar"),
+            reasons = reasons,
         )
 
     @Test
@@ -241,10 +246,35 @@ class SimilarRadioLogicTest {
     }
 
     @Test
-    fun primaryReasonLabelPrioritizesAcousticAndIgnoresInternalTags() {
-        assertEquals(Strings.similarReasonSoundsSimilar, primarySimilarReasonLabel(listOf("sameArtist", "soundsSimilar")))
-        assertEquals(Strings.similarReasonSameWork, primarySimilarReasonLabel(listOf("genre", "sameWork")))
+    fun filterAndDiversifyInterleavesStructuralTracksAmongAcousticNeighbors() {
+        val candidates = listOf(
+            similar(1, "A", "1", 0.44, listOf("genre", "soundsSimilar")),
+            similar(2, "B", "2", 0.43, listOf("soundsSimilar")),
+            similar(3, "C", "3", 0.42, listOf("soundsSimilar")),
+            similar(4, "D", "4", 0.41, listOf("soundsSimilar")),
+            similar(5, "E", "5", 0.40, listOf("soundsSimilar")),
+            similar(6, "F", "6", 0.34, listOf("sameWork", "soundsSimilar")),
+            similar(7, "G", "7", 0.32, listOf("sharedCredit", "era")),
+            similar(8, "H", "8", 0.12, listOf("coPlaylist")), // below quality floor -> stays behind
+        )
+        val result = filterAndDiversifySimilarTracks(
+            candidates = candidates,
+            excludedTrackKeys = emptySet(),
+            maxPerArtist = 2,
+            limit = 6,
+        )
+        assertEquals(listOf("1", "2", "6", "3", "4", "7"), result.map { it.track.ratingKey })
+    }
+
+    @Test
+    fun primaryReasonLabelPrioritizesStructuralOverAcousticAndIgnoresInternalTags() {
+        assertEquals(Strings.similarReasonSameWork, primarySimilarReasonLabel(listOf("sameWork", "sharedCredit", "soundsSimilar")))
+        assertEquals(Strings.similarReasonSharedCredit, primarySimilarReasonLabel(listOf("sharedCredit", "coPlaylist", "soundsSimilar")))
+        assertEquals(Strings.similarReasonCoPlaylist, primarySimilarReasonLabel(listOf("coPlaylist", "sameArtist", "soundsSimilar")))
+        assertEquals(Strings.similarReasonSameArtist, primarySimilarReasonLabel(listOf("sameArtist", "soundsSimilar")))
+        assertEquals(Strings.similarReasonSoundsSimilar, primarySimilarReasonLabel(listOf("genre", "era", "soundsSimilar")))
+        assertEquals(Strings.similarReasonGenre, primarySimilarReasonLabel(listOf("genre", "era")))
+        assertEquals(Strings.similarReasonEra, primarySimilarReasonLabel(listOf("era")))
         assertNull(primarySimilarReasonLabel(listOf("sameAlbum", "oftenSkipped")))
-        assertNotNull(primarySimilarReasonLabel(listOf("era")))
     }
 }
