@@ -21,8 +21,8 @@ android {
         applicationId = "com.lux032.musicbridge"
         minSdk = 24
         targetSdk = 36
-        versionCode = 25
-        versionName = "1.1.20"
+        versionCode = 26
+        versionName = "1.1.21"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
