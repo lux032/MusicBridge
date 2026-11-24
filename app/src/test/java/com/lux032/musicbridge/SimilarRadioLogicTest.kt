@@ -267,6 +267,72 @@ class SimilarRadioLogicTest {
     }
 
     @Test
+    fun filterAndDiversifySeededJitterAndRecentSoftPenaltyVarySelection() {
+        val candidates = listOf(
+            similar(1, "A", "1", 0.44, listOf("sameWork")),
+            similar(2, "B", "2", 0.43, listOf("soundsSimilar")),
+            similar(3, "C", "3", 0.42, listOf("sharedCredit")),
+            similar(4, "D", "4", 0.41, listOf("soundsSimilar")),
+            similar(5, "E", "5", 0.40, listOf("coPlaylist")),
+            similar(6, "F", "6", 0.39, listOf("soundsSimilar")),
+            similar(7, "G", "7", 0.38, listOf("sameArtist")),
+            similar(8, "H", "8", 0.08, listOf("era")), // low relevance must stay out
+        )
+        val firstRun = filterAndDiversifySimilarTracks(
+            candidates = candidates,
+            excludedTrackKeys = emptySet(),
+            maxPerArtist = 2,
+            limit = 5,
+            randomSeed = 11111L,
+        )
+        val sameSeedRun = filterAndDiversifySimilarTracks(
+            candidates = candidates,
+            excludedTrackKeys = emptySet(),
+            maxPerArtist = 2,
+            limit = 5,
+            randomSeed = 11111L,
+        )
+        assertEquals(firstRun.map { it.track.ratingKey }, sameSeedRun.map { it.track.ratingKey })
+        assertFalse("8" in firstRun.map { it.track.ratingKey })
+
+        // Different seeds must vary order/selection while keeping low-relevance track 8 out.
+        val differed = listOf(22222L, 33333L, 44444L, 55555L).any { seed ->
+            val alt = filterAndDiversifySimilarTracks(
+                candidates = candidates,
+                excludedTrackKeys = emptySet(),
+                maxPerArtist = 2,
+                limit = 5,
+                randomSeed = seed,
+            ).map { it.track.ratingKey }
+            assertFalse("8" in alt)
+            alt != firstRun.map { it.track.ratingKey }
+        }
+        assertTrue(differed)
+
+        // Marking tracks 1..3 as recently recommended soft-demotes them behind fresh tracks 4..7,
+        // yet still backfills them when the candidate pool is smaller than limit.
+        val demoted = filterAndDiversifySimilarTracks(
+            candidates = candidates.take(7),
+            excludedTrackKeys = emptySet(),
+            maxPerArtist = 2,
+            limit = 4,
+            recentTrackKeys = setOf("s1:1", "s1:2", "s1:3"),
+            randomSeed = null,
+        ).map { it.track.ratingKey }
+        assertEquals(listOf("4", "5", "6", "7"), demoted)
+
+        val smallPoolBackfill = filterAndDiversifySimilarTracks(
+            candidates = candidates.take(3),
+            excludedTrackKeys = emptySet(),
+            maxPerArtist = 2,
+            limit = 3,
+            recentTrackKeys = setOf("s1:1", "s1:2", "s1:3"),
+            randomSeed = null,
+        )
+        assertEquals(3, smallPoolBackfill.size)
+    }
+
+    @Test
     fun primaryReasonLabelPrioritizesStructuralOverAcousticAndIgnoresInternalTags() {
         assertEquals(Strings.similarReasonSameWork, primarySimilarReasonLabel(listOf("sameWork", "sharedCredit", "soundsSimilar")))
         assertEquals(Strings.similarReasonSharedCredit, primarySimilarReasonLabel(listOf("sharedCredit", "coPlaylist", "soundsSimilar")))

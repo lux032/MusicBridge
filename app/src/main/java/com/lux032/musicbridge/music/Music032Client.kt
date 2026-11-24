@@ -324,15 +324,22 @@ class Music032Client(
         limit: Int = 20,
         excludeIds: Collection<Long> = emptyList(),
         diverse: Boolean = true,
+        seed: Long? = null,
     ): List<Music032SimilarTrack> = withContext(Dispatchers.IO) {
         val numericId = trackId.trackIdPath()
-        val query = Music032SimilarJson.buildQuery(limit = limit, excludeIds = excludeIds, diverse = diverse)
+        val query = Music032SimilarJson.buildQuery(
+            limit = limit,
+            excludeIds = excludeIds,
+            diverse = diverse,
+            seed = seed,
+        )
         val path = "/api/v1/tracks/$numericId/similar?$query"
         val body = try {
             fetchSimilarWithBusyRetry(path)
         } catch (error: Music032HttpException) {
-            if (error.status == 400 && (diverse || excludeIds.isNotEmpty())) {
-                // Backward compatibility with older 032 servers before exclude/diverse params existed.
+            val hasExtended = diverse || excludeIds.isNotEmpty() || (seed != null && seed != 0L)
+            if (error.status == 400 && hasExtended) {
+                // Backward compatibility with older 032 servers before exclude/diverse/seed params existed.
                 fetchSimilarWithBusyRetry("/api/v1/tracks/$numericId/similar?limit=${limit.coerceIn(1, 100)}")
             } else {
                 throw error

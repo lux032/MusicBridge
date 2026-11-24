@@ -51,12 +51,14 @@ class Music032SimilarTest {
     @Test
     fun buildQueryClampsLimitDedupesAndCapsExcludeIds() {
         val exclude = (1L..250L).toList() + listOf(1L, -5L, 0L, 2L)
-        val query = Music032SimilarJson.buildQuery(limit = 500, excludeIds = exclude, diverse = true)
+        val query = Music032SimilarJson.buildQuery(limit = 500, excludeIds = exclude, diverse = true, seed = 98765L)
         assert(query.startsWith("limit=100&diverse=1&exclude="))
-        val excludePart = query.substringAfter("exclude=").split(",")
+        assert(query.endsWith("&seed=98765"))
+        val excludePart = query.substringAfter("exclude=").substringBefore("&seed=").split(",")
         assertEquals(200, excludePart.size)
         assertEquals("1", excludePart.first())
         assertEquals("200", excludePart.last())
+        assertEquals("limit=20", Music032SimilarJson.buildQuery(limit = 20, excludeIds = emptyList(), diverse = false, seed = 0L))
     }
 
     @Test

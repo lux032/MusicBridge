@@ -26,6 +26,8 @@ internal class AppStateSimilarRadioCoordinator(
     private var fetchJob: Job? = null
     /** Recently discarded/refreshed keys so "换一批" avoids immediately repeating the same songs. */
     private val dismissedKeys = LinkedHashSet<String>()
+    /** Cross-session memory of recently recommended tracks (soft-demoted so repeated clicks stay fresh). */
+    private val recentRecommendedKeys = LinkedHashSet<String>()
 
     private fun nextGeneration(): Long {
         fetchJob?.cancel()
@@ -241,6 +243,7 @@ internal class AppStateSimilarRadioCoordinator(
                         state.playbackCoordinator.updatePlaybackMode(PlaybackMode.Sequential)
                     }
                     val newTracks = result.items.map(Music032SimilarTrack::track)
+                    rememberRecentRecommended(newTracks)
                     val keepThrough = livePlayer.currentIndex
                     state.playbackCoordinator.replaceQueueUpcomingAfter(keepThrough, newTracks)
                     state.similarRadioState = state.similarRadioState.copy(
@@ -351,6 +354,7 @@ internal class AppStateSimilarRadioCoordinator(
                         return@launch
                     }
                     val newTracks = result.items.map(Music032SimilarTrack::track)
+                    rememberRecentRecommended(newTracks)
                     state.playbackCoordinator.appendTracksToQueue(newTracks)
                     state.similarRadioState = state.similarRadioState.copy(
                         similarReasons = mergeReasons(state.similarRadioState.similarReasons, result.items),
@@ -423,6 +427,7 @@ internal class AppStateSimilarRadioCoordinator(
                         return@launch
                     }
                     val newTracks = result.items.map(Music032SimilarTrack::track)
+                    rememberRecentRecommended(newTracks)
                     state.playbackCoordinator.replaceQueueUpcomingAfter(liveKeepThrough, newTracks)
                     state.similarRadioState = state.similarRadioState.copy(
                         lastAutoSeedTitle = seedTrack.title,
@@ -549,6 +554,7 @@ internal class AppStateSimilarRadioCoordinator(
                         return@launch
                     }
                     val newTracks = freshItems.map(Music032SimilarTrack::track)
+                    rememberRecentRecommended(newTracks)
                     val firstNewIndex = livePlayer.tracks.size
                     val shouldAutoPlayAppended = playFirstAppendedIfEnded && when (livePlayer.target) {
                         PlaybackTarget.LocalDevice -> state.localPlaybackEngine.isEnded
@@ -622,6 +628,20 @@ internal class AppStateSimilarRadioCoordinator(
         }
     }
 
+    private fun rememberRecentRecommended(tracks: List<MusicTrack>) {
+        tracks.forEach { track ->
+            val key = similarTrackIdentityKey(track)
+            recentRecommendedKeys.remove(key)
+            recentRecommendedKeys.add(key)
+        }
+        while (recentRecommendedKeys.size > MAX_RECENT_RECOMMENDED) {
+            val first = recentRecommendedKeys.iterator().next()
+            recentRecommendedKeys.remove(first)
+        }
+    }
+
+    private fun nextRadioSeed(): Long = kotlin.random.Random.nextLong(1L, Long.MAX_VALUE)
+
     private sealed interface FetchOutcome {
         data class Success(val items: List<Music032SimilarTrack>, val method: String?) : FetchOutcome
         data class Error(val kind: SimilarRadioErrorKind) : FetchOutcome
@@ -638,6 +658,8 @@ internal class AppStateSimilarRadioCoordinator(
             existingQueue.forEach { add(similarTrackIdentityKey(it)) }
             addAll(dismissedKeys)
         }
+        val recentSnapshot = recentRecommendedKeys.toSet()
+        val requestSeed = nextRadioSeed()
         val excludeIds = excludedKeys.asSequence()
             .filter { it.startsWith("${seedTrack.sourceId}:") }
             .mapNotNull { it.substringAfter(':').toLongOrNull() }
@@ -651,15 +673,18 @@ internal class AppStateSimilarRadioCoordinator(
             }
             val raw = client.fetchSimilarTracks(
                 trackId = seedTrack.ratingKey,
-                limit = (limit * 2).coerceIn(12, 40),
+                limit = (limit * 3).coerceIn(18, 48),
                 excludeIds = excludeIds,
                 diverse = true,
+                seed = requestSeed,
             )
             val filtered = filterAndDiversifySimilarTracks(
                 candidates = raw,
                 excludedTrackKeys = excludedKeys,
                 maxPerArtist = 2,
                 limit = limit,
+                recentTrackKeys = recentSnapshot,
+                randomSeed = requestSeed,
             )
             FetchOutcome.Success(filtered, caps?.similarityMethod)
         } catch (cancel: CancellationException) {
@@ -701,6 +726,7 @@ internal class AppStateSimilarRadioCoordinator(
         const val AUTO_CONTINUE_BATCH_SIZE = 12
         const val AUTO_CONTINUE_THRESHOLD = 2
         const val MAX_DISMISSED_HISTORY = 120
+        const val MAX_RECENT_RECOMMENDED = 60
         const val MAX_CACHED_REASONS = 300
     }
 }

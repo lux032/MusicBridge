@@ -49,6 +49,7 @@ internal object Music032SimilarJson {
         limit: Int,
         excludeIds: Collection<Long>,
         diverse: Boolean,
+        seed: Long? = null,
     ): String {
         val clampedLimit = limit.coerceIn(1, 100)
         val params = mutableListOf("limit=$clampedLimit")
@@ -62,6 +63,9 @@ internal object Music032SimilarJson {
             .toList()
         if (cleanExclude.isNotEmpty()) {
             params += "exclude=${cleanExclude.joinToString(",")}"
+        }
+        if (seed != null && seed != 0L) {
+            params += "seed=$seed"
         }
         return params.joinToString("&")
     }

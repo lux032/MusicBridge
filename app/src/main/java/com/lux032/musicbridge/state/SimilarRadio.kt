@@ -191,15 +191,30 @@ internal fun selectRollingSimilarSeed(
 }
 
 /**
- * Client-side deduplication, two-pass artist cap, and acoustic/structural interleaving safeguard.
- * Ensures clean, varied radio queues even when talking to an older 032 server that does not
- * yet implement `exclude`, `diverse=1`, or balanced signal interleaving.
+ * Deterministic SplitMix64 jitter in `[-1.0, 1.0)` derived from `(seed, trackKey)`.
+ */
+internal fun similarJitterFactor(seed: Long, trackKey: String): Double {
+    val trackId = trackKey.substringAfter(':').toLongOrNull() ?: trackKey.hashCode().toLong()
+    var x = seed.toULong() xor (trackId.toULong() * 0x9e3779b97f4a7c15uL)
+    x = (x xor (x shr 30)) * 0xbf58476d1ce4e5b9uL
+    x = (x xor (x shr 27)) * 0x94d049bb133111ebuL
+    x = x xor (x shr 31)
+    val unit = (x shr 11).toDouble() / (1uL shl 53).toDouble()
+    return unit * 2.0 - 1.0
+}
+
+/**
+ * Client-side deduplication, optional bounded seeded re-ranking + recent-track soft penalty,
+ * two-pass artist cap, and acoustic/structural interleaving safeguard.
+ * Ensures clean, varied, fresh radio queues even when talking to an older 032 server.
  */
 internal fun filterAndDiversifySimilarTracks(
     candidates: List<Music032SimilarTrack>,
     excludedTrackKeys: Set<String>,
     maxPerArtist: Int = 2,
     limit: Int = 12,
+    recentTrackKeys: Set<String> = emptySet(),
+    randomSeed: Long? = null,
 ): List<Music032SimilarTrack> {
     if (candidates.isEmpty() || limit <= 0) return emptyList()
     val seenKeys = excludedTrackKeys.toMutableSet()
@@ -210,7 +225,26 @@ internal fun filterAndDiversifySimilarTracks(
             unique += candidate
         }
     }
-    if (unique.isEmpty() || maxPerArtist <= 0) return unique.take(limit)
+    if (unique.isEmpty()) return emptyList()
+
+    val effectiveSeed = randomSeed?.takeIf { it != 0L }
+    if ((effectiveSeed != null || recentTrackKeys.isNotEmpty()) && unique.size > 1) {
+        val scored = unique.mapIndexed { index, candidate ->
+            val key = similarTrackIdentityKey(candidate.track)
+            val baseScore = candidate.score.coerceAtLeast(0.01)
+            val freshness = if (key in recentTrackKeys) 0.65 else 1.0
+            val jitter = if (effectiveSeed != null) {
+                1.0 + 0.25 * similarJitterFactor(effectiveSeed, key)
+            } else {
+                1.0
+            }
+            Triple(candidate, baseScore * freshness * jitter, index)
+        }.sortedWith(compareByDescending<Triple<Music032SimilarTrack, Double, Int>> { it.second }.thenBy { it.third })
+        unique.clear()
+        scored.forEach { unique += it.first }
+    }
+
+    if (maxPerArtist <= 0) return unique.take(limit)
 
     fun artistKeyFor(candidate: Music032SimilarTrack): String =
         candidate.track.artists.firstOrNull()?.id
