@@ -92,6 +92,95 @@ class SimilarRadioLogicTest {
     }
 
     @Test
+    fun shouldTriggerRespectsShufflePlayOrderInsteadOfLinearIndex() {
+        // Large queue in Shuffle mode where shuffle randomly jumped to the final array index
+        // (index 99 of 100), but 98 tracks remain unplayed in shuffle order -> must NOT trigger.
+        assertFalse(
+            shouldTriggerSimilarAutoContinue(
+                autoPlayEnabled = true,
+                playbackMode = PlaybackMode.Shuffle,
+                sleepStopAfterCurrent = false,
+                tracksSize = 100,
+                currentIndex = 99,
+                isLoading = false,
+                remainingInPlayOrder = 98,
+            ),
+        )
+        // Unknown shuffle order on a large queue (e.g., Sonos) must not falsely trigger on tail index.
+        assertFalse(
+            shouldTriggerSimilarAutoContinue(
+                autoPlayEnabled = true,
+                playbackMode = PlaybackMode.Shuffle,
+                sleepStopAfterCurrent = false,
+                tracksSize = 100,
+                currentIndex = 99,
+                isLoading = false,
+                remainingInPlayOrder = null,
+            ),
+        )
+        // Shuffle mode genuinely down to the last 2 unplayed tracks -> DOES trigger.
+        assertTrue(
+            shouldTriggerSimilarAutoContinue(
+                autoPlayEnabled = true,
+                playbackMode = PlaybackMode.Shuffle,
+                sleepStopAfterCurrent = false,
+                tracksSize = 100,
+                currentIndex = 12,
+                isLoading = false,
+                remainingInPlayOrder = 2,
+            ),
+        )
+        // Tiny queue (2 tracks) in Shuffle mode -> only 1 remaining track, safe to prefetch.
+        assertTrue(
+            shouldTriggerSimilarAutoContinue(
+                autoPlayEnabled = true,
+                playbackMode = PlaybackMode.Shuffle,
+                sleepStopAfterCurrent = false,
+                tracksSize = 2,
+                currentIndex = 0,
+                isLoading = false,
+                remainingInPlayOrder = null,
+            ),
+        )
+    }
+
+    @Test
+    fun shouldShowAutoSimilarDividerRequiresActualAutoTracks() {
+        val cleanManual = SimilarRadioState(
+            autoPlayEnabled = true,
+            manualQueueCount = 2,
+            radioSeed = null,
+            lastAutoSeedTitle = null,
+        )
+        // Even if manualBoundary were somehow stale (< totalCount), no divider without auto tracks.
+        assertFalse(
+            shouldShowAutoSimilarDivider(
+                isSimilarRadioSupported = true,
+                radioState = cleanManual,
+                manualBoundary = 2,
+                totalCount = 50,
+            ),
+        )
+        val withAuto = cleanManual.copy(lastAutoSeedTitle = "Song 2")
+        assertTrue(
+            shouldShowAutoSimilarDivider(
+                isSimilarRadioSupported = true,
+                radioState = withAuto,
+                manualBoundary = 2,
+                totalCount = 14,
+            ),
+        )
+        assertFalse(
+            shouldShowAutoSimilarDivider(
+                isSimilarRadioSupported = true,
+                radioState = withAuto,
+                manualBoundary = 14,
+                totalCount = 14,
+            ),
+        )
+    }
+
+    @Test
     fun filterAndDiversifyDeduplicatesAndBackfillsInTwoPasses() {
         val candidates = listOf(
             similar(1, "A", "10", 0.95), // excluded

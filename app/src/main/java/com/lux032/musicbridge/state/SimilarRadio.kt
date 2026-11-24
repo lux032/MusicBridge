@@ -68,9 +68,30 @@ internal fun primarySimilarReasonLabel(reasons: List<String>): String? {
 }
 
 /**
+ * Pure check for whether the playback queue sheet should show the "Up Next · Similar"
+ * divider between manual tracks and auto-appended recommendations.
+ * Requires [SimilarRadioState.hasAutoTracks] so a manual queue can never be falsely split
+ * if no similar tracks have been added to the active session.
+ */
+internal fun shouldShowAutoSimilarDivider(
+    isSimilarRadioSupported: Boolean,
+    radioState: SimilarRadioState,
+    manualBoundary: Int,
+    totalCount: Int,
+): Boolean =
+    isSimilarRadioSupported &&
+        radioState.autoPlayEnabled &&
+        radioState.hasAutoTracks &&
+        manualBoundary < totalCount
+
+/**
  * Pure check for whether auto-continue should proactively prefetch a new batch.
  * Never triggers under RepeatOne/RepeatAll or when a sleep timer is set to stop after
  * the current track.
+ *
+ * When [remainingInPlayOrder] is provided (e.g., from ExoPlayer's live ShuffleOrder),
+ * it overrides linear index distance so Shuffle mode never falsely triggers just because
+ * a random jump landed near the end of the track list.
  */
 internal fun shouldTriggerSimilarAutoContinue(
     autoPlayEnabled: Boolean,
@@ -80,11 +101,18 @@ internal fun shouldTriggerSimilarAutoContinue(
     currentIndex: Int,
     isLoading: Boolean,
     remainingThreshold: Int = 2,
+    remainingInPlayOrder: Int? = null,
 ): Boolean {
     if (!autoPlayEnabled || isLoading || sleepStopAfterCurrent) return false
     if (playbackMode == PlaybackMode.RepeatOne || playbackMode == PlaybackMode.RepeatAll) return false
     if (tracksSize <= 0 || currentIndex !in 0 until tracksSize) return false
-    val remainingAfterCurrent = tracksSize - 1 - currentIndex
+    val remainingAfterCurrent = when {
+        remainingInPlayOrder != null -> remainingInPlayOrder.coerceAtLeast(0)
+        playbackMode == PlaybackMode.Shuffle -> {
+            if (tracksSize - 1 <= remainingThreshold) tracksSize - 1 else return false
+        }
+        else -> tracksSize - 1 - currentIndex
+    }
     return remainingAfterCurrent <= remainingThreshold
 }
 

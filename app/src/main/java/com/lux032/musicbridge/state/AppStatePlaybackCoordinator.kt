@@ -119,12 +119,16 @@ internal class AppStatePlaybackCoordinator(
         val safeIndex = index.coerceIn(0, playerState.tracks.lastIndex)
         Log.i(LOG_TAG, "start restored session index=$safeIndex positionMs=$positionMillis target=$target")
         when (target) {
-            PlaybackTarget.LocalDevice -> state.localPlaybackCoordinator.startLocalPlayback(
-                album = playerState.album,
-                tracks = playerState.tracks,
-                startIndex = safeIndex,
-                initialPositionMillis = positionMillis,
-            )
+            PlaybackTarget.LocalDevice -> {
+                state.localPlaybackCoordinator.startLocalPlayback(
+                    album = playerState.album,
+                    tracks = playerState.tracks,
+                    startIndex = safeIndex,
+                    initialPositionMillis = positionMillis,
+                    preserveRadioState = true,
+                )
+                state.similarRadioCoordinator.maybeTriggerAutoContinue()
+            }
             is PlaybackTarget.Sonos -> {
                 // Prefer the freshly discovered room: the saved one may carry a stale IP.
                 val room = state.sonosRooms.firstOrNull { it.coordinatorUuid == target.room.coordinatorUuid }
@@ -183,18 +187,25 @@ internal class AppStatePlaybackCoordinator(
                     tracks = tracks,
                     startIndex = trackIndex,
                     initialPositionMillis = initialPositionMillis,
+                    preserveRadioState = preserveRadioState,
                 )
             }
-            is PlaybackTarget.Sonos -> startSingleTrackPlaybackOnSonos(
-                album = album,
-                tracks = tracks,
-                trackIndex = trackIndex,
-                room = target.room,
-                initialPositionMillis = initialPositionMillis,
-            )
-        }
-        if (!preserveRadioState) {
-            state.similarRadioCoordinator.onManualQueueStarted(tracks, trackIndex)
+            is PlaybackTarget.Sonos -> {
+                startSingleTrackPlaybackOnSonos(
+                    album = album,
+                    tracks = tracks,
+                    trackIndex = trackIndex,
+                    room = target.room,
+                    initialPositionMillis = initialPositionMillis,
+                )
+                if (!preserveRadioState) {
+                    state.similarRadioCoordinator.onManualQueueStarted(
+                        tracks = tracks,
+                        startIndex = trackIndex,
+                        triggerAutoContinue = !canUseSonosQueue(tracks, ::is032Source),
+                    )
+                }
+            }
         }
     }
 
@@ -306,14 +317,20 @@ internal class AppStatePlaybackCoordinator(
                     initialPositionMillis = initialPositionMillis,
                 )
             }
-            is PlaybackTarget.Sonos -> startAlbumPlaybackOnSonos(
-                albumTrackResult = albumTrackResult,
-                room = target.room,
-                startIndex = startIndex,
-                initialPositionMillis = initialPositionMillis,
-            )
+            is PlaybackTarget.Sonos -> {
+                startAlbumPlaybackOnSonos(
+                    albumTrackResult = albumTrackResult,
+                    room = target.room,
+                    startIndex = startIndex,
+                    initialPositionMillis = initialPositionMillis,
+                )
+                state.similarRadioCoordinator.onManualQueueStarted(
+                    tracks = albumTrackResult.tracks,
+                    startIndex = startIndex,
+                    triggerAutoContinue = !canUseSonosQueue(albumTrackResult.tracks, ::is032Source),
+                )
+            }
         }
-        state.similarRadioCoordinator.onManualQueueStarted(albumTrackResult.tracks, startIndex)
     }
 
     private fun startAlbumPlaybackOnSonos(
@@ -580,6 +597,7 @@ internal class AppStatePlaybackCoordinator(
                         current032Fallback,
                     )
                     warmSonosQueue(entries, startIndex)
+                    state.similarRadioCoordinator.maybeTriggerAutoContinue()
                 }
             }.onFailure { error ->
                 if (error !is CancellationException && isCurrentPlaybackRequest(requestGeneration)) {
@@ -800,6 +818,7 @@ internal class AppStatePlaybackCoordinator(
             currentPositionMillis = position,
             durationMillis = track.durationMillis,
         )
+        state.similarRadioCoordinator.onManualQueueStarted(adopted.tracks, adopted.index)
         startPlaybackReporting(room, adopted.tracks, adopted.index, position,
             autoAdvanceWhenStopped = false, continueChain = true)
         state.errorMessage = null
@@ -926,7 +945,10 @@ internal class AppStatePlaybackCoordinator(
                     }
                 }
                 when {
-                    localTracks.isEmpty() -> state.errorMessage = "当前离线且歌单曲目均未在本地缓存"
+                    localTracks.isEmpty() -> {
+                        state.isPlaybackCommandLoading = false
+                        state.errorMessage = "当前离线且歌单曲目均未在本地缓存"
+                    }
                     localTracks.size < requestedTracks.size -> {
                         state.actionMessage = "离线模式：已为你播放本地可用的 ${localTracks.size}/${requestedTracks.size} 首歌曲"
                         startLocalPlaylistTracks(playlistResult, localTracks)
@@ -991,7 +1013,6 @@ internal class AppStatePlaybackCoordinator(
             startIndex = 0,
             initialPositionMillis = 0L,
         )
-        state.similarRadioCoordinator.onManualQueueStarted(tracks, 0)
     }
 
     private fun startPlaylistPlaybackOnSonos(
@@ -1024,7 +1045,7 @@ internal class AppStatePlaybackCoordinator(
         val initialAlbum = tracks.firstOrNull()?.let { resolveAlbumForTrack(it, fakeAlbum) } ?: fakeAlbum
         if (canUseSonosQueue(tracks, ::is032Source)) {
             startQueuePlaybackOnSonos(fakeAlbum, tracks, 0, room, 0L, continueChain = false)
-            state.similarRadioCoordinator.onManualQueueStarted(tracks, 0)
+            state.similarRadioCoordinator.onManualQueueStarted(tracks, 0, triggerAutoContinue = false)
             return
         }
         state.miniPlayerState = MiniPlayerState(
@@ -1365,6 +1386,7 @@ internal class AppStatePlaybackCoordinator(
                         startIndex = targetIndex,
                         initialPositionMillis = positionMillis,
                         continueChain = true,
+                        preserveRadioState = true,
                     )
                 }
             }

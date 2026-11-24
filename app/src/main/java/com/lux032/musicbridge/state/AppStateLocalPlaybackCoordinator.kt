@@ -17,6 +17,7 @@ import com.lux032.musicbridge.music.MusicTrack
 import com.lux032.musicbridge.music.isFavorite
 import com.lux032.musicbridge.service.PlaybackForegroundService
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -24,6 +25,7 @@ import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * How long a local-playback handover waits for a cancelled Sonos push to unwind before it
@@ -87,6 +89,30 @@ internal fun localReporterPlayState(
 internal class AppStateLocalPlaybackCoordinator(
     private val state: AppState,
 ) {
+    /**
+     * Bumped on every new local queue start or teardown so stale async queue builds,
+     * inserts/replacements, and ExoPlayer callbacks from a previous queue are ignored.
+     */
+    private val localQueueGeneration = AtomicLong(0L)
+    @Volatile
+    private var loadedEngineGeneration = 0L
+    private var pendingQueueOp: Job? = null
+
+    internal val isEngineQueueSynced: Boolean
+        get() = loadedEngineGeneration == localQueueGeneration.get() && state.localPlaybackEngine.isActive
+
+    private fun enqueueLocalQueueMutation(
+        expectedGeneration: Long,
+        action: suspend () -> Unit,
+    ) {
+        val previous = pendingQueueOp
+        pendingQueueOp = state.scope.launch {
+            previous?.join()
+            if (localQueueGeneration.get() != expectedGeneration) return@launch
+            action()
+        }
+    }
+
     private fun is032Track(track: MusicTrack): Boolean =
         runCatching { state.clientFor(track.sourceId) is Music032Client }.getOrNull()
             ?: Music032TranscodeUrls.isOriginalStream(track.streamUrl)
@@ -100,7 +126,10 @@ internal class AppStateLocalPlaybackCoordinator(
     init {
         state.localPlaybackEngine.listener = object : LocalPlaybackEngine.Listener {
             override fun onTrackChanged(index: Int) {
+                val expectedGen = localQueueGeneration.get()
+                if (loadedEngineGeneration != expectedGen) return
                 state.scope.launch {
+                    if (localQueueGeneration.get() != expectedGen || loadedEngineGeneration != expectedGen) return@launch
                     val current = state.miniPlayerState ?: return@launch
                     if (current.target != PlaybackTarget.LocalDevice) return@launch
                     if (index == current.currentIndex) return@launch
@@ -118,6 +147,7 @@ internal class AppStateLocalPlaybackCoordinator(
             }
 
             override fun onTrackTransition(index: Int, reason: Int) {
+                if (loadedEngineGeneration != localQueueGeneration.get()) return
                 val current = state.miniPlayerState ?: return
                 if (current.target != PlaybackTarget.LocalDevice) return
                 val isNaturalTrackEnd = reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO ||
@@ -143,8 +173,11 @@ internal class AppStateLocalPlaybackCoordinator(
             }
 
             override fun onIsPlayingChanged(isPlaying: Boolean) {
+                val expectedGen = localQueueGeneration.get()
+                if (loadedEngineGeneration != expectedGen) return
                 push032ObservationNow()
                 state.scope.launch {
+                    if (localQueueGeneration.get() != expectedGen || loadedEngineGeneration != expectedGen) return@launch
                     val current = state.miniPlayerState ?: return@launch
                     if (current.target != PlaybackTarget.LocalDevice) return@launch
                     val engine = state.localPlaybackEngine
@@ -158,8 +191,11 @@ internal class AppStateLocalPlaybackCoordinator(
             }
 
             override fun onBufferingChanged(isBuffering: Boolean) {
+                val expectedGen = localQueueGeneration.get()
+                if (loadedEngineGeneration != expectedGen) return
                 push032ObservationNow()
                 state.scope.launch {
+                    if (localQueueGeneration.get() != expectedGen || loadedEngineGeneration != expectedGen) return@launch
                     val current = state.miniPlayerState ?: return@launch
                     if (current.target != PlaybackTarget.LocalDevice) return@launch
                     val paused = !state.localPlaybackEngine.isPlayRequested
@@ -172,7 +208,10 @@ internal class AppStateLocalPlaybackCoordinator(
             }
 
             override fun onQueueEnded(failed: Boolean) {
+                val expectedGen = localQueueGeneration.get()
+                if (loadedEngineGeneration != expectedGen) return
                 state.scope.launch {
+                    if (localQueueGeneration.get() != expectedGen || loadedEngineGeneration != expectedGen) return@launch
                     val current = state.miniPlayerState ?: return@launch
                     if (current.target != PlaybackTarget.LocalDevice) return@launch
                     // The final track never produces a media-item transition, so its 032
@@ -199,6 +238,7 @@ internal class AppStateLocalPlaybackCoordinator(
             }
 
             override fun onSeeked() {
+                if (loadedEngineGeneration != localQueueGeneration.get()) return
                 val current = state.miniPlayerState ?: return
                 if (current.target != PlaybackTarget.LocalDevice) return
                 val engine = state.localPlaybackEngine
@@ -211,7 +251,10 @@ internal class AppStateLocalPlaybackCoordinator(
             }
 
             override fun onTrackSkipped(index: Int) {
+                val expectedGen = localQueueGeneration.get()
+                if (loadedEngineGeneration != expectedGen) return
                 state.scope.launch {
+                    if (localQueueGeneration.get() != expectedGen || loadedEngineGeneration != expectedGen) return@launch
                     val current = state.miniPlayerState ?: return@launch
                     if (current.target != PlaybackTarget.LocalDevice) return@launch
                     val track = current.tracks.getOrNull(index) ?: return@launch
@@ -230,7 +273,10 @@ internal class AppStateLocalPlaybackCoordinator(
 
             override fun onAudioFormat(index: Int, sampleRate: Int?, bitDepth: Int?, isTranscoded: Boolean) {
                 if (isTranscoded) return
+                val expectedGen = localQueueGeneration.get()
+                if (loadedEngineGeneration != expectedGen) return
                 state.scope.launch {
+                    if (localQueueGeneration.get() != expectedGen || loadedEngineGeneration != expectedGen) return@launch
                     val current = state.miniPlayerState ?: return@launch
                     if (current.target != PlaybackTarget.LocalDevice || index !in current.tracks.indices) return@launch
                     val existing = current.tracks[index]
@@ -245,7 +291,10 @@ internal class AppStateLocalPlaybackCoordinator(
             }
 
             override fun onPlayerError(message: String) {
+                val expectedGen = localQueueGeneration.get()
+                if (loadedEngineGeneration != expectedGen) return
                 state.scope.launch {
+                    if (localQueueGeneration.get() != expectedGen || loadedEngineGeneration != expectedGen) return@launch
                     if (state.miniPlayerState?.target != PlaybackTarget.LocalDevice) return@launch
                     state.miniPlayerState
                         ?.tracks?.getOrNull(state.localPlaybackEngine.currentIndex)
@@ -301,6 +350,8 @@ internal class AppStateLocalPlaybackCoordinator(
     }
 
     private suspend fun reEvaluateQueueForNetworkChange() {
+        val expectedGen = localQueueGeneration.get()
+        if (loadedEngineGeneration != expectedGen || pendingQueueOp?.isActive == true) return
         val current = state.miniPlayerState ?: return
         if (current.target != PlaybackTarget.LocalDevice) return
         val currentIndex = state.localPlaybackEngine.currentIndex
@@ -310,6 +361,7 @@ internal class AppStateLocalPlaybackCoordinator(
         val replacements = withContext(Dispatchers.IO) {
             indices.associateWith { index -> current.tracks[index].toLocalQueueItem(policy) }
         }
+        if (localQueueGeneration.get() != expectedGen || loadedEngineGeneration != expectedGen) return
         if (state.miniPlayerState?.tracks !== current.tracks || state.localPlaybackEngine.currentIndex != currentIndex) return
         val preservedKeys = state.cachedOriginalTrackKeys.toMutableSet()
         indices.forEach { index ->
@@ -355,9 +407,13 @@ internal class AppStateLocalPlaybackCoordinator(
         startIndex: Int,
         initialPositionMillis: Long,
         continueChain: Boolean = false,
+        preserveRadioState: Boolean = false,
     ) {
         if (tracks.isEmpty()) return
         val safeIndex = startIndex.coerceIn(0, tracks.lastIndex)
+        val queueGeneration = localQueueGeneration.incrementAndGet()
+        pendingQueueOp?.cancel()
+        pendingQueueOp = null
         // Only release a room this app is actually driving; a merely selected room may be
         // playing something the user started from another controller.
         // A restored (not yet loaded) session only REMEMBERS its room; we are not driving it.
@@ -404,8 +460,8 @@ internal class AppStateLocalPlaybackCoordinator(
         )
         state.errorMessage = null
         state.isPlaybackCommandLoading = false
-        state.scope.launch {
-            rebuildEngineQueue(resolvedTracks, safeIndex, initialPositionMillis)
+        pendingQueueOp = state.scope.launch {
+            rebuildEngineQueue(queueGeneration, resolvedTracks, safeIndex, initialPositionMillis)
         }
         // A running sleep timer may still point at a Sonos room; local playback now owns it.
         SleepTimerController.attachRoom(null)
@@ -426,22 +482,27 @@ internal class AppStateLocalPlaybackCoordinator(
             continueChain = continueChain,
         )
         startReporting()
+        if (!preserveRadioState) {
+            state.similarRadioCoordinator.onManualQueueStarted(resolvedTracks, safeIndex)
+        }
     }
 
 
     /** Rebuilds the engine queue from the current display queue, applying the
      *  network-appropriate stream quality to every URL. */
     private suspend fun rebuildEngineQueue(
+        expectedGeneration: Long,
         tracks: List<MusicTrack>,
         startIndex: Int,
         startPositionMillis: Long,
     ) {
         val policy = state.currentLocalPlaybackPolicy()
         val items = withContext(Dispatchers.IO) { tracks.map { it.toLocalQueueItem(policy) } }
-        if (state.miniPlayerState?.tracks !== tracks) return
+        if (localQueueGeneration.get() != expectedGeneration || state.miniPlayerState?.target != PlaybackTarget.LocalDevice) return
         val engine = state.localPlaybackEngine
         engine.setPlaybackMode(state.playbackMode)
         updateCachedOriginalKeys(items)
+        loadedEngineGeneration = expectedGeneration
         engine.setQueue(
             items,
             startIndex,
@@ -463,6 +524,7 @@ internal class AppStateLocalPlaybackCoordinator(
      * rebuilding the queue or interrupting audio.
      */
     fun adoptColdStartedSession() {
+        loadedEngineGeneration = localQueueGeneration.get()
         SleepTimerController.attachRoom(null)
         LocalPlaybackService.onToggleFavorite = ::toggleCurrentLocalTrackFavorite
         LocalPlaybackService.updateFavoriteState(currentLocalTrackFavoriteState())
@@ -481,10 +543,12 @@ internal class AppStateLocalPlaybackCoordinator(
         tracks: List<MusicTrack>,
         playIndexAfterInsert: Int? = null,
     ) {
+        val expectedGen = localQueueGeneration.get()
         val policy = state.currentLocalPlaybackPolicy()
         val resolvedTracks = tracks.map(::resolveTrackWithLocalDownload)
-        state.scope.launch {
+        enqueueLocalQueueMutation(expectedGen) {
             val items = withContext(Dispatchers.IO) { resolvedTracks.map { it.toLocalQueueItem(policy) } }
+            if (localQueueGeneration.get() != expectedGen) return@enqueueLocalQueueMutation
             state.cachedOriginalTrackKeys = state.cachedOriginalTrackKeys + items.filter(LocalQueueItem::isCachedOriginal).map { it.cacheKey }
             state.localPlaybackEngine.insertQueueItems(insertIndex, items)
             if (playIndexAfterInsert != null && state.localPlaybackEngine.isActive) {
@@ -494,7 +558,14 @@ internal class AppStateLocalPlaybackCoordinator(
     }
 
     fun moveLocalQueueItem(fromIndex: Int, toIndex: Int) {
-        state.localPlaybackEngine.moveQueueItem(fromIndex, toIndex)
+        val expectedGen = localQueueGeneration.get()
+        if (pendingQueueOp?.isActive == true) {
+            enqueueLocalQueueMutation(expectedGen) {
+                state.localPlaybackEngine.moveQueueItem(fromIndex, toIndex)
+            }
+        } else {
+            state.localPlaybackEngine.moveQueueItem(fromIndex, toIndex)
+        }
     }
 
     fun removeLocalQueueItem(
@@ -502,36 +573,56 @@ internal class AppStateLocalPlaybackCoordinator(
         removedWasCurrent: Boolean,
         nextTrack: MusicTrack?,
     ) {
-        val engine = state.localPlaybackEngine
-        engine.removeQueueItem(index)
-        if (removedWasCurrent && nextTrack != null) {
-            state.recordPlayedAlbum(nextTrack.resolvePlaybackAlbum(state.allAlbums, state.miniPlayerState?.album))
-            sessionDriver.onEngineTransition(
-                newTrack = nextTrack,
-                reason = Player.MEDIA_ITEM_TRANSITION_REASON_SEEK,
-                positionMillis = 0L,
-                durationMillis = engine.durationMillis ?: nextTrack.durationMillis ?: 0L,
-                initialState = localReporterPlayState(engine.isPlaying, engine.isPlayRequested, engine.isBuffering),
-            )
+        val expectedGen = localQueueGeneration.get()
+        val perform = {
+            val engine = state.localPlaybackEngine
+            engine.removeQueueItem(index)
+            if (removedWasCurrent && nextTrack != null) {
+                state.recordPlayedAlbum(nextTrack.resolvePlaybackAlbum(state.allAlbums, state.miniPlayerState?.album))
+                sessionDriver.onEngineTransition(
+                    newTrack = nextTrack,
+                    reason = Player.MEDIA_ITEM_TRANSITION_REASON_SEEK,
+                    positionMillis = 0L,
+                    durationMillis = engine.durationMillis ?: nextTrack.durationMillis ?: 0L,
+                    initialState = localReporterPlayState(engine.isPlaying, engine.isPlayRequested, engine.isBuffering),
+                )
+            }
+        }
+        if (pendingQueueOp?.isActive == true) {
+            enqueueLocalQueueMutation(expectedGen) { perform() }
+        } else {
+            perform()
         }
     }
 
     fun clearLocalUpcomingKeepCurrent() {
-        state.localPlaybackEngine.clearUpcomingKeepCurrent()
+        val expectedGen = localQueueGeneration.get()
+        if (pendingQueueOp?.isActive == true) {
+            enqueueLocalQueueMutation(expectedGen) {
+                state.localPlaybackEngine.clearUpcomingKeepCurrent()
+            }
+        } else {
+            state.localPlaybackEngine.clearUpcomingKeepCurrent()
+        }
     }
 
     /** Replaces every item strictly after [keepThroughIndex] in the live local queue without interrupting playback. */
     fun replaceLocalUpcomingAfter(keepThroughIndex: Int, tracks: List<MusicTrack>) {
+        val expectedGen = localQueueGeneration.get()
         val policy = state.currentLocalPlaybackPolicy()
         val resolvedTracks = tracks.map(::resolveTrackWithLocalDownload)
-        state.scope.launch {
+        enqueueLocalQueueMutation(expectedGen) {
             val items = withContext(Dispatchers.IO) { resolvedTracks.map { it.toLocalQueueItem(policy) } }
+            if (localQueueGeneration.get() != expectedGen) return@enqueueLocalQueueMutation
             state.cachedOriginalTrackKeys = state.cachedOriginalTrackKeys + items.filter(LocalQueueItem::isCachedOriginal).map { it.cacheKey }
             state.localPlaybackEngine.replaceUpcomingAfter(keepThroughIndex, items)
         }
     }
 
     fun clearLocalQueueAndStop() {
+        localQueueGeneration.incrementAndGet()
+        pendingQueueOp?.cancel()
+        pendingQueueOp = null
         state.localPlaybackEngine.clearQueue()
         LocalPlaybackService.stop(state.context)
     }
@@ -627,6 +718,9 @@ internal class AppStateLocalPlaybackCoordinator(
     }
 
     fun stopLocalPlayback() {
+        localQueueGeneration.incrementAndGet()
+        pendingQueueOp?.cancel()
+        pendingQueueOp = null
         state.localPlaybackEngine.stopPlayback()
         LocalPlaybackService.stop(state.context)
     }
@@ -647,6 +741,7 @@ internal class AppStateLocalPlaybackCoordinator(
                     delay(1_000)
                     val current = state.miniPlayerState ?: break
                     if (current.target != PlaybackTarget.LocalDevice) break
+                    if (loadedEngineGeneration != localQueueGeneration.get()) continue
                     val engine = state.localPlaybackEngine
                     val index = engine.currentIndex.coerceIn(0, current.tracks.lastIndex)
                     val track = current.tracks.getOrNull(index) ?: break

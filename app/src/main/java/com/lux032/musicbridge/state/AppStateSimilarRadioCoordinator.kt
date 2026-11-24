@@ -50,7 +50,11 @@ internal class AppStateSimilarRadioCoordinator(
     }
 
     /** Called when a normal (non-radio) playback queue starts or is restored. */
-    fun onManualQueueStarted(tracks: List<MusicTrack>, startIndex: Int) {
+    fun onManualQueueStarted(
+        tracks: List<MusicTrack>,
+        startIndex: Int,
+        triggerAutoContinue: Boolean = true,
+    ) {
         nextGeneration()
         dismissedKeys.clear()
         val firstTrack = tracks.getOrNull(startIndex) ?: tracks.firstOrNull()
@@ -64,7 +68,9 @@ internal class AppStateSimilarRadioCoordinator(
             errorKind = null,
             similarityMethod = method ?: state.similarRadioState.similarityMethod,
         )
-        maybeTriggerAutoContinue()
+        if (triggerAutoContinue) {
+            maybeTriggerAutoContinue()
+        }
     }
 
     /** Called when the queue is completely stopped, cleared, or server switches. */
@@ -154,12 +160,16 @@ internal class AppStateSimilarRadioCoordinator(
             nextGeneration()
             val player = state.miniPlayerState
             val trimmedManualCount = if (player != null) {
-                val keepThrough = maxOf(current.manualQueueCount - 1, player.currentIndex)
-                    .coerceIn(0, player.tracks.lastIndex.coerceAtLeast(0))
-                if (keepThrough < player.tracks.lastIndex) {
-                    state.playbackCoordinator.replaceQueueUpcomingAfter(keepThrough, emptyList())
+                if (current.hasAutoTracks) {
+                    val keepThrough = maxOf(current.manualQueueCount - 1, player.currentIndex)
+                        .coerceIn(0, player.tracks.lastIndex.coerceAtLeast(0))
+                    if (keepThrough < player.tracks.lastIndex) {
+                        state.playbackCoordinator.replaceQueueUpcomingAfter(keepThrough, emptyList())
+                    }
+                    keepThrough + 1
+                } else {
+                    player.tracks.size
                 }
-                keepThrough + 1
             } else {
                 0
             }
@@ -373,7 +383,7 @@ internal class AppStateSimilarRadioCoordinator(
     fun refreshAutoSimilarBatch() {
         val player = state.miniPlayerState ?: return
         val radio = state.similarRadioState
-        if (!radio.autoPlayEnabled) return
+        if (!radio.autoPlayEnabled || !radio.hasAutoTracks) return
         val keepThrough = maxOf(radio.manualQueueCount - 1, player.currentIndex)
             .coerceIn(0, player.tracks.lastIndex.coerceAtLeast(0))
         val seedTrack = resolveSeedForRefresh(player, keepThrough) ?: return
@@ -394,7 +404,12 @@ internal class AppStateSimilarRadioCoordinator(
             )
             if (gen != generation.get()) return@launch
             val livePlayer = state.miniPlayerState ?: return@launch
-            val liveKeepThrough = maxOf(state.similarRadioState.manualQueueCount - 1, livePlayer.currentIndex)
+            val liveRadio = state.similarRadioState
+            if (!liveRadio.hasAutoTracks) {
+                state.similarRadioState = liveRadio.copy(isLoading = false)
+                return@launch
+            }
+            val liveKeepThrough = maxOf(liveRadio.manualQueueCount - 1, livePlayer.currentIndex)
                 .coerceIn(0, livePlayer.tracks.lastIndex.coerceAtLeast(0))
             when (result) {
                 is FetchOutcome.Success -> {
@@ -453,6 +468,22 @@ internal class AppStateSimilarRadioCoordinator(
     fun maybeTriggerAutoContinue(playFirstAppendedIfEnded: Boolean = false): Boolean {
         val player = state.miniPlayerState ?: return false
         val radio = state.similarRadioState
+        val remainingInPlayOrder: Int? = when {
+            playFirstAppendedIfEnded -> 0
+            player.target == PlaybackTarget.LocalDevice -> {
+                val engine = state.localPlaybackEngine
+                when {
+                    state.localPlaybackCoordinator.isEngineQueueSynced &&
+                        engine.mediaItemCount == player.tracks.size &&
+                        engine.currentIndex == player.currentIndex ->
+                        engine.remainingTrackCountInPlaybackOrder()
+                    state.playbackMode == PlaybackMode.Shuffle ->
+                        (player.tracks.size - 1).coerceAtLeast(0)
+                    else -> null
+                }
+            }
+            else -> null
+        }
         val eligible = shouldTriggerSimilarAutoContinue(
             autoPlayEnabled = radio.autoPlayEnabled,
             playbackMode = state.playbackMode,
@@ -461,6 +492,7 @@ internal class AppStateSimilarRadioCoordinator(
             currentIndex = player.currentIndex,
             isLoading = radio.isLoading,
             remainingThreshold = AUTO_CONTINUE_THRESHOLD,
+            remainingInPlayOrder = remainingInPlayOrder,
         )
         if (!eligible) return false
         val seed = selectRollingSimilarSeed(player.tracks, player.currentIndex, ::canStartSimilarRadio)
@@ -504,7 +536,9 @@ internal class AppStateSimilarRadioCoordinator(
             }
             when (result) {
                 is FetchOutcome.Success -> {
-                    if (result.items.isEmpty()) {
+                    val liveKeys = livePlayer.tracks.mapTo(HashSet(livePlayer.tracks.size), ::similarTrackIdentityKey)
+                    val freshItems = result.items.filter { similarTrackIdentityKey(it.track) !in liveKeys }
+                    if (freshItems.isEmpty()) {
                         state.similarRadioState = state.similarRadioState.copy(
                             isLoading = false,
                             errorKind = SimilarRadioErrorKind.Empty,
@@ -514,15 +548,19 @@ internal class AppStateSimilarRadioCoordinator(
                         if (playFirstAppendedIfEnded) finishEndedLocalPlaybackIfStillStopped()
                         return@launch
                     }
-                    val newTracks = result.items.map(Music032SimilarTrack::track)
+                    val newTracks = freshItems.map(Music032SimilarTrack::track)
                     val firstNewIndex = livePlayer.tracks.size
+                    val shouldAutoPlayAppended = playFirstAppendedIfEnded && when (livePlayer.target) {
+                        PlaybackTarget.LocalDevice -> state.localPlaybackEngine.isEnded
+                        is PlaybackTarget.Sonos -> livePlayer.isPaused
+                    }
                     state.playbackCoordinator.appendTracksToQueue(
                         tracks = newTracks,
-                        playIndexAfterAppend = if (playFirstAppendedIfEnded) firstNewIndex else null,
+                        playIndexAfterAppend = if (shouldAutoPlayAppended) firstNewIndex else null,
                     )
                     state.similarRadioState = state.similarRadioState.copy(
                         lastAutoSeedTitle = seed.title,
-                        similarReasons = mergeReasons(state.similarRadioState.similarReasons, result.items),
+                        similarReasons = mergeReasons(state.similarRadioState.similarReasons, freshItems),
                         isLoading = false,
                         errorKind = null,
                         similarityMethod = result.method ?: state.similarRadioState.similarityMethod,

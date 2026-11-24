@@ -776,6 +776,28 @@ class LocalPlaybackEngine(
     /** True while the last playback error has not been recovered (queue end after failures). */
     val hasUnrecoveredError: Boolean get() = hasUnrecoveredPlaybackError
     val isActive: Boolean get() = !released && player.mediaItemCount > 0
+    val mediaItemCount: Int get() = if (released) 0 else player.mediaItemCount
+
+    /**
+     * Number of unplayed tracks remaining after [currentIndex] in the active playback order
+     * (walking ExoPlayer's live shuffle order when shuffle mode is enabled).
+     */
+    fun remainingTrackCountInPlaybackOrder(): Int {
+        if (released) return 0
+        val timeline = player.currentTimeline
+        if (timeline.isEmpty) return 0
+        val limit = player.mediaItemCount
+        var index = player.currentMediaItemIndex
+        if (index !in 0 until limit) return 0
+        var remaining = 0
+        while (remaining < limit) {
+            val next = timeline.getNextWindowIndex(index, Player.REPEAT_MODE_OFF, player.shuffleModeEnabled)
+            if (next == C.INDEX_UNSET) break
+            remaining += 1
+            index = next
+        }
+        return remaining
+    }
 
     private fun buildMediaItem(item: LocalQueueItem, url: String = item.url): MediaItem {
         val metadata = MediaMetadata.Builder()

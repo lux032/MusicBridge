@@ -233,7 +233,12 @@ internal fun PlaybackQueueSheet(
     val showLocatePill = displaySlots.size > 5 && !isCurrentItemVisible && draggedSlotId == null
     val blockedByLoop = playbackMode == PlaybackMode.RepeatOne || playbackMode == PlaybackMode.RepeatAll
     val manualBoundary = displayManualBoundary.coerceIn(0, displaySlots.size)
-    val hasAutoDivider = isSimilarRadioSupported && similarRadioState.autoPlayEnabled && manualBoundary < displaySlots.size
+    val hasAutoDivider = shouldShowAutoSimilarDivider(
+        isSimilarRadioSupported = isSimilarRadioSupported,
+        radioState = similarRadioState,
+        manualBoundary = manualBoundary,
+        totalCount = displaySlots.size,
+    )
 
     val remainingMillis = remember(displaySlots, displayCurrentIndex, state.currentPositionMillis) {
         remainingQueueDurationMillis(
