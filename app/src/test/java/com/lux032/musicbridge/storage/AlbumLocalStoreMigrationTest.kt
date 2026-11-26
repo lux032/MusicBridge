@@ -264,6 +264,11 @@ class AlbumLocalStoreMigrationTest {
                 "track_number",
                 "user_rating",
                 "artist_refs",
+                "loudness_lufs",
+                "true_peak_db",
+                "loudness_range",
+                "album_loudness_lufs",
+                "album_true_peak_db",
             )
             val actualColumns = db.columnNames("downloaded_tracks")
             assertEquals(expectedColumns, actualColumns)
