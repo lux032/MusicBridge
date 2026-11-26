@@ -296,6 +296,12 @@ class LocalPlaybackService : MediaSessionService() {
     ): MediaSession.MediaItemsWithStartPosition {
         val saved = loaded.sessionState.savedSession
         engine.setNetworkIsWifi(loaded.isWifi)
+        engine.setLoudnessConfig(
+            settings = loaded.loudnessSettings,
+            libraryMedianLufs = loaded.loudnessLibraryMedianLufs,
+            serverSupported = true,
+        )
+        engine.setLoudnessManualQueueCount(loaded.queueItems.size)
         engine.setPlaybackMode(saved.playbackMode)
         val prepared = engine.prepareColdStartQueue(
             items = loaded.queueItems,

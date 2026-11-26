@@ -70,6 +70,11 @@ data class LocalQueueItem(
     val durationMillis: Long?,
     val isCachedOriginal: Boolean = false,
     val fallbackItem: LocalQueueItem? = null,
+    val albumRatingKey: String? = null,
+    val loudnessLufs: Double? = null,
+    val truePeakDb: Double? = null,
+    val albumLoudnessLufs: Double? = null,
+    val albumTruePeakDb: Double? = null,
 )
 
 private fun localAudioCacheKey(parts: List<String>): String =

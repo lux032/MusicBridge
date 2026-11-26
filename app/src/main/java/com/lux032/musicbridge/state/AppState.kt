@@ -24,10 +24,13 @@ import com.lux032.musicbridge.local.ColdStartSessionState
 import com.lux032.musicbridge.local.LocalAudioCache
 import com.lux032.musicbridge.local.LocalPlaybackEngine
 import com.lux032.musicbridge.local.LocalPlaybackService
+import com.lux032.musicbridge.local.LoudnessGainPlan
 import com.lux032.musicbridge.local.NetworkQualityMonitor
 import com.lux032.musicbridge.music.LyricsTranslationSettings
 import com.lux032.musicbridge.music.MediaTokenProbeResult
+import com.lux032.musicbridge.music.Music032Capabilities
 import com.lux032.musicbridge.music.Music032CapabilitiesStore
+import com.lux032.musicbridge.music.Music032LoudnessCapabilities
 import com.lux032.musicbridge.music.Music032AiPlaylistJson
 import com.lux032.musicbridge.music.Music032Client
 import com.lux032.musicbridge.music.Music032HttpException
@@ -114,6 +117,8 @@ class AppState(
     var downloadWifiOnly by mutableStateOf(appPreferences.loadDownloadWifiOnly())
         private set
     var downloadFormat by mutableStateOf(appPreferences.loadDownloadFormat())
+        private set
+    var loudnessSettings by mutableStateOf(appPreferences.loadLoudnessNormalizationSettings())
         private set
     var homeLayout by mutableStateOf(appPreferences.loadHomeLayout())
         private set
@@ -300,6 +305,23 @@ class AppState(
     var miniPlayerState by mutableStateOf<MiniPlayerState?>(null)
     var playbackMode by mutableStateOf(PlaybackMode.Sequential)
     var recentPlayedAlbumKeys by mutableStateOf(appPreferences.loadRecentPlayedAlbumKeys(initialPreferences.id))
+    var loudnessCapabilities by mutableStateOf<Music032LoudnessCapabilities?>(null)
+        private set
+    /** Null before capability check or offline (optimistic for cached offline playback); false on legacy servers. */
+    var loudnessServerSupported by mutableStateOf<Boolean?>(null)
+        private set
+    var cachedLoudnessLibraryMedianLufs by mutableStateOf(
+        appPreferences.loadLoudnessLibraryMedianLufs(initialPreferences.id),
+    )
+        private set
+    var currentLocalLoudnessPlan by mutableStateOf(LoudnessGainPlan.BYPASS)
+        internal set
+
+    val effectiveLoudnessLibraryMedianLufs: Double?
+        get() = loudnessCapabilities?.libraryMedianLufs ?: cachedLoudnessLibraryMedianLufs
+
+    val isLoudnessSupportedForActiveServer: Boolean
+        get() = loudnessServerSupported != false
     var artists by mutableStateOf<List<ArtistSummary>>(emptyList())
     var artistAlbumsRevision by mutableIntStateOf(0)
     var playlists by mutableStateOf<List<MusicPlaylist>>(emptyList())
@@ -665,6 +687,95 @@ class AppState(
         appPreferences.saveHomeLayout(normalized)
     }
 
+    internal fun syncLoudnessConfigToEngine() {
+        localPlaybackEngine.setLoudnessConfig(
+            settings = loudnessSettings,
+            libraryMedianLufs = effectiveLoudnessLibraryMedianLufs,
+            serverSupported = isLoudnessSupportedForActiveServer,
+        )
+        currentLocalLoudnessPlan = localPlaybackEngine.currentLoudnessPlan
+    }
+
+    private fun applyCapabilitiesSnapshot(sourceId: String, caps: Music032Capabilities?) {
+        if (caps == null) return
+        caps.loudness?.libraryMedianLufs?.let { median ->
+            appPreferences.saveLoudnessLibraryMedianLufs(sourceId, median)
+            if (connectionPreferences.id == sourceId) {
+                cachedLoudnessLibraryMedianLufs = median
+            }
+        }
+        if (connectionPreferences.id == sourceId) {
+            loudnessCapabilities = caps.loudness
+            loudnessServerSupported = caps.hasLoudness
+            syncLoudnessConfigToEngine()
+        }
+    }
+
+    fun refreshLoudnessCapabilities() {
+        val profile = connectionPreferences
+        if (profile.type != MusicServerType.Music032 || !profile.hasCredentials()) return
+        val client = runCatching { clientFor(profile.id) }.getOrNull() as? Music032Client ?: return
+        client.capabilities()?.let { cached ->
+            applyCapabilitiesSnapshot(profile.id, cached)
+            return
+        }
+        scope.launch {
+            val caps = try { client.ensureCapabilities() }
+            catch (cancel: CancellationException) { throw cancel }
+            catch (_: Exception) { null }
+            applyCapabilitiesSnapshot(profile.id, caps)
+        }
+    }
+
+    fun updateLoudnessEnabled(enabled: Boolean) {
+        if (loudnessSettings.enabled == enabled) return
+        val updated = loudnessSettings.copy(enabled = enabled)
+        loudnessSettings = updated
+        appPreferences.saveLoudnessNormalizationSettings(updated)
+        syncLoudnessConfigToEngine()
+        if (enabled && miniPlayerState?.target == PlaybackTarget.LocalDevice) {
+            localPlaybackCoordinator.hydrateCurrentTrackLoudnessIfNeeded()
+        }
+        actionMessage = when {
+            !enabled -> Strings.loudnessDisabledNotice
+            miniPlayerState?.target is PlaybackTarget.Sonos -> Strings.loudnessSavedForLocalNotice
+            else -> Strings.loudnessEnabledNotice
+        }
+    }
+
+    fun updateLoudnessTarget(target: LoudnessTarget) {
+        if (loudnessSettings.target == target) return
+        val updated = loudnessSettings.copy(target = target)
+        loudnessSettings = updated
+        appPreferences.saveLoudnessNormalizationSettings(updated)
+        syncLoudnessConfigToEngine()
+        if (miniPlayerState?.target is PlaybackTarget.Sonos) {
+            actionMessage = Strings.loudnessSavedForLocalNotice
+        }
+    }
+
+    fun updateLoudnessMode(mode: LoudnessMode) {
+        if (loudnessSettings.mode == mode) return
+        val updated = loudnessSettings.copy(mode = mode)
+        loudnessSettings = updated
+        appPreferences.saveLoudnessNormalizationSettings(updated)
+        syncLoudnessConfigToEngine()
+        if (miniPlayerState?.target is PlaybackTarget.Sonos) {
+            actionMessage = Strings.loudnessSavedForLocalNotice
+        }
+    }
+
+    fun updateLoudnessPeakProtection(peakProtection: LoudnessPeakProtection) {
+        if (loudnessSettings.peakProtection == peakProtection) return
+        val updated = loudnessSettings.copy(peakProtection = peakProtection)
+        loudnessSettings = updated
+        appPreferences.saveLoudnessNormalizationSettings(updated)
+        syncLoudnessConfigToEngine()
+        if (miniPlayerState?.target is PlaybackTarget.Sonos) {
+            actionMessage = Strings.loudnessSavedForLocalNotice
+        }
+    }
+
     fun resetHomeLayout() {
         updateHomeLayout(defaultHomeLayout())
     }
@@ -878,6 +989,10 @@ class AppState(
         clearLibraryForServerChange()
         recentPlayedAlbumKeys = appPreferences.loadRecentPlayedAlbumKeys(profile.id)
         lastAlbumSyncEpochMillis = appPreferences.loadLastAlbumSyncEpochMillis(profile.id)
+        cachedLoudnessLibraryMedianLufs = appPreferences.loadLoudnessLibraryMedianLufs(profile.id)
+        loudnessCapabilities = null
+        loudnessServerSupported = null
+        syncLoudnessConfigToEngine()
         searchCoordinator.loadHistory()
         probeActive032Profile(profile, probeProvidedToken = true)
         scope.launch {
@@ -902,8 +1017,9 @@ class AppState(
         val client = runCatching { clientFor(profile.id) }.getOrNull() as? Music032Client ?: return
         scope.launch {
             launch {
-                try { client.ensureCapabilities() } catch (cancel: CancellationException) { throw cancel }
-                catch (_: Exception) { /* Capability failure is silent. */ }
+                val caps = try { client.ensureCapabilities() } catch (cancel: CancellationException) { throw cancel }
+                catch (_: Exception) { null }
+                applyCapabilitiesSnapshot(profile.id, caps)
             }
             if (probeProvidedToken || profile.mediaToken.isBlank()) {
                 launch {
@@ -943,6 +1059,9 @@ class AppState(
         searchCoordinator.reset()
         searchCoordinator.loadHistory()
         similarRadioCoordinator.resetForEmptyQueue()
+        loudnessCapabilities = null
+        loudnessServerSupported = null
+        currentLocalLoudnessPlan = LoudnessGainPlan.BYPASS
     }
 
     fun openAlbumDetail(album: MusicAlbum) = libraryCoordinator.openAlbumDetail(album)
@@ -1314,6 +1433,7 @@ class AppState(
                 adoptColdStartedSession(coldStart)
             }
         }
+        syncLoudnessConfigToEngine()
         localPlaybackCoordinator.startObservers()
         scope.launch { observeSelectedArtistLocalStore() }
         scope.launch {

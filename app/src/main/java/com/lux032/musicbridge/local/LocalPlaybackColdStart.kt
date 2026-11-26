@@ -7,6 +7,7 @@ import android.util.Log
 import com.lux032.musicbridge.AppPreferences
 import com.lux032.musicbridge.LocalPlaybackPolicy
 import com.lux032.musicbridge.LocalStreamingLimit
+import com.lux032.musicbridge.LoudnessNormalizationSettings
 import com.lux032.musicbridge.music.MusicTrack
 import com.lux032.musicbridge.music.willTranscodeLocally
 import com.lux032.musicbridge.music.withLocalPlaybackPolicy
@@ -43,6 +44,11 @@ internal fun resolveTrackToLocalQueueItem(
             artworkUrl = offlineTrack.thumbUrl,
             durationMillis = offlineTrack.durationMillis,
             isCachedOriginal = true,
+            albumRatingKey = offlineTrack.albumRatingKey ?: track.albumRatingKey,
+            loudnessLufs = offlineTrack.loudnessLufs ?: track.loudnessLufs,
+            truePeakDb = offlineTrack.truePeakDb ?: track.truePeakDb,
+            albumLoudnessLufs = offlineTrack.albumLoudnessLufs ?: track.albumLoudnessLufs,
+            albumTruePeakDb = offlineTrack.albumTruePeakDb ?: track.albumTruePeakDb,
         )
     }
 
@@ -82,6 +88,11 @@ private fun MusicTrack.toLocalQueueItem(cacheKey: String, isTranscoded: Boolean)
     artist = artistName,
     artworkUrl = thumbUrl,
     durationMillis = durationMillis,
+    albumRatingKey = albumRatingKey,
+    loudnessLufs = loudnessLufs,
+    truePeakDb = truePeakDb,
+    albumLoudnessLufs = albumLoudnessLufs,
+    albumTruePeakDb = albumTruePeakDb,
 )
 
 internal data class ColdStartSessionState(
@@ -95,6 +106,8 @@ internal data class ColdStartLoadResult(
     val queueItems: List<LocalQueueItem>,
     val precacheCount: Int,
     val isWifi: Boolean,
+    val loudnessSettings: LoudnessNormalizationSettings = LoudnessNormalizationSettings(),
+    val loudnessLibraryMedianLufs: Double? = null,
 )
 
 /**
@@ -215,7 +228,14 @@ internal object LocalPlaybackColdStartLoader {
             val downloaded = lookupDownloaded(track.sourceId, track.ratingKey)
             if (downloaded != null) {
                 val effectiveRating = track.userRating ?: downloaded.userRating
-                downloaded.toTrackStream().copy(userRating = effectiveRating)
+                downloaded.toTrackStream().copy(
+                    userRating = effectiveRating,
+                    loudnessLufs = downloaded.loudnessLufs ?: track.loudnessLufs,
+                    truePeakDb = downloaded.truePeakDb ?: track.truePeakDb,
+                    loudnessRange = downloaded.loudnessRange ?: track.loudnessRange,
+                    albumLoudnessLufs = downloaded.albumLoudnessLufs ?: track.albumLoudnessLufs,
+                    albumTruePeakDb = downloaded.albumTruePeakDb ?: track.albumTruePeakDb,
+                )
             } else {
                 track
             }
@@ -228,6 +248,8 @@ internal object LocalPlaybackColdStartLoader {
             .filter(LocalQueueItem::isCachedOriginal)
             .map(LocalQueueItem::cacheKey)
             .toSet()
+        val sessionSourceId = saved.tracks.getOrNull(saved.currentIndex)?.sourceId?.ifBlank { saved.album.sourceId }
+            ?: saved.album.sourceId
 
         return ColdStartLoadResult(
             sessionState = ColdStartSessionState(
@@ -238,6 +260,8 @@ internal object LocalPlaybackColdStartLoader {
             queueItems = queueItems,
             precacheCount = policy.precacheCount.count,
             isWifi = isWifi,
+            loudnessSettings = prefs.loadLoudnessNormalizationSettings(),
+            loudnessLibraryMedianLufs = prefs.loadLoudnessLibraryMedianLufs(sessionSourceId),
         )
     }
 

@@ -1116,6 +1116,11 @@ class OfflineDownloadManager(
             trackNumber = track.trackNumber,
             userRating = track.userRating,
             artists = track.artists,
+            loudnessLufs = track.loudnessLufs,
+            truePeakDb = track.truePeakDb,
+            loudnessRange = track.loudnessRange,
+            albumLoudnessLufs = track.albumLoudnessLufs,
+            albumTruePeakDb = track.albumTruePeakDb,
         )
         albumLocalStore.insertDownloadedTrack(downloadedRecord)
         TransferOutcome.Completed

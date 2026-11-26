@@ -13,6 +13,14 @@ import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.time.Instant
 
+/** Loudness analysis summary returned by 032 `/api/v1/capabilities`. */
+data class Music032LoudnessCapabilities(
+    val available: Boolean,
+    val analyzedTracks: Long,
+    val totalTracks: Long,
+    val libraryMedianLufs: Double? = null,
+)
+
 internal data class Music032FormatCaps(val available: Boolean, val bitrates: List<Int>, val maxSampleRates: List<Int>)
 internal data class Music032Capabilities(
     val apiRevision: Int,
@@ -20,10 +28,12 @@ internal data class Music032Capabilities(
     val transcodeFormats: Map<String, Music032FormatCaps>,
     val artworkSizes: List<Int>,
     val similarityMethod: String? = null,
+    val loudness: Music032LoudnessCapabilities? = null,
 ) {
     fun hasFeature(name: String) = name in features
     fun isFormatAvailable(fmt: String) = transcodeFormats[fmt]?.available == true
-    companion object { val LEGACY = Music032Capabilities(1, emptySet(), emptyMap(), emptyList(), null) }
+    val hasLoudness: Boolean get() = hasFeature("loudness") || loudness?.available == true
+    companion object { val LEGACY = Music032Capabilities(1, emptySet(), emptyMap(), emptyList(), null, null) }
 }
 
 internal object Music032Json {
@@ -40,6 +50,15 @@ internal object Music032Json {
         val root = JSONObject(text)
         val features = root.optJSONObject("features")
         val formats = root.optJSONObject("transcode")?.optJSONObject("formats")
+        val loudnessJson = root.optJSONObject("loudness")
+        val loudness = loudnessJson?.let { obj ->
+            Music032LoudnessCapabilities(
+                available = obj.optBoolean("available", false),
+                analyzedTracks = obj.optLong("analyzedTracks", 0L).coerceAtLeast(0L),
+                totalTracks = obj.optLong("totalTracks", 0L).coerceAtLeast(0L),
+                libraryMedianLufs = obj.optFiniteDouble("libraryMedianLufs"),
+            )
+        }
         Music032Capabilities(
             root.optInt("apiRevision", 1),
             features?.keys()?.asSequence()?.filter { features.optBoolean(it) }?.toSet().orEmpty(),
@@ -50,8 +69,20 @@ internal object Music032Json {
             }.orEmpty(),
             root.optJSONObject("artwork")?.optJSONArray("sizes").toInts(),
             root.optJSONObject("similarity")?.optString("method")?.trim()?.takeIf { it.isNotEmpty() },
+            loudness,
         )
     }.getOrDefault(Music032Capabilities.LEGACY)
+
+    internal fun JSONObject.optFiniteDouble(key: String): Double? {
+        if (!has(key) || isNull(key)) return null
+        val raw = opt(key) ?: return null
+        val value = when (raw) {
+            is Number -> raw.toDouble()
+            is String -> raw.trim().toDoubleOrNull()
+            else -> null
+        } ?: return null
+        return value.takeIf { it.isFinite() }
+    }
 
     private fun JSONArray?.toInts(): List<Int> = this?.let { array ->
         (0 until array.length()).mapNotNull { index -> array.optInt(index).takeIf { it > 0 } }
@@ -193,6 +224,11 @@ internal object Music032Json {
                 ?: parseEpochSeconds(value.optString("lastPlayedAt")),
             skipCount = value.opt("skipCount")?.toString()?.toLongOrNull(),
             artists = parseArtistRefs(value.optJSONArray("artists")),
+            loudnessLufs = value.optFiniteDouble("loudnessLufs"),
+            truePeakDb = value.optFiniteDouble("truePeakDb"),
+            loudnessRange = value.optFiniteDouble("loudnessRange"),
+            albumLoudnessLufs = value.optFiniteDouble("albumLoudnessLufs"),
+            albumTruePeakDb = value.optFiniteDouble("albumTruePeakDb"),
         )
     }
 

@@ -29,6 +29,7 @@ import androidx.compose.material3.Text
 import com.lux032.musicbridge.ui.settings.sections.AboutAndDiagnosticsSection
 import com.lux032.musicbridge.ui.settings.sections.AudioPlaybackSection
 import com.lux032.musicbridge.ui.settings.sections.HomeLayoutSection
+import com.lux032.musicbridge.ui.settings.sections.LoudnessNormalizationSection
 import com.lux032.musicbridge.ui.settings.sections.ServerSection
 import com.lux032.musicbridge.ui.settings.sections.SonosAdvancedSection
 import com.lux032.musicbridge.ui.settings.sections.StorageSection
@@ -56,6 +57,10 @@ fun SettingsScreen(
     var deviceUsableBytes by remember { mutableLongStateOf(0L) }
     var deviceTotalBytes by remember { mutableLongStateOf(0L) }
     var refreshStorageTrigger by remember { mutableIntStateOf(0) }
+
+    LaunchedEffect(state.activeServerId) {
+        actions.onRefreshLoudnessCapabilities()
+    }
 
     LaunchedEffect(refreshStorageTrigger) {
         val cache = withContext(Dispatchers.IO) { actions.loadLocalCacheUsedBytes() }
@@ -125,6 +130,19 @@ fun SettingsScreen(
                 onWifiPrecacheCountChange = actions.onWifiPrecacheCountChange,
                 onCellularPrecacheCountChange = actions.onCellularPrecacheCountChange,
                 onAutoPlaySimilarChange = actions.onAutoPlaySimilarChange,
+            )
+
+            // 4. On-device Loudness Normalization (EBU R128)
+            LoudnessNormalizationSection(
+                settings = state.loudnessSettings,
+                capabilities = state.loudnessCapabilities,
+                cachedLibraryMedianLufs = state.cachedLoudnessLibraryMedianLufs,
+                isServerSupported = state.isLoudnessServerSupported,
+                activeSonosRoomName = state.activeSonosRoomName,
+                onEnabledChange = actions.onLoudnessEnabledChange,
+                onTargetChange = actions.onLoudnessTargetChange,
+                onModeChange = actions.onLoudnessModeChange,
+                onPeakProtectionChange = actions.onLoudnessPeakProtectionChange,
             )
 
             // 3. Storage & Cache

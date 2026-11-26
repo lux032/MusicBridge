@@ -911,5 +911,225 @@ object Strings {
     val similarReasonSameArtist get() = if (isZhCN) "同歌手" else "Same artist"
     val similarReasonGenre get() = if (isZhCN) "风格相近" else "Similar genre"
     val similarReasonEra get() = if (isZhCN) "年代相近" else "Same era"
+
+    // On-device EBU R128 loudness normalization
+    val loudnessSectionTitle get() = if (isZhCN) "响度均衡" else "Loudness Normalization"
+    val loudnessRecommendedBadge get() = if (isZhCN) "推荐" else "Recommended"
+    fun loudnessSectionDescServer(analyzed: Long, total: Long, medianLufs: Double?): String =
+        if (isZhCN) {
+            if (medianLufs != null) {
+                String.format(
+                    java.util.Locale.US,
+                    "当前曲库中位数约 %.1f LUFS（已分析 %,d / %,d 首）。仅作用于本机播放，不影响 Sonos。",
+                    medianLufs, analyzed, total,
+                )
+            } else {
+                String.format(
+                    java.util.Locale.US,
+                    "服务端已分析 %,d / %,d 首。仅作用于本机播放，不影响 Sonos。",
+                    analyzed, total,
+                )
+            }
+        } else {
+            if (medianLufs != null) {
+                String.format(
+                    java.util.Locale.US,
+                    "Library median %.1f LUFS (%,d / %,d analyzed). Local playback only; Sonos is untouched.",
+                    medianLufs, analyzed, total,
+                )
+            } else {
+                String.format(
+                    java.util.Locale.US,
+                    "%,d / %,d tracks analyzed. Local playback only; Sonos is untouched.",
+                    analyzed, total,
+                )
+            }
+        }
+    fun loudnessSectionDescOffline(cachedMedianLufs: Double?): String =
+        if (isZhCN) {
+            if (cachedMedianLufs != null) {
+                String.format(
+                    java.util.Locale.US,
+                    "沿用已缓存曲库中位数约 %.1f LUFS。仅作用于本机播放，不影响 Sonos。",
+                    cachedMedianLufs,
+                )
+            } else {
+                "按服务端 EBU R128 测量统一曲目响度。仅作用于本机播放，不影响 Sonos。"
+            }
+        } else {
+            if (cachedMedianLufs != null) {
+                String.format(
+                    java.util.Locale.US,
+                    "Using cached library median %.1f LUFS. Local playback only; Sonos is untouched.",
+                    cachedMedianLufs,
+                )
+            } else {
+                "Matches track loudness using EBU R128 metadata. Local playback only; Sonos is untouched."
+            }
+        }
+    val loudnessSectionDescUnsupported get() = if (isZhCN) {
+        "当前服务器暂不支持 EBU R128 响度元数据，升级 032 Music Server 后自动启用。"
+    } else {
+        "This server does not expose EBU R128 loudness metadata yet. Upgrade 032 Music Server to enable."
+    }
+    val loudnessSwitchTitle get() = if (isZhCN) "开启响度均衡" else "Enable Normalization"
+    val loudnessSwitchSubtitle get() = if (isZhCN) {
+        "按服务端 EBU R128 测量统一曲目响度，避免切歌忽大忽小。仅作用于本机播放，不影响 Sonos。"
+    } else {
+        "Levels track volume using server EBU R128 measurements. Local device only; does not affect Sonos."
+    }
+    val loudnessLegacyNotice get() = if (isZhCN) {
+        "旧版服务端未返回响度能力位，本机保持原有原码直通播放。"
+    } else {
+        "Server does not advertise loudness support; local playback stays bit-exact passthrough."
+    }
+    fun loudnessSonosActiveNotice(roomName: String) = if (isZhCN) {
+        "当前正在投播到 $roomName，响度均衡暂不介入；切回本机播放时自动生效。"
+    } else {
+        "Currently casting to $roomName. Normalization resumes automatically on local playback."
+    }
+    val loudnessTargetTitle get() = if (isZhCN) "响度目标" else "Target Loudness"
+    val loudnessTargetSubtitle get() = if (isZhCN) {
+        "越接近曲库常态，切歌和开关前后越不易整体变轻"
+    } else {
+        "Closer to your library median keeps overall loudness consistent"
+    }
+    fun loudnessTargetOptionLabel(target: LoudnessTarget, medianLufs: Double?): String = when (target) {
+        LoudnessTarget.LIBRARY_MEDIAN -> {
+            val clamped = medianLufs?.takeIf { it.isFinite() }?.coerceIn(-16.0, -8.0)
+            if (isZhCN) {
+                if (clamped != null) String.format(java.util.Locale.US, "跟随曲库中位数 (%.1f LUFS)", clamped)
+                else "跟随曲库中位数"
+            } else {
+                if (clamped != null) String.format(java.util.Locale.US, "Library Median (%.1f LUFS)", clamped)
+                else "Library Median"
+            }
+        }
+        LoudnessTarget.LOUD -> if (isZhCN) "饱满 (-11 LUFS)" else "Loud (-11 LUFS)"
+        LoudnessTarget.STANDARD -> if (isZhCN) "标准 (-14 LUFS)" else "Standard (-14 LUFS)"
+        LoudnessTarget.DYNAMIC -> if (isZhCN) "动态 (-18 LUFS)" else "Dynamic (-18 LUFS)"
+    }
+    fun loudnessTargetShortValue(target: LoudnessTarget, medianLufs: Double?): String = when (target) {
+        LoudnessTarget.LIBRARY_MEDIAN -> {
+            val clamped = medianLufs?.takeIf { it.isFinite() }?.coerceIn(-16.0, -8.0)
+            if (isZhCN) {
+                if (clamped != null) String.format(java.util.Locale.US, "跟随中位数 (%.1f)", clamped)
+                else "跟随中位数"
+            } else {
+                if (clamped != null) String.format(java.util.Locale.US, "Median (%.1f)", clamped)
+                else "Median"
+            }
+        }
+        LoudnessTarget.LOUD -> if (isZhCN) "饱满 (-11)" else "Loud (-11)"
+        LoudnessTarget.STANDARD -> if (isZhCN) "标准 (-14)" else "Standard (-14)"
+        LoudnessTarget.DYNAMIC -> if (isZhCN) "动态 (-18)" else "Dynamic (-18)"
+    }
+    fun loudnessTargetOptionDesc(target: LoudnessTarget, medianLufs: Double?): String = when (target) {
+        LoudnessTarget.LIBRARY_MEDIAN -> if (isZhCN) {
+            if (medianLufs != null && medianLufs.isFinite()) {
+                String.format(
+                    java.util.Locale.US,
+                    "自动对齐当前曲库常态（约 %.1f LUFS，安全钳制在 -16 至 -8 LUFS），开关前后整体响度最稳定。",
+                    medianLufs,
+                )
+            } else {
+                "自动对齐服务端曲库中位数（钳制在 -16 至 -8 LUFS；缺失时回落 -11 LUFS）。"
+            }
+        } else {
+            if (medianLufs != null && medianLufs.isFinite()) {
+                String.format(
+                    java.util.Locale.US,
+                    "Tracks your library median (~%.1f LUFS, clamped to -16..-8 LUFS) to avoid sudden volume drops.",
+                    medianLufs,
+                )
+            } else {
+                "Tracks your library median (clamped to -16..-8 LUFS; falls back to -11 LUFS)."
+            }
+        }
+        LoudnessTarget.LOUD -> if (isZhCN) {
+            "接近现代流媒体偏响基准，蓝牙耳机与外放响度充足，极少需要调大音量。"
+        } else {
+            "Higher baseline suited for headphones, Bluetooth, and speakers without turning volume up."
+        }
+        LoudnessTarget.STANDARD -> if (isZhCN) {
+            "通用流媒体均衡基准，适合安静室内聆听并保留更多峰值余量。"
+        } else {
+            "Common streaming reference for quiet listening with generous headroom."
+        }
+        LoudnessTarget.DYNAMIC -> if (isZhCN) {
+            "接近 ReplayGain 经典基准，适合古典、爵士等大动态录音，极少触发限幅。"
+        } else {
+            "Classic ReplayGain-style reference for classical and wide-dynamic-range recordings."
+        }
+    }
+    val loudnessModeTitle get() = if (isZhCN) "对齐方式" else "Normalization Mode"
+    val loudnessModeSubtitle get() = if (isZhCN) {
+        "连续听同张专辑保留强弱起伏，混播或随机按单曲拉齐"
+    } else {
+        "Preserves album dynamics during album play; matches per track on shuffle/mixes"
+    }
+    fun loudnessModeLabel(mode: LoudnessMode): String = when (mode) {
+        LoudnessMode.SMART -> if (isZhCN) "智能" else "Smart"
+        LoudnessMode.TRACK -> if (isZhCN) "按单曲" else "Track"
+        LoudnessMode.ALBUM -> if (isZhCN) "按专辑" else "Album"
+    }
+    fun loudnessModeDesc(mode: LoudnessMode): String = when (mode) {
+        LoudnessMode.SMART -> if (isZhCN) {
+            "顺序连播同一张专辑时按专辑对齐，保留专辑内部强弱编排；随机播放、跨专辑混播或相似自动续播时自动按单曲拉齐。"
+        } else {
+            "Uses album loudness when playing consecutive tracks from one album; switches to track loudness on shuffle, mixed queues, or similar auto-continue."
+        }
+        LoudnessMode.TRACK -> if (isZhCN) {
+            "每首歌独立对齐至目标响度，适合歌单混播与通勤听歌。"
+        } else {
+            "Levels every track independently to the target loudness."
+        }
+        LoudnessMode.ALBUM -> if (isZhCN) {
+            "始终使用专辑集成响度（若某曲缺少专辑响度则自动回退到单曲响度）。"
+        } else {
+            "Always uses album loudness (falls back to track loudness when album metrics are missing)."
+        }
+    }
+    val loudnessPeakTitle get() = if (isZhCN) "峰值保护" else "Peak Protection"
+    val loudnessPeakSubtitle get() = if (isZhCN) {
+        "控制轻歌抬升时的瞬态压限上限，未抬升曲目零限幅直通"
+    } else {
+        "Caps transient limiting when boosting quiet tracks; unboosted tracks bypass the limiter"
+    }
+    fun loudnessPeakLabel(peak: LoudnessPeakProtection): String = when (peak) {
+        LoudnessPeakProtection.SOFT_LIMITER -> if (isZhCN) "柔和限幅 (最多 3.5 dB)" else "Soft Limiter (up to 3.5 dB)"
+        LoudnessPeakProtection.STRONG_LIMITER -> if (isZhCN) "强力限幅 (最多 6.0 dB)" else "Strong Limiter (up to 6.0 dB)"
+        LoudnessPeakProtection.STRICT_LINEAR -> if (isZhCN) "严格防削波 (0 dB)" else "Strict Linear (0 dB)"
+    }
+    fun loudnessPeakShortValue(peak: LoudnessPeakProtection): String = when (peak) {
+        LoudnessPeakProtection.SOFT_LIMITER -> if (isZhCN) "柔和限幅" else "Soft"
+        LoudnessPeakProtection.STRONG_LIMITER -> if (isZhCN) "强力限幅" else "Strong"
+        LoudnessPeakProtection.STRICT_LINEAR -> if (isZhCN) "严格防削波" else "Strict"
+    }
+    fun loudnessPeakDesc(peak: LoudnessPeakProtection): String = when (peak) {
+        LoudnessPeakProtection.SOFT_LIMITER -> if (isZhCN) {
+            "抬升轻响度曲目时允许 -1.0 dBTP 柔和限幅最多 3.5 dB，兼顾拉齐听感与动态；未抬升曲目零限幅直通。"
+        } else {
+            "Allows up to 3.5 dB of soft peak limiting at -1.0 dBTP on boosted quiet tracks; unboosted tracks stay limiter-free."
+        }
+        LoudnessPeakProtection.STRONG_LIMITER -> if (isZhCN) {
+            "允许最多 6.0 dB 瞬态压限，进一步拉平极轻曲目与现代热歌的音量差；未抬升曲目仍零限幅直通。"
+        } else {
+            "Allows up to 6.0 dB of transient limiting to narrow large gaps between quiet and loud tracks; unboosted tracks stay limiter-free."
+        }
+        LoudnessPeakProtection.STRICT_LINEAR -> if (isZhCN) {
+            "全程纯线性增益、绝不启用限幅器，所有曲目严格限制在 -1.0 dBTP 以下（轻歌可能无法完全拉满）。"
+        } else {
+            "Pure linear gain only, never engaging the limiter; strictly keeps peaks at or below -1.0 dBTP."
+        }
+    }
+    val loudnessEnabledNotice get() = if (isZhCN) "已开启本机响度均衡" else "Loudness normalization enabled"
+    val loudnessDisabledNotice get() = if (isZhCN) "已关闭响度均衡，恢复原码直通" else "Loudness normalization off (bit-exact passthrough)"
+    val loudnessSavedForLocalNotice get() = if (isZhCN) "已保存响度设置（切回本机播放时生效）" else "Loudness setting saved (applies on local playback)"
+    val loudnessDetailTrackUnmeasured get() = if (isZhCN) "曲目响度：未分析" else "Track loudness: Not analyzed"
+    val loudnessDetailSonos get() = if (isZhCN) "响度均衡：Sonos 投放不生效" else "Normalization: Inactive on Sonos"
+    val loudnessDetailUnsupported get() = if (isZhCN) "响度均衡：当前服务器不支持" else "Normalization: Unsupported by server"
+    val loudnessDetailDisabled get() = if (isZhCN) "响度均衡：已关闭" else "Normalization: Off"
+    internal val isChinese: Boolean get() = isZhCN
 }
 

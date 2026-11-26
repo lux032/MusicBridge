@@ -90,7 +90,10 @@ import coil3.request.ImageRequest
 import com.lux032.musicbridge.sonos.SonosController
 import com.lux032.musicbridge.sonos.SonosRoom
 import android.util.Log
+import com.lux032.musicbridge.local.LoudnessGainPlan
+import com.lux032.musicbridge.local.LoudnessSource
 import com.lux032.musicbridge.local.originalCacheKey
+import kotlin.math.abs
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -111,6 +114,9 @@ internal fun PlaybackDetailSection(
     sleepTimerState: SleepTimerState,
     localPlaybackPolicy: LocalPlaybackPolicy,
     cachedOriginalTrackKeys: Set<String>,
+    loudnessPlan: LoudnessGainPlan = LoudnessGainPlan.BYPASS,
+    loudnessEnabled: Boolean = false,
+    isLoudnessServerSupported: Boolean = true,
     isLoading: Boolean,
     isFavoriteLoading: Boolean,
     onBack: () -> Unit,
@@ -1008,7 +1014,14 @@ internal fun PlaybackDetailSection(
             artworkUrl = displayAlbum.thumbUrl,
             artistAlbum = listOfNotNull(currentTrack.artistName ?: displayAlbum.artistName, currentTrack.albumTitle ?: displayAlbum.title)
                 .joinToString(" · "),
-            technicalDetails = currentTrack.trackDetailText(currentState.target, localPlaybackPolicy, cachedOriginalTrackKeys),
+            technicalDetails = currentTrack.trackDetailText(
+                target = currentState.target,
+                policy = localPlaybackPolicy,
+                cachedOriginalTrackKeys = cachedOriginalTrackKeys,
+                loudnessEnabled = loudnessEnabled,
+                serverSupported = isLoudnessServerSupported,
+                loudnessPlan = loudnessPlan,
+            ),
             palette = palette,
             loadWorks = loadTrackWorks,
             loadWorkInfo = loadWorkInfo,
@@ -1382,9 +1395,113 @@ private fun MusicTrack.trackDetailText(
     target: PlaybackTarget,
     policy: LocalPlaybackPolicy,
     cachedOriginalTrackKeys: Set<String>,
-): String = outputQualityBadges(target, policy, cachedOriginalTrackKeys)
-    .joinToString(" · ")
-    .ifBlank { sourceAudioCodec?.uppercase(Locale.ROOT) ?: "—" }
+    loudnessEnabled: Boolean = false,
+    serverSupported: Boolean = true,
+    loudnessPlan: LoudnessGainPlan = LoudnessGainPlan.BYPASS,
+): String {
+    val qualityLine = outputQualityBadges(target, policy, cachedOriginalTrackKeys)
+        .joinToString(" · ")
+        .ifBlank { sourceAudioCodec?.uppercase(Locale.ROOT) ?: "-" }
+    val loudnessLines = formatLoudnessTechnicalLines(
+        track = this,
+        target = target,
+        loudnessEnabled = loudnessEnabled,
+        serverSupported = serverSupported,
+        plan = loudnessPlan,
+    )
+    return (listOf(qualityLine) + loudnessLines).joinToString("\n")
+}
+
+internal fun formatLoudnessTechnicalLines(
+    track: MusicTrack,
+    target: PlaybackTarget,
+    loudnessEnabled: Boolean,
+    serverSupported: Boolean,
+    plan: LoudnessGainPlan,
+    isZhCN: Boolean = Strings.isChinese,
+): List<String> = buildList {
+    val trackLufs = track.loudnessLufs?.takeIf { it.isFinite() }
+    val trackPeak = track.truePeakDb?.takeIf { it.isFinite() }
+    val trackLra = track.loudnessRange?.takeIf { it.isFinite() }
+    if (trackLufs != null) {
+        val parts = mutableListOf(String.format(Locale.US, "%.1f LUFS", trackLufs))
+        if (trackPeak != null) {
+            val normalizedPeak = if (abs(trackPeak) < 0.05) 0.0 else trackPeak
+            val peakLabel = if (isZhCN) "真峰值" else "True Peak"
+            parts += String.format(Locale.US, "%s %+.1f dBTP", peakLabel, normalizedPeak)
+        }
+        if (trackLra != null) {
+            parts += String.format(Locale.US, "LRA %.1f LU", trackLra)
+        }
+        val prefix = if (isZhCN) "曲目响度：" else "Track loudness: "
+        add(prefix + parts.joinToString(" · "))
+    } else if (loudnessEnabled && serverSupported) {
+        add(if (isZhCN) "曲目响度：未分析" else "Track loudness: Not analyzed")
+    }
+
+    val albumLufs = track.albumLoudnessLufs?.takeIf { it.isFinite() }
+    val albumPeak = track.albumTruePeakDb?.takeIf { it.isFinite() }
+    if (albumLufs != null) {
+        val parts = mutableListOf(String.format(Locale.US, "%.1f LUFS", albumLufs))
+        if (albumPeak != null) {
+            val normalizedPeak = if (abs(albumPeak) < 0.05) 0.0 else albumPeak
+            val peakLabel = if (isZhCN) "真峰值" else "True Peak"
+            parts += String.format(Locale.US, "%s %+.1f dBTP", peakLabel, normalizedPeak)
+        }
+        val prefix = if (isZhCN) "专辑响度：" else "Album loudness: "
+        add(prefix + parts.joinToString(" · "))
+    }
+
+    when {
+        target is PlaybackTarget.Sonos && loudnessEnabled -> {
+            add(if (isZhCN) "响度均衡：Sonos 投放不生效" else "Normalization: Inactive on Sonos")
+        }
+        target == PlaybackTarget.LocalDevice && loudnessEnabled && !serverSupported -> {
+            add(if (isZhCN) "响度均衡：当前服务器不支持" else "Normalization: Unsupported by server")
+        }
+        target == PlaybackTarget.LocalDevice && plan.active -> {
+            val normalizedGain = if (abs(plan.gainDb) < 0.05) 0.0 else plan.gainDb
+            val sourceLabel = when (plan.source) {
+                LoudnessSource.ALBUM -> if (isZhCN) "按专辑" else "Album"
+                LoudnessSource.TRACK -> if (isZhCN) "按单曲" else "Track"
+                LoudnessSource.FALLBACK -> if (isZhCN) "保守回退" else "Fallback"
+                LoudnessSource.BYPASS -> if (isZhCN) "直通" else "Bypass"
+            }
+            val protectionLabel = when {
+                plan.useLimiter && plan.peakReductionDb > LoudnessPeakProtection.SOFT_LIMITER.maxGainReductionDb + 0.05 ->
+                    if (isZhCN) String.format(Locale.US, "强力限幅，瞬态上限 -%.1f dB", plan.peakReductionDb)
+                    else String.format(Locale.US, "Strong limiter, max GR -%.1f dB", plan.peakReductionDb)
+                plan.useLimiter ->
+                    if (isZhCN) String.format(Locale.US, "柔和限幅，瞬态上限 -%.1f dB", plan.peakReductionDb)
+                    else String.format(Locale.US, "Soft limiter, max GR -%.1f dB", plan.peakReductionDb)
+                abs(normalizedGain) < 0.05 ->
+                    if (isZhCN) "零限幅直通" else "Zero-limiter bypass"
+                else ->
+                    if (isZhCN) "纯线性零限幅" else "Pure linear"
+            }
+            val line = if (isZhCN) {
+                String.format(
+                    Locale.US,
+                    "响度均衡：%+.1f dB（目标 %.1f LUFS · %s · %s）",
+                    normalizedGain,
+                    plan.targetLufs,
+                    sourceLabel,
+                    protectionLabel,
+                )
+            } else {
+                String.format(
+                    Locale.US,
+                    "Normalization: %+.1f dB (Target %.1f LUFS · %s · %s)",
+                    normalizedGain,
+                    plan.targetLufs,
+                    sourceLabel,
+                    protectionLabel,
+                )
+            }
+            add(line)
+        }
+    }
+}
 
 internal fun sourceAudioDetailText(track: MusicTrack): String = buildList {
     addAll(originalAudioQualityBadges(track.sourceAudioCodec, track.bitDepth, track.sourceAudioSampleRate))

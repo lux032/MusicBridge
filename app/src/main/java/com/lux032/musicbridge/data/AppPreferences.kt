@@ -309,6 +309,7 @@ class AppPreferences internal constructor(
             remove(lastSessionKey(sourceId))
             remove(resumeBlockKey(sourceId))
             remove(searchHistoryKey(sourceId))
+            remove(loudnessLibraryMedianKey(sourceId))
         }
     }
 
@@ -385,6 +386,42 @@ class AppPreferences internal constructor(
 
     fun saveAutoPlaySimilarEnabled(enabled: Boolean) {
         sharedPreferences.edit { putBoolean(KEY_AUTO_PLAY_SIMILAR, enabled) }
+    }
+
+    fun loadLoudnessNormalizationSettings(): LoudnessNormalizationSettings = LoudnessNormalizationSettings(
+        enabled = sharedPreferences.getBoolean(KEY_LOUDNESS_ENABLED, false),
+        target = LoudnessTarget.fromId(sharedPreferences.getString(KEY_LOUDNESS_TARGET, null)),
+        mode = LoudnessMode.fromId(sharedPreferences.getString(KEY_LOUDNESS_MODE, null)),
+        peakProtection = LoudnessPeakProtection.fromId(sharedPreferences.getString(KEY_LOUDNESS_PEAK_PROTECTION, null)),
+    )
+
+    fun saveLoudnessNormalizationSettings(settings: LoudnessNormalizationSettings) {
+        sharedPreferences.edit {
+            putBoolean(KEY_LOUDNESS_ENABLED, settings.enabled)
+            putString(KEY_LOUDNESS_TARGET, settings.target.id)
+            putString(KEY_LOUDNESS_MODE, settings.mode.id)
+            putString(KEY_LOUDNESS_PEAK_PROTECTION, settings.peakProtection.id)
+        }
+    }
+
+    fun loadLoudnessLibraryMedianLufs(sourceId: String): Double? {
+        if (sourceId.isBlank()) return null
+        return sharedPreferences.getString(loudnessLibraryMedianKey(sourceId), null)
+            ?.trim()
+            ?.toDoubleOrNull()
+            ?.takeIf { it.isFinite() }
+    }
+
+    fun saveLoudnessLibraryMedianLufs(sourceId: String, medianLufs: Double?) {
+        if (sourceId.isBlank()) return
+        sharedPreferences.edit {
+            val key = loudnessLibraryMedianKey(sourceId)
+            if (medianLufs != null && medianLufs.isFinite()) {
+                putString(key, medianLufs.toString())
+            } else {
+                remove(key)
+            }
+        }
     }
 
     fun loadDownloadFormat(): OfflineDownloadFormat =
@@ -516,6 +553,7 @@ class AppPreferences internal constructor(
     private fun lastSessionKey(sourceId: String) = "${KEY_MUSIC032_LAST_SESSION}_$sourceId"
     private fun resumeBlockKey(sourceId: String) = "${KEY_MUSIC032_RESUME_BLOCK}_$sourceId"
     private fun searchHistoryKey(sourceId: String) = "${KEY_SEARCH_HISTORY}_$sourceId"
+    private fun loudnessLibraryMedianKey(sourceId: String) = "${KEY_LOUDNESS_LIBRARY_MEDIAN_LUFS}_$sourceId"
 
     companion object {
         const val KEY_OPUS_TRANSCODE_MODE = "opus_transcode_mode_v1"
@@ -541,6 +579,11 @@ class AppPreferences internal constructor(
         private const val KEY_LOCAL_CACHE_SIZE = "local_cache_size_v1"
         private const val KEY_DOWNLOAD_WIFI_ONLY = "download_wifi_only_v1"
         private const val KEY_AUTO_PLAY_SIMILAR = "auto_play_similar_v1"
+        private const val KEY_LOUDNESS_ENABLED = "loudness_normalization_enabled_v1"
+        private const val KEY_LOUDNESS_TARGET = "loudness_target_v1"
+        private const val KEY_LOUDNESS_MODE = "loudness_mode_v1"
+        private const val KEY_LOUDNESS_PEAK_PROTECTION = "loudness_peak_protection_v1"
+        private const val KEY_LOUDNESS_LIBRARY_MEDIAN_LUFS = "loudness_library_median_lufs_v1"
         private const val KEY_DOWNLOAD_FORMAT = "download_format_v1"
         private const val KEY_LOCAL_STREAMING_LIMIT_WIFI = "local_streaming_limit_wifi_v2"
         private const val KEY_LOCAL_STREAMING_LIMIT_CELLULAR = "local_streaming_limit_cellular_v2"

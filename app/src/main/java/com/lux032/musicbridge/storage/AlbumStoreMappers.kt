@@ -36,6 +36,11 @@ data class DownloadedAudioTrack(
     val trackNumber: Int? = null,
     val userRating: Float? = null,
     val artists: List<ArtistRef> = emptyList(),
+    val loudnessLufs: Double? = null,
+    val truePeakDb: Double? = null,
+    val loudnessRange: Double? = null,
+    val albumLoudnessLufs: Double? = null,
+    val albumTruePeakDb: Double? = null,
 ) {
     fun toTrackStream(): MusicTrack = MusicTrack(
         ratingKey = ratingKey,
@@ -58,6 +63,11 @@ data class DownloadedAudioTrack(
         discNumber = discNumber,
         trackNumber = trackNumber,
         artists = artists,
+        loudnessLufs = loudnessLufs,
+        truePeakDb = truePeakDb,
+        loudnessRange = loudnessRange,
+        albumLoudnessLufs = albumLoudnessLufs,
+        albumTruePeakDb = albumTruePeakDb,
     )
 }
 
@@ -154,6 +164,8 @@ internal fun android.database.Cursor.toTrack(): MusicTrack {
         if (isNull(getColumnIndexOrThrow(name))) null else getFloat(getColumnIndexOrThrow(name))
     fun nullableInt(name: String): Int? =
         if (isNull(getColumnIndexOrThrow(name))) null else getInt(getColumnIndexOrThrow(name))
+    fun nullableDouble(name: String): Double? =
+        getColumnIndex(name).takeIf { it >= 0 && !isNull(it) }?.let(::getDouble)?.takeIf { it.isFinite() }
 
     return MusicTrack(
         ratingKey = string(AlbumDatabaseHelper.COLUMN_TRACK_RATING_KEY),
@@ -180,6 +192,11 @@ internal fun android.database.Cursor.toTrack(): MusicTrack {
         discNumber = nullableInt(AlbumDatabaseHelper.COLUMN_TRACK_DISC_NUMBER),
         trackNumber = nullableInt(AlbumDatabaseHelper.COLUMN_TRACK_NUMBER),
         artists = artistRefsColumn(),
+        loudnessLufs = nullableDouble(AlbumDatabaseHelper.COLUMN_TRACK_LOUDNESS_LUFS),
+        truePeakDb = nullableDouble(AlbumDatabaseHelper.COLUMN_TRACK_TRUE_PEAK_DB),
+        loudnessRange = nullableDouble(AlbumDatabaseHelper.COLUMN_TRACK_LOUDNESS_RANGE),
+        albumLoudnessLufs = nullableDouble(AlbumDatabaseHelper.COLUMN_TRACK_ALBUM_LOUDNESS_LUFS),
+        albumTruePeakDb = nullableDouble(AlbumDatabaseHelper.COLUMN_TRACK_ALBUM_TRUE_PEAK_DB),
     )
 }
 
@@ -192,6 +209,8 @@ internal fun android.database.Cursor.toDownloadedTrack(): DownloadedAudioTrack {
         if (isNull(getColumnIndexOrThrow(name))) null else getFloat(getColumnIndexOrThrow(name))
     fun nullableInt(name: String): Int? =
         if (isNull(getColumnIndexOrThrow(name))) null else getInt(getColumnIndexOrThrow(name))
+    fun nullableDouble(name: String): Double? =
+        getColumnIndex(name).takeIf { it >= 0 && !isNull(it) }?.let(::getDouble)?.takeIf { it.isFinite() }
 
     return DownloadedAudioTrack(
         sourceId = string(AlbumDatabaseHelper.COLUMN_SOURCE_ID),
@@ -215,6 +234,11 @@ internal fun android.database.Cursor.toDownloadedTrack(): DownloadedAudioTrack {
         trackNumber = nullableInt(AlbumDatabaseHelper.COLUMN_TRACK_NUMBER),
         userRating = nullableFloat(AlbumDatabaseHelper.COLUMN_TRACK_USER_RATING),
         artists = artistRefsColumn(),
+        loudnessLufs = nullableDouble(AlbumDatabaseHelper.COLUMN_TRACK_LOUDNESS_LUFS),
+        truePeakDb = nullableDouble(AlbumDatabaseHelper.COLUMN_TRACK_TRUE_PEAK_DB),
+        loudnessRange = nullableDouble(AlbumDatabaseHelper.COLUMN_TRACK_LOUDNESS_RANGE),
+        albumLoudnessLufs = nullableDouble(AlbumDatabaseHelper.COLUMN_TRACK_ALBUM_LOUDNESS_LUFS),
+        albumTruePeakDb = nullableDouble(AlbumDatabaseHelper.COLUMN_TRACK_ALBUM_TRUE_PEAK_DB),
     )
 }
 
@@ -241,6 +265,11 @@ internal fun DownloadedAudioTrack.toContentValues(): ContentValues =
         put(AlbumDatabaseHelper.COLUMN_TRACK_DISC_NUMBER, discNumber)
         put(AlbumDatabaseHelper.COLUMN_TRACK_NUMBER, trackNumber)
         put(AlbumDatabaseHelper.COLUMN_TRACK_USER_RATING, userRating)
+        put(AlbumDatabaseHelper.COLUMN_TRACK_LOUDNESS_LUFS, loudnessLufs)
+        put(AlbumDatabaseHelper.COLUMN_TRACK_TRUE_PEAK_DB, truePeakDb)
+        put(AlbumDatabaseHelper.COLUMN_TRACK_LOUDNESS_RANGE, loudnessRange)
+        put(AlbumDatabaseHelper.COLUMN_TRACK_ALBUM_LOUDNESS_LUFS, albumLoudnessLufs)
+        put(AlbumDatabaseHelper.COLUMN_TRACK_ALBUM_TRUE_PEAK_DB, albumTruePeakDb)
     }
 
 
@@ -307,6 +336,11 @@ internal fun MusicTrack.toContentValues(): ContentValues =
         put(AlbumDatabaseHelper.COLUMN_TRACK_DISC_NUMBER, discNumber)
         put(AlbumDatabaseHelper.COLUMN_TRACK_NUMBER, trackNumber)
         put(AlbumDatabaseHelper.COLUMN_ARTIST_REFS, encodeArtistRefs(artists))
+        put(AlbumDatabaseHelper.COLUMN_TRACK_LOUDNESS_LUFS, loudnessLufs)
+        put(AlbumDatabaseHelper.COLUMN_TRACK_TRUE_PEAK_DB, truePeakDb)
+        put(AlbumDatabaseHelper.COLUMN_TRACK_LOUDNESS_RANGE, loudnessRange)
+        put(AlbumDatabaseHelper.COLUMN_TRACK_ALBUM_LOUDNESS_LUFS, albumLoudnessLufs)
+        put(AlbumDatabaseHelper.COLUMN_TRACK_ALBUM_TRUE_PEAK_DB, albumTruePeakDb)
     }
 
 

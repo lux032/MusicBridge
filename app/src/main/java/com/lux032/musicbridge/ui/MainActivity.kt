@@ -678,6 +678,9 @@ fun MusicBridgeApp(
                             sleepTimerState = sleepTimerState,
                             localPlaybackPolicy = state.currentLocalPlaybackPolicy(),
                             cachedOriginalTrackKeys = state.cachedOriginalTrackKeys,
+                            loudnessPlan = state.currentLocalLoudnessPlan,
+                            loudnessEnabled = state.loudnessSettings.enabled,
+                            isLoudnessServerSupported = state.isLoudnessSupportedForActiveServer,
                             isLoading = state.isPlaybackCommandLoading,
                             isFavoriteLoading = state.isFavoriteMutationLoading,
                             onBack = state::navigateBack,
@@ -1078,6 +1081,11 @@ fun MusicBridgeApp(
                             downloadFormat = state.downloadFormat,
                             autoPlaySimilarEnabled = state.similarRadioState.autoPlayEnabled,
                             homeLayout = state.homeLayout,
+                            loudnessSettings = state.loudnessSettings,
+                            loudnessCapabilities = state.loudnessCapabilities,
+                            cachedLoudnessLibraryMedianLufs = state.cachedLoudnessLibraryMedianLufs,
+                            isLoudnessServerSupported = state.isLoudnessSupportedForActiveServer,
+                            activeSonosRoomName = state.miniPlayerState?.sonosRoom?.roomName,
                         ),
                         actions = SettingsActions(
                             onOpusTranscodeModeChange = state::updateOpusTranscodeMode,
@@ -1093,6 +1101,11 @@ fun MusicBridgeApp(
                             onAutoPlaySimilarChange = { enabled ->
                                 state.setAutoPlaySimilarEnabled(enabled, announceInQueue = false)
                             },
+                            onLoudnessEnabledChange = state::updateLoudnessEnabled,
+                            onLoudnessTargetChange = state::updateLoudnessTarget,
+                            onLoudnessModeChange = state::updateLoudnessMode,
+                            onLoudnessPeakProtectionChange = state::updateLoudnessPeakProtection,
+                            onRefreshLoudnessCapabilities = state::refreshLoudnessCapabilities,
                             onClearLocalCache = state::clearLocalAudioCache,
                             onClearAllDownloads = state::clearAllDownloads,
                             onSaveServer = state::saveServerProfile,

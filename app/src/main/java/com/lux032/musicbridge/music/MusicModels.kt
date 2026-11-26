@@ -67,6 +67,16 @@ data class MusicTrack(
     val artists: List<ArtistRef> = emptyList(),
     /** The daily mix this queue entry came from (reported on session start). */
     val playbackContext: Music032PlaybackContext? = null,
+    /** EBU R128 integrated track loudness (LUFS). */
+    val loudnessLufs: Double? = null,
+    /** EBU R128 track true peak (dBTP); explicit 0.0 is valid. */
+    val truePeakDb: Double? = null,
+    /** EBU R128 track loudness range (LRA, LU). */
+    val loudnessRange: Double? = null,
+    /** EBU R128 integrated album loudness (LUFS). */
+    val albumLoudnessLufs: Double? = null,
+    /** EBU R128 album true peak (dBTP); explicit 0.0 is valid. */
+    val albumTruePeakDb: Double? = null,
 )
 
 /** Replace only artist metadata; stream URLs, offline files and session context stay intact. */

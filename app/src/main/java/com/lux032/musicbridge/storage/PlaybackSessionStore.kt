@@ -137,6 +137,9 @@ private fun JSONObject.optIntOrNull(key: String): Int? =
 private fun JSONObject.optFloatOrNull(key: String): Float? =
     if (has(key) && !isNull(key)) getDouble(key).toFloat() else null
 
+private fun JSONObject.optDoubleOrNull(key: String): Double? =
+    if (has(key) && !isNull(key)) getDouble(key).takeIf { it.isFinite() } else null
+
 private fun List<ArtistRef>.toJson(): JSONArray =
     JSONArray().apply { forEach { put(JSONObject().put("id", it.id).put("name", it.name).put("joinPhrase", it.joinPhrase)) } }
 
@@ -213,6 +216,11 @@ internal fun MusicTrack.toJson(): JSONObject = JSONObject()
     .put("discNumber", discNumber)
     .put("trackNumber", trackNumber)
     .put("artists", artists.toJson())
+    .put("loudnessLufs", loudnessLufs)
+    .put("truePeakDb", truePeakDb)
+    .put("loudnessRange", loudnessRange)
+    .put("albumLoudnessLufs", albumLoudnessLufs)
+    .put("albumTruePeakDb", albumTruePeakDb)
 
 internal fun JSONObject.toTrack(): MusicTrack = MusicTrack(
     ratingKey = getString("ratingKey"),
@@ -239,6 +247,11 @@ internal fun JSONObject.toTrack(): MusicTrack = MusicTrack(
     discNumber = optIntOrNull("discNumber"),
     trackNumber = optIntOrNull("trackNumber"),
     artists = optArtistRefs("artists"),
+    loudnessLufs = optDoubleOrNull("loudnessLufs"),
+    truePeakDb = optDoubleOrNull("truePeakDb"),
+    loudnessRange = optDoubleOrNull("loudnessRange"),
+    albumLoudnessLufs = optDoubleOrNull("albumLoudnessLufs"),
+    albumTruePeakDb = optDoubleOrNull("albumTruePeakDb"),
 )
 
 private fun SonosRoom.toJson(): JSONObject = JSONObject()

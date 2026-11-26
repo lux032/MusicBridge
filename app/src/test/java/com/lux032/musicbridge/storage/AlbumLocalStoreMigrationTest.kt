@@ -165,7 +165,7 @@ class AlbumLocalStoreMigrationTest {
         assertEquals(null, albums.single().format)
         assertEquals(null, albums.single().subformat)
         context.openOrCreateDatabase(DATABASE_NAME, Context.MODE_PRIVATE, null).use { db ->
-            assertEquals(20, db.version)
+            assertEquals(21, db.version)
             assertTrue(db.columnNames("albums").containsAll(listOf("format", "subformat")))
             assertTrue(db.columnNames("tracks").contains("bit_depth"))
             assertTrue(db.columnNames("album_tracks").contains("bit_depth"))
@@ -241,7 +241,7 @@ class AlbumLocalStoreMigrationTest {
         assertEquals(emptyList<DownloadedAudioTrack>(), store.getAllDownloadedTracks())
 
         context.openOrCreateDatabase(DATABASE_NAME, Context.MODE_PRIVATE, null).use { db ->
-            assertEquals(20, db.version)
+            assertEquals(21, db.version)
             val expectedColumns = setOf(
                 "source_id",
                 "rating_key",
@@ -390,7 +390,7 @@ class AlbumLocalStoreMigrationTest {
         assertEquals(5, storedTrack?.trackNumber)
 
         context.openOrCreateDatabase(DATABASE_NAME, Context.MODE_PRIVATE, null).use { db ->
-            assertEquals(20, db.version)
+            assertEquals(21, db.version)
             assertTrue(db.columnNames("downloaded_tracks").containsAll(listOf("disc_number", "track_number", "user_rating")))
         }
         context.deleteDatabase(DATABASE_NAME)
@@ -521,7 +521,7 @@ class AlbumLocalStoreMigrationTest {
         store.updateDownloadedTrackFavoriteStatus("src", "trk1", null)
         // trk1 now has explicit null in downloaded_tracks, but fallback will check tracks table if needed or return null
         context.openOrCreateDatabase(DATABASE_NAME, Context.MODE_PRIVATE, null).use { db ->
-            assertEquals(20, db.version)
+            assertEquals(21, db.version)
             assertTrue(db.columnNames("downloaded_tracks").containsAll(listOf("user_rating", "artist_refs")))
         }
         context.deleteDatabase(DATABASE_NAME)
@@ -539,7 +539,7 @@ class AlbumLocalStoreMigrationTest {
         AlbumLocalStore(context).getAllPlaylists("source")
 
         context.openOrCreateDatabase(DATABASE_NAME, Context.MODE_PRIVATE, null).use { db ->
-            assertEquals(20, db.version)
+            assertEquals(21, db.version)
             assertTrue(db.columnNames("tracks").contains("lyric_url"))
             assertTrue(db.columnNames("album_tracks").contains("lyric_url"))
             assertTrue(db.columnNames("playlists").containsAll(listOf("sort_order", "rating_key", "source_id")))
@@ -562,7 +562,7 @@ class AlbumLocalStoreMigrationTest {
         val store = AlbumLocalStore(context)
         assertEquals(null, store.getAllAlbums("source").single().releaseDate)
         context.openOrCreateDatabase(DATABASE_NAME, Context.MODE_PRIVATE, null).use { db ->
-            assertEquals(20, db.version)
+            assertEquals(21, db.version)
             assertTrue(db.columnNames("albums").contains("release_date"))
         }
 
@@ -597,7 +597,7 @@ class AlbumLocalStoreMigrationTest {
         val legacy = store.getAllAlbums("source").single()
         assertTrue(legacy.artists.isEmpty())
         context.openOrCreateDatabase(DATABASE_NAME, Context.MODE_PRIVATE, null).use { db ->
-            assertEquals(20, db.version)
+            assertEquals(21, db.version)
             assertTrue(db.columnNames("albums").contains("artist_refs"))
             assertTrue(db.columnNames("artists").containsAll(listOf("rating_key", "artist_name", "album_count", "track_count")))
             assertTrue(db.indexNames("album_artist_links").contains("index_album_artist_links_artist"))
@@ -1031,6 +1031,82 @@ class AlbumLocalStoreMigrationTest {
         assertEquals(2, store.searchAlbums("source", "Double").single().discCount)
         assertEquals(2, store.getAlbumsByArtist("source", "Composer").single().discCount)
         assertEquals(2, store.getArtistDiscography("source", "artist-1").single().album.discCount)
+        context.deleteDatabase(DATABASE_NAME)
+    }
+
+    @Test
+    fun version21AddsLoudnessColumnsAcrossTrackTablesAndRoundTripsZeroPeak() {
+        val context = cleanDatabaseContext()
+        val store = AlbumLocalStore(context)
+        val loudnessColumns = setOf(
+            AlbumDatabaseHelper.COLUMN_TRACK_LOUDNESS_LUFS,
+            AlbumDatabaseHelper.COLUMN_TRACK_TRUE_PEAK_DB,
+            AlbumDatabaseHelper.COLUMN_TRACK_LOUDNESS_RANGE,
+            AlbumDatabaseHelper.COLUMN_TRACK_ALBUM_LOUDNESS_LUFS,
+            AlbumDatabaseHelper.COLUMN_TRACK_ALBUM_TRUE_PEAK_DB,
+        )
+        AlbumDatabaseHelper(context).writableDatabase.use { db ->
+            assertEquals(21, db.version)
+            ensureVersion21Columns(db) // idempotent on already-migrated schema
+            for (table in listOf(
+                AlbumDatabaseHelper.TABLE_TRACKS,
+                AlbumDatabaseHelper.TABLE_ALBUM_TRACKS,
+                AlbumDatabaseHelper.TABLE_PLAYLIST_TRACKS,
+                AlbumDatabaseHelper.TABLE_DOWNLOADED_TRACKS,
+            )) {
+                val cols = db.columnNames(table)
+                assertTrue("missing loudness columns in $table", loudnessColumns.all { it in cols })
+            }
+        }
+
+        val loudTrack = track("source", "loud-1", 0, 0).copy(
+            albumRatingKey = "alb-loud",
+            userRating = 10f,
+            loudnessLufs = -9.1,
+            truePeakDb = 0.0,
+            loudnessRange = 5.8,
+            albumLoudnessLufs = -9.4,
+            albumTruePeakDb = 0.0,
+        )
+        store.replaceAllAlbumTracks("source", mapOf("alb-loud" to listOf(loudTrack)))
+        val restoredAlbumTrack = store.getAlbumTracks("source", "alb-loud").single()
+        assertEquals(-9.1, restoredAlbumTrack.loudnessLufs!!, 1e-6)
+        assertEquals(0.0, restoredAlbumTrack.truePeakDb!!, 1e-6)
+        assertEquals(5.8, restoredAlbumTrack.loudnessRange!!, 1e-6)
+        assertEquals(-9.4, restoredAlbumTrack.albumLoudnessLufs!!, 1e-6)
+        assertEquals(0.0, restoredAlbumTrack.albumTruePeakDb!!, 1e-6)
+
+        store.insertDownloadedTrack(
+            DownloadedAudioTrack(
+                sourceId = "source",
+                ratingKey = "loud-1",
+                partKey = "/part",
+                title = "Track",
+                artistName = "Artist",
+                albumTitle = "Album",
+                albumRatingKey = "alb-loud",
+                durationMillis = 1000L,
+                sourceAudioCodec = "flac",
+                sourceAudioBitrateKbps = 900,
+                sourceAudioSampleRate = 44100,
+                bitDepth = 16,
+                localAudioPath = "/tmp/loud-1.flac",
+                localThumbPath = null,
+                localLyricPath = null,
+                fileSize = 1024L,
+                downloadedAtEpochSeconds = 1_700_000_000L,
+                loudnessLufs = -9.1,
+                truePeakDb = 0.0,
+                loudnessRange = 5.8,
+                albumLoudnessLufs = -9.4,
+                albumTruePeakDb = 0.0,
+            ),
+        )
+        val restoredDownload = store.getDownloadedTrack("source", "loud-1")!!
+        assertEquals(-9.1, restoredDownload.loudnessLufs!!, 1e-6)
+        assertEquals(0.0, restoredDownload.truePeakDb!!, 1e-6)
+        assertEquals(-9.4, restoredDownload.albumLoudnessLufs!!, 1e-6)
+        assertEquals(0.0, restoredDownload.albumTruePeakDb!!, 1e-6)
         context.deleteDatabase(DATABASE_NAME)
     }
 

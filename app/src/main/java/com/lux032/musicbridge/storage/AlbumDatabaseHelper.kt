@@ -100,6 +100,26 @@ internal fun ensureVersion20Columns(db: SQLiteDatabase) {
     addColumnIfNotExists(db, AlbumDatabaseHelper.TABLE_ALBUMS, AlbumDatabaseHelper.COLUMN_DISC_COUNT, "INTEGER")
 }
 
+/** v21 persists EBU R128 track and album loudness metadata for online cache and offline downloads. */
+internal fun ensureVersion21Columns(db: SQLiteDatabase) {
+    val tables = db.rawQuery("SELECT name FROM sqlite_master WHERE type = 'table'", null).use { cursor ->
+        buildSet { while (cursor.moveToNext()) add(cursor.getString(0)) }
+    }
+    for (table in listOf(
+        AlbumDatabaseHelper.TABLE_TRACKS,
+        AlbumDatabaseHelper.TABLE_ALBUM_TRACKS,
+        AlbumDatabaseHelper.TABLE_PLAYLIST_TRACKS,
+        AlbumDatabaseHelper.TABLE_DOWNLOADED_TRACKS,
+    )) {
+        if (table !in tables) continue
+        addColumnIfNotExists(db, table, AlbumDatabaseHelper.COLUMN_TRACK_LOUDNESS_LUFS, "REAL")
+        addColumnIfNotExists(db, table, AlbumDatabaseHelper.COLUMN_TRACK_TRUE_PEAK_DB, "REAL")
+        addColumnIfNotExists(db, table, AlbumDatabaseHelper.COLUMN_TRACK_LOUDNESS_RANGE, "REAL")
+        addColumnIfNotExists(db, table, AlbumDatabaseHelper.COLUMN_TRACK_ALBUM_LOUDNESS_LUFS, "REAL")
+        addColumnIfNotExists(db, table, AlbumDatabaseHelper.COLUMN_TRACK_ALBUM_TRUE_PEAK_DB, "REAL")
+    }
+}
+
 /**
  * v18: 032 artist sync model. Albums/tracks keep their artist refs (JSON) for navigation, the
  * link tables make discography queries indexable, and `artists` holds the synced performers.
@@ -183,6 +203,7 @@ internal class AlbumDatabaseHelper(context: Context) :
         ensureVersion18Schema(db)
         ensureVersion19Columns(db)
         ensureVersion20Columns(db)
+        ensureVersion21Columns(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -231,12 +252,13 @@ internal class AlbumDatabaseHelper(context: Context) :
         if (oldVersion < 18) ensureVersion18Schema(db)
         if (oldVersion < 19) ensureVersion19Columns(db)
         if (oldVersion < 20) ensureVersion20Columns(db)
+        if (oldVersion < 21) ensureVersion21Columns(db)
     }
 
     companion object {
         // Historical file name, kept so existing installs keep their library cache.
         private const val DATABASE_NAME = "plex_album_cache.db"
-        private const val DATABASE_VERSION = 20
+        private const val DATABASE_VERSION = 21
 
         const val TABLE_ALBUMS = "albums"
         const val TABLE_TRACKS = "tracks"
@@ -291,6 +313,11 @@ internal class AlbumDatabaseHelper(context: Context) :
         const val COLUMN_TRACK_DISC_NUMBER = "disc_number"
         const val COLUMN_TRACK_NUMBER = "track_number"
         const val COLUMN_TRACK_MUSIC_ANALYSIS_VERSION = "music_analysis_version"
+        const val COLUMN_TRACK_LOUDNESS_LUFS = "loudness_lufs"
+        const val COLUMN_TRACK_TRUE_PEAK_DB = "true_peak_db"
+        const val COLUMN_TRACK_LOUDNESS_RANGE = "loudness_range"
+        const val COLUMN_TRACK_ALBUM_LOUDNESS_LUFS = "album_loudness_lufs"
+        const val COLUMN_TRACK_ALBUM_TRUE_PEAK_DB = "album_true_peak_db"
         const val COLUMN_LEAF_COUNT = "leaf_count"
         const val COLUMN_FORMAT = "format"
         const val COLUMN_SUBFORMAT = "subformat"

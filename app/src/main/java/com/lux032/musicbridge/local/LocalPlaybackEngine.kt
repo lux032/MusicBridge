@@ -92,6 +92,7 @@ class LocalPlaybackEngine(
         fun onTrackSkipped(index: Int)
         fun onCachedOriginalFallback(cacheKey: String)
         fun onAudioFormat(index: Int, sampleRate: Int?, bitDepth: Int?, isTranscoded: Boolean)
+        fun onLoudnessPlanChanged(plan: LoudnessGainPlan) {}
         fun onPlayerError(message: String)
     }
 
@@ -146,10 +147,12 @@ class LocalPlaybackEngine(
         // Foreground direct playback must never wait behind a background writer for a cache range.
         .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
 
+    private val loudnessAudioProcessor = LoudnessAudioProcessor()
+
     private val player: ExoPlayer = ExoPlayer.Builder(
         context.applicationContext,
-        // Same sink DefaultRenderersFactory builds, plus a tee that feeds the player-page
-        // spectrum visualizer. The tee copies PCM aside and passes it through untouched.
+        // Same sink DefaultRenderersFactory builds, plus loudness normalization ahead of the
+        // spectrum visualizer tee so the visualizer follows the normalized output level.
         object : DefaultRenderersFactory(context.applicationContext) {
             override fun buildAudioSink(
                 context: Context,
@@ -158,7 +161,12 @@ class LocalPlaybackEngine(
             ): AudioSink = DefaultAudioSink.Builder(context)
                 .setEnableFloatOutput(enableFloatOutput)
                 .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
-                .setAudioProcessors(arrayOf<AudioProcessor>(TeeAudioProcessor(AudioSpectrumTap)))
+                .setAudioProcessors(
+                    arrayOf<AudioProcessor>(
+                        loudnessAudioProcessor,
+                        TeeAudioProcessor(AudioSpectrumTap),
+                    ),
+                )
                 .build()
         },
     )
@@ -227,6 +235,16 @@ class LocalPlaybackEngine(
     private var truncatedRestartCount = 0
     private var lastTruncatedRestartPositionMillis = C.TIME_UNSET
     private var released = false
+    private var loudnessSettings = com.lux032.musicbridge.LoudnessNormalizationSettings()
+    private var loudnessLibraryMedianLufs: Double? = null
+    private var loudnessServerSupported: Boolean = true
+    private var loudnessManualQueueCount: Int = 0
+    private var currentPlaybackMode: com.lux032.musicbridge.PlaybackMode =
+        com.lux032.musicbridge.PlaybackMode.Sequential
+
+    @Volatile
+    var currentLoudnessPlan: LoudnessGainPlan = LoudnessGainPlan.BYPASS
+        private set
 
     private val bufferingWatchdog = object : Runnable {
         override fun run() {
@@ -348,6 +366,7 @@ class LocalPlaybackEngine(
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
             val newIndex = player.currentMediaItemIndex
             val previousIndex = lastCurrentIndex
+            recomputeAndApplyLoudness(newIndex)
             PlaybackDiagnostics.record(
                 "TRACK_TRANSITION",
                 "index=$newIndex from=$previousIndex reason=${mediaItemTransitionReasonName(reason)}",
@@ -1025,6 +1044,89 @@ class LocalPlaybackEngine(
         bufferingStallBufferedPositionMillis = C.TIME_UNSET
     }
 
+    fun setLoudnessConfig(
+        settings: com.lux032.musicbridge.LoudnessNormalizationSettings,
+        libraryMedianLufs: Double?,
+        serverSupported: Boolean,
+    ) {
+        loudnessSettings = settings
+        loudnessLibraryMedianLufs = libraryMedianLufs?.takeIf { it.isFinite() }
+        loudnessServerSupported = serverSupported
+        recomputeAndApplyLoudness()
+    }
+
+    fun setLoudnessManualQueueCount(count: Int) {
+        val normalized = count.coerceAtLeast(0)
+        if (loudnessManualQueueCount == normalized) return
+        loudnessManualQueueCount = normalized
+        recomputeAndApplyLoudness()
+    }
+
+    fun updateQueueItemLoudness(
+        index: Int,
+        loudnessLufs: Double?,
+        truePeakDb: Double?,
+        albumLoudnessLufs: Double?,
+        albumTruePeakDb: Double?,
+    ) {
+        val item = queueItems.getOrNull(index) ?: return
+        val updated = item.copy(
+            loudnessLufs = loudnessLufs,
+            truePeakDb = truePeakDb,
+            albumLoudnessLufs = albumLoudnessLufs,
+            albumTruePeakDb = albumTruePeakDb,
+            fallbackItem = item.fallbackItem?.copy(
+                loudnessLufs = loudnessLufs,
+                truePeakDb = truePeakDb,
+                albumLoudnessLufs = albumLoudnessLufs,
+                albumTruePeakDb = albumTruePeakDb,
+            ),
+        )
+        queueItems[index] = updated
+        if (index == activeLoudnessIndex()) {
+            recomputeAndApplyLoudness(index)
+        }
+    }
+
+    private fun activeLoudnessIndex(): Int {
+        val live = currentIndex
+        if (live in queueItems.indices) return live
+        if (lastCurrentIndex in queueItems.indices) return lastCurrentIndex
+        return C.INDEX_UNSET
+    }
+
+    private fun recomputeAndApplyLoudness(targetIndex: Int = activeLoudnessIndex()) {
+        val item = queueItems.getOrNull(targetIndex)
+        val plan = if (item == null) {
+            LoudnessGainPlan.BYPASS
+        } else {
+            val effectiveManualCount = if (loudnessManualQueueCount > 0) loudnessManualQueueCount else queueItems.size
+            val useAlbumInSmart = smartUseAlbumForQueue(
+                albumKeys = queueItems.map(LocalQueueItem::albumRatingKey),
+                position = targetIndex,
+                manualQueueCount = effectiveManualCount,
+                isShuffle = currentPlaybackMode == com.lux032.musicbridge.PlaybackMode.Shuffle || player.shuffleModeEnabled,
+            )
+            computeLoudnessPlan(
+                metrics = LoudnessTrackMetrics(
+                    loudnessLufs = item.loudnessLufs,
+                    truePeakDb = item.truePeakDb,
+                    albumLoudnessLufs = item.albumLoudnessLufs,
+                    albumTruePeakDb = item.albumTruePeakDb,
+                ),
+                settings = loudnessSettings,
+                useAlbumInSmart = useAlbumInSmart,
+                libraryMedianLufs = loudnessLibraryMedianLufs,
+                serverSupported = loudnessServerSupported,
+            )
+        }
+        loudnessAudioProcessor.setGainPlan(plan)
+        if (plan != currentLoudnessPlan) {
+            currentLoudnessPlan = plan
+            listener?.onLoudnessPlanChanged(plan)
+        }
+    }
+
     private fun advanceFromMediaSession() {
         if (!player.hasNextMediaItem()) return
         val targetIndex = player.nextMediaItemIndex
@@ -1092,6 +1194,7 @@ class LocalPlaybackEngine(
         }
         lastCurrentIndex = safeIndex
         queuePrecacheCount = precacheCount.coerceAtLeast(0)
+        recomputeAndApplyLoudness(safeIndex)
         return PreparedColdStartQueue(
             mediaItems = mediaItems,
             startIndex = safeIndex,
@@ -1147,6 +1250,7 @@ class LocalPlaybackEngine(
         }
         lastCurrentIndex = safeIndex
         queuePrecacheCount = precacheCount.coerceAtLeast(0)
+        recomputeAndApplyLoudness(safeIndex)
         player.setMediaItems(
             mediaItems,
             safeIndex,
@@ -1172,6 +1276,7 @@ class LocalPlaybackEngine(
             if (seek.index >= safeIndex) seek.copy(index = seek.index + items.size) else seek
         }
         player.addMediaItems(safeIndex, items.map(::buildMediaItem))
+        recomputeAndApplyLoudness()
         if (!PrecacheGate.shouldYield()) schedulePrecacheFrom(currentIndex)
     }
 
@@ -1192,6 +1297,7 @@ class LocalPlaybackEngine(
             seek.copy(index = com.lux032.musicbridge.remapIndexAfterMove(seek.index, fromIndex, toIndex))
         }
         player.moveMediaItem(fromIndex, toIndex)
+        recomputeAndApplyLoudness()
         if (!PrecacheGate.shouldYield()) schedulePrecacheFrom(currentIndex)
         return true
     }
@@ -1232,6 +1338,7 @@ class LocalPlaybackEngine(
             resetBufferingWatchdog()
             recoveryBudget.resetForUserAction()
             val targetIndex = index.coerceAtMost(queueItems.lastIndex)
+            recomputeAndApplyLoudness(targetIndex)
             player.removeMediaItem(index)
             lastCurrentIndex = targetIndex
             seekToItem(targetIndex, 0L)
@@ -1241,6 +1348,7 @@ class LocalPlaybackEngine(
                 lastCurrentIndex -= 1
             }
             player.removeMediaItem(index)
+            recomputeAndApplyLoudness()
         }
         if (!PrecacheGate.shouldYield()) schedulePrecacheFrom(currentIndex)
         return true
@@ -1269,6 +1377,7 @@ class LocalPlaybackEngine(
             ?.takeIf { it.index == cur }
             ?.copy(index = 0)
         refreshCachedOriginalKeys()
+        recomputeAndApplyLoudness(0)
         return true
     }
 
@@ -1299,6 +1408,7 @@ class LocalPlaybackEngine(
             player.addMediaItems(newItems.map(::buildMediaItem))
         }
         refreshCachedOriginalKeys()
+        recomputeAndApplyLoudness()
         if (!PrecacheGate.shouldYield()) schedulePrecacheFrom(currentIndex)
         return true
     }
@@ -1316,6 +1426,8 @@ class LocalPlaybackEngine(
         hasUnrecoveredPlaybackError = false
         lastCurrentTrackFullyLoaded = false
         lastPrecacheCompletenessKey = null
+        loudnessManualQueueCount = 0
+        recomputeAndApplyLoudness(C.INDEX_UNSET)
         LocalAudioCache.cancelPrecache()
     }
 
@@ -1351,6 +1463,7 @@ class LocalPlaybackEngine(
         resetTruncatedRestartGuard()
         recoveryBudget.resetForUserAction()
         recoveryTargetIndex = C.INDEX_UNSET
+        recomputeAndApplyLoudness(index)
         seekToItem(index, positionMillis)
         ensurePrepared(playWhenReady = true)
         player.play()
@@ -1358,6 +1471,7 @@ class LocalPlaybackEngine(
 
     /** Maps the app's queue advancement modes onto ExoPlayer's native repeat/shuffle. */
     fun setPlaybackMode(mode: com.lux032.musicbridge.PlaybackMode) {
+        currentPlaybackMode = mode
         when (mode) {
             com.lux032.musicbridge.PlaybackMode.Sequential -> {
                 player.shuffleModeEnabled = false
@@ -1376,6 +1490,7 @@ class LocalPlaybackEngine(
                 player.shuffleModeEnabled = true
             }
         }
+        recomputeAndApplyLoudness()
     }
 
     fun pause() {

@@ -6,6 +6,7 @@ import com.lux032.musicbridge.local.LocalAudioCache
 import com.lux032.musicbridge.local.LocalPlaybackEngine
 import com.lux032.musicbridge.local.LocalPlaybackService
 import com.lux032.musicbridge.local.LocalQueueItem
+import com.lux032.musicbridge.local.LoudnessGainPlan
 import com.lux032.musicbridge.local.originalCacheKey
 import com.lux032.musicbridge.local.resolveTrackToLocalQueueItem
 import com.lux032.musicbridge.music.Music032Client
@@ -97,6 +98,7 @@ internal class AppStateLocalPlaybackCoordinator(
     @Volatile
     private var loadedEngineGeneration = 0L
     private var pendingQueueOp: Job? = null
+    private val attemptedLoudnessHydrationKeys = mutableSetOf<String>()
 
     internal val isEngineQueueSynced: Boolean
         get() = loadedEngineGeneration == localQueueGeneration.get() && state.localPlaybackEngine.isActive
@@ -143,6 +145,7 @@ internal class AppStateLocalPlaybackCoordinator(
                     )
                     state.actionMessage = Strings.playingTrack(track.title)
                     state.similarRadioCoordinator.maybeTriggerAutoContinue()
+                    maybeHydrateTrackLoudness(expectedGen, index, track)
                 }
             }
 
@@ -290,6 +293,12 @@ internal class AppStateLocalPlaybackCoordinator(
                 }
             }
 
+            override fun onLoudnessPlanChanged(plan: LoudnessGainPlan) {
+                state.scope.launch {
+                    state.currentLocalLoudnessPlan = plan
+                }
+            }
+
             override fun onPlayerError(message: String) {
                 val expectedGen = localQueueGeneration.get()
                 if (loadedEngineGeneration != expectedGen) return
@@ -319,6 +328,10 @@ internal class AppStateLocalPlaybackCoordinator(
         state.scope.launch {
             snapshotFlow { currentLocalTrackFavoriteState() }
                 .collect(LocalPlaybackService::updateFavoriteState)
+        }
+        state.scope.launch {
+            snapshotFlow { state.similarRadioState.manualQueueCount }
+                .collect(state.localPlaybackEngine::setLoudnessManualQueueCount)
         }
         state.scope.launch {
             var previousIsWifi = state.networkQualityMonitor.currentIsWifi()
@@ -382,9 +395,69 @@ internal class AppStateLocalPlaybackCoordinator(
         val downloaded = state.offlineDownloadManager.getDownloadedTrackSnapshot(track.sourceId, track.ratingKey)
         if (downloaded != null) {
             val effectiveRating = track.userRating ?: downloaded.userRating
-            return downloaded.toTrackStream().copy(userRating = effectiveRating)
+            return downloaded.toTrackStream().copy(
+                userRating = effectiveRating,
+                loudnessLufs = downloaded.loudnessLufs ?: track.loudnessLufs,
+                truePeakDb = downloaded.truePeakDb ?: track.truePeakDb,
+                loudnessRange = downloaded.loudnessRange ?: track.loudnessRange,
+                albumLoudnessLufs = downloaded.albumLoudnessLufs ?: track.albumLoudnessLufs,
+                albumTruePeakDb = downloaded.albumTruePeakDb ?: track.albumTruePeakDb,
+            )
         }
         return track
+    }
+
+    internal fun hydrateCurrentTrackLoudnessIfNeeded() {
+        val current = state.miniPlayerState ?: return
+        if (current.target != PlaybackTarget.LocalDevice) return
+        val index = current.currentIndex
+        val track = current.tracks.getOrNull(index) ?: return
+        maybeHydrateTrackLoudness(localQueueGeneration.get(), index, track)
+    }
+
+    private fun maybeHydrateTrackLoudness(expectedGen: Long, index: Int, track: MusicTrack) {
+        if (!state.loudnessSettings.enabled || !state.isLoudnessSupportedForActiveServer) return
+        if (track.loudnessLufs != null && track.truePeakDb != null) return
+        if (!is032Track(track) || track.sourceId.isBlank() || track.ratingKey.isBlank()) return
+        val dedupeKey = "$expectedGen:${track.sourceId}:${track.ratingKey}"
+        if (!attemptedLoudnessHydrationKeys.add(dedupeKey)) return
+        val client = runCatching { state.clientFor(track.sourceId) }.getOrNull() as? Music032Client ?: return
+        state.scope.launch {
+            val fresh = try {
+                client.fetchTrackStream(track.ratingKey)
+            } catch (cancel: kotlinx.coroutines.CancellationException) {
+                throw cancel
+            } catch (_: Exception) {
+                null
+            } ?: return@launch
+            if (fresh.loudnessLufs == null && fresh.albumLoudnessLufs == null) return@launch
+            if (localQueueGeneration.get() != expectedGen) return@launch
+            val current = state.miniPlayerState ?: return@launch
+            if (current.target != PlaybackTarget.LocalDevice) return@launch
+            val matchedIndex = current.tracks.indexOfFirst {
+                it.sourceId == track.sourceId && it.ratingKey == track.ratingKey
+            }.takeIf { it >= 0 } ?: index.takeIf { it in current.tracks.indices } ?: return@launch
+            val existing = current.tracks[matchedIndex]
+            val updated = existing.copy(
+                loudnessLufs = existing.loudnessLufs ?: fresh.loudnessLufs,
+                truePeakDb = existing.truePeakDb ?: fresh.truePeakDb,
+                loudnessRange = existing.loudnessRange ?: fresh.loudnessRange,
+                albumLoudnessLufs = existing.albumLoudnessLufs ?: fresh.albumLoudnessLufs,
+                albumTruePeakDb = existing.albumTruePeakDb ?: fresh.albumTruePeakDb,
+            )
+            if (updated == existing) return@launch
+            val tracks = current.tracks.toMutableList().also { it[matchedIndex] = updated }
+            state.miniPlayerState = current.copy(tracks = tracks)
+            if (loadedEngineGeneration == expectedGen) {
+                state.localPlaybackEngine.updateQueueItemLoudness(
+                    index = matchedIndex,
+                    loudnessLufs = updated.loudnessLufs,
+                    truePeakDb = updated.truePeakDb,
+                    albumLoudnessLufs = updated.albumLoudnessLufs,
+                    albumTruePeakDb = updated.albumTruePeakDb,
+                )
+            }
+        }
     }
 
     /** Pushes the honest engine observation into the 032 reporter (non-blocking). */
@@ -412,6 +485,7 @@ internal class AppStateLocalPlaybackCoordinator(
         if (tracks.isEmpty()) return
         val safeIndex = startIndex.coerceIn(0, tracks.lastIndex)
         val queueGeneration = localQueueGeneration.incrementAndGet()
+        attemptedLoudnessHydrationKeys.clear()
         pendingQueueOp?.cancel()
         pendingQueueOp = null
         // Only release a room this app is actually driving; a merely selected room may be
@@ -485,6 +559,7 @@ internal class AppStateLocalPlaybackCoordinator(
         if (!preserveRadioState) {
             state.similarRadioCoordinator.onManualQueueStarted(resolvedTracks, safeIndex)
         }
+        maybeHydrateTrackLoudness(queueGeneration, safeIndex, initialTrack)
     }
 
 
@@ -500,6 +575,8 @@ internal class AppStateLocalPlaybackCoordinator(
         val items = withContext(Dispatchers.IO) { tracks.map { it.toLocalQueueItem(policy) } }
         if (localQueueGeneration.get() != expectedGeneration || state.miniPlayerState?.target != PlaybackTarget.LocalDevice) return
         val engine = state.localPlaybackEngine
+        state.syncLoudnessConfigToEngine()
+        engine.setLoudnessManualQueueCount(state.similarRadioState.manualQueueCount.takeIf { it > 0 } ?: items.size)
         engine.setPlaybackMode(state.playbackMode)
         updateCachedOriginalKeys(items)
         loadedEngineGeneration = expectedGeneration
@@ -621,9 +698,11 @@ internal class AppStateLocalPlaybackCoordinator(
 
     fun clearLocalQueueAndStop() {
         localQueueGeneration.incrementAndGet()
+        attemptedLoudnessHydrationKeys.clear()
         pendingQueueOp?.cancel()
         pendingQueueOp = null
         state.localPlaybackEngine.clearQueue()
+        state.currentLocalLoudnessPlan = LoudnessGainPlan.BYPASS
         LocalPlaybackService.stop(state.context)
     }
 
@@ -719,9 +798,11 @@ internal class AppStateLocalPlaybackCoordinator(
 
     fun stopLocalPlayback() {
         localQueueGeneration.incrementAndGet()
+        attemptedLoudnessHydrationKeys.clear()
         pendingQueueOp?.cancel()
         pendingQueueOp = null
         state.localPlaybackEngine.stopPlayback()
+        state.currentLocalLoudnessPlan = LoudnessGainPlan.BYPASS
         LocalPlaybackService.stop(state.context)
     }
 

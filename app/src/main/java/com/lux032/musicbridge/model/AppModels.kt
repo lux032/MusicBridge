@@ -331,6 +331,53 @@ data class LocalPlaybackPolicy(
     val precacheCount: LocalPrecacheCount,
 )
 
+/** Target loudness baseline for on-device EBU R128 normalization. */
+enum class LoudnessTarget(val id: String) {
+    LIBRARY_MEDIAN("library_median"),
+    LOUD("loud"),
+    STANDARD("standard"),
+    DYNAMIC("dynamic");
+
+    companion object {
+        val DEFAULT = LIBRARY_MEDIAN
+        fun fromId(id: String?): LoudnessTarget =
+            entries.firstOrNull { it.id == id } ?: DEFAULT
+    }
+}
+
+/** Selects track vs album loudness measurement for on-device normalization. */
+enum class LoudnessMode(val id: String) {
+    SMART("smart"),
+    TRACK("track"),
+    ALBUM("album");
+
+    companion object {
+        val DEFAULT = SMART
+        fun fromId(id: String?): LoudnessMode =
+            entries.firstOrNull { it.id == id } ?: DEFAULT
+    }
+}
+
+/** Peak-protection strategy for positive loudness gain on low-level tracks. */
+enum class LoudnessPeakProtection(val id: String, val maxGainReductionDb: Double) {
+    SOFT_LIMITER("soft_limiter", 3.5),
+    STRONG_LIMITER("strong_limiter", 6.0),
+    STRICT_LINEAR("strict_linear", 0.0);
+
+    companion object {
+        val DEFAULT = SOFT_LIMITER
+        fun fromId(id: String?): LoudnessPeakProtection =
+            entries.firstOrNull { it.id == id } ?: DEFAULT
+    }
+}
+
+data class LoudnessNormalizationSettings(
+    val enabled: Boolean = false,
+    val target: LoudnessTarget = LoudnessTarget.DEFAULT,
+    val mode: LoudnessMode = LoudnessMode.DEFAULT,
+    val peakProtection: LoudnessPeakProtection = LoudnessPeakProtection.DEFAULT,
+)
+
 /** Format policy for manually downloaded offline tracks. */
 enum class OfflineDownloadFormat(val id: String) {
     ORIGINAL("original"),
