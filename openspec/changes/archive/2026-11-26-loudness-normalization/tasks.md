@@ -28,7 +28,7 @@
 
 ## 6. 集成验证与构建检查
 
-- [ ] 6.1 运行 Gradle 本地单元测试（纯 JVM 单元测试集，含全部新增响度、限幅、PCM 处理器、JSON 与偏好测试）及 `:app:assembleDebug` 构建，确认全部通过且无新增编译警告
+- [x] 6.1 运行 Gradle 本地单元测试（纯 JVM 单元测试集，含全部新增响度、限幅、PCM 处理器、JSON 与偏好测试）及 `:app:assembleDebug` 构建，确认全部通过且无新增编译警告（已通过 GitHub Actions `Run #45764264576` 全量 `:app:testDebugUnitTest`、`:app:assembleDebug` 与 `:app:assembleRelease` 验证）
 
 ## Workflow follow-up
 
